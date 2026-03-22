@@ -587,6 +587,49 @@ def generate_full_optimization(product: dict, competitors_df, reviews: list, seg
     return f"⏳ Todos os modelos falharam. Último erro: {ultimo_erro}" 
 
 
+def build_catalog_context(produtos: list, shop_name: str) -> str: 
+    linhas = [f"Você é o assistente virtual da loja '{shop_name}' na Shopee Brasil."] 
+    linhas.append("Seu papel é ajudar clientes a encontrar o produto ideal, responder dúvidas e dar confiança para a compra.") 
+    linhas.append("Seja simpático, use emojis com moderação e responda SEMPRE em português brasileiro.") 
+    linhas.append("Nunca invente informações que não estão no catálogo abaixo.") 
+    linhas.append("Se não souber algo, diga que vai verificar com a loja.\n") 
+    linhas.append(f"=== CATÁLOGO COMPLETO DA LOJA ({len(produtos)} produtos) ===\n") 
+    for i, p in enumerate(produtos, 1): 
+        linhas.append(f"{i}. {p['name']}") 
+        linhas.append(f"   Preço: R$ {p['price']:.2f}") 
+        linhas.append(f"   ID: {p['itemid']}\n") 
+    linhas.append("=== FIM DO CATÁLOGO ===") 
+    linhas.append("\nQuando recomendar produtos, sempre mencione o nome completo e o preço.") 
+    return "\n".join(linhas) 
+ 
+ 
+def chat_with_gemini(user_message: str, history: list, catalog_context: str) -> str: 
+    # Montar histórico no formato que o Gemini espera 
+    contents = [catalog_context + "\n\n---\nInício da conversa com o cliente:\n"] 
+    for turn in history: 
+        contents.append(f"Cliente: {turn['user']}") 
+        contents.append(f"Assistente: {turn['assistant']}") 
+    contents.append(f"Cliente: {user_message}\nAssistente:") 
+     
+    prompt = "\n".join(contents) 
+     
+    ultimo_erro = "" 
+    for m in MODELOS_TEXTO: 
+        try: 
+            config = {"thinking_config": {"thinking_budget": 0}} if "3.1" in m or "2.5" in m else {} 
+            response = client.models.generate_content( 
+                model=m, 
+                contents=[prompt], 
+                config=config if config else None 
+            ) 
+            return response.text.strip() 
+        except Exception as e: 
+            ultimo_erro = f"{m}: {e}" 
+            time.sleep(2) 
+            continue 
+    return f"⏳ Erro ao conectar com a IA. Tente novamente. ({ultimo_erro})" 
+
+
 def analyze_reviews_with_gemini(reviews, segmento):
     if not reviews:
         return "Sem avaliações para analisar"
@@ -648,6 +691,10 @@ if 'optimization_result' not in st.session_state:
     st.session_state.optimization_result = None 
 if 'auto_fetch_opt_reviews' not in st.session_state: 
     st.session_state.auto_fetch_opt_reviews = False 
+if 'chat_history' not in st.session_state: 
+    st.session_state.chat_history = [] 
+if 'chatbot_active' not in st.session_state: 
+    st.session_state.chatbot_active = False 
 
 with st.sidebar:
     st.header("⚙️ Configurações")
@@ -842,8 +889,8 @@ if st.session_state.selected_product:
             mime="text/plain" 
         ) 
 
-# ── TABS: CONCORRENTES + AVALIAÇÕES ──────────────────────────
-tab1, tab2 = st.tabs(["Radar de Concorrentes", "Mineração de Avaliações"])
+# ── TABS: CONCORRENTES + AVALIAÇÕES + CHATBOT ──────────────────
+tab1, tab2, tab3 = st.tabs(["Radar de Concorrentes", "Mineração de Avaliações", "🤖 Chatbot da Loja"]) 
 
 with tab1:
     kw = st.text_input("Palavra-chave", value=st.session_state.get("selected_kw") or "mochila escolar")
@@ -933,6 +980,255 @@ with tab2:
                 "⚠️ Sem avaliações encontradas. Veja o log acima para detalhes. "
                 "**Dica:** Use o Radar de Concorrentes → 'Analisar padrões com IA' para insights equivalentes."
             )
+
+with tab3: 
+    if not st.session_state.shop_data or not st.session_state.shop_produtos: 
+        st.info("👈 Carregue uma loja primeiro na seção 'Auditoria de Loja' acima.") 
+    else: 
+        shop_name = st.session_state.shop_data.get("name", "Loja") 
+        produtos = st.session_state.shop_produtos 
+ 
+        if not st.session_state.chatbot_active: 
+            st.markdown(f"### 🤖 Chatbot da loja **{shop_name}**") 
+            st.markdown(f"O chatbot vai conhecer todos os **{len(produtos)} produtos** da loja e responder clientes em tempo real.") 
+            col_a, col_b = st.columns(2) 
+            with col_a: 
+                st.success(f"✅ {len(produtos)} produtos carregados") 
+            with col_b: 
+                st.info("💬 Multi-turn · Recomendações · Dúvidas") 
+ 
+            if st.button("🚀 Ativar Chatbot", type="primary"): 
+                st.session_state.chatbot_active = True 
+                st.session_state.chat_history = [] 
+                st.rerun() 
+
+            if st.button("📋 Gerar FAQ para Seller Centre", type="secondary"): 
+                with st.spinner("Gerando configuração do Assistente de IA..."): 
+                    faq_prompt = f"""Você é especialista em e-commerce Shopee Brasil. 
+ 
+ Com base neste catálogo da loja '{shop_name}': 
+ {chr(10).join(f"- {p['name']} | R$ {p['price']:.2f}" for p in produtos)} 
+ 
+ Gere EXATAMENTE 9 perguntas divididas em 3 categorias, com 3 perguntas cada. 
+ Categorias: "📦 Produtos e Modelos", "🚚 Entrega e Frete", "🔄 Trocas e Pagamento" 
+ Regras OBRIGATÓRIAS: 
+ - Cada pergunta: máximo 80 caracteres 
+ - Cada resposta: máximo 500 caracteres 
+ - Respostas curtas, simpáticas, em português brasileiro 
+ - As perguntas devem ser GENÉRICAS, sem citar nomes específicos de produtos 
+ - Fale sobre a loja no geral, não sobre um produto específico 
+ - Ex correto: "Vocês têm mochilas coloridas?" 
+ - Ex errado: "A Mochila Infantil Princesa Rosa tem bolsos?" 
+ 
+ Formato EXATO: 
+ 
+ CATEGORIA 1: 📦 Produtos e Modelos 
+ PERGUNTA 1: [pergunta] 
+ RESPOSTA 1: [resposta] 
+ PERGUNTA 2: [pergunta] 
+ RESPOSTA 2: [resposta] 
+ PERGUNTA 3: [pergunta] 
+ RESPOSTA 3: [resposta] 
+ 
+ CATEGORIA 2: 🚚 Entrega e Frete 
+ PERGUNTA 4: [pergunta] 
+ RESPOSTA 4: [resposta] 
+ PERGUNTA 5: [pergunta] 
+ RESPOSTA 5: [resposta] 
+ PERGUNTA 6: [pergunta] 
+ RESPOSTA 6: [resposta] 
+ 
+ CATEGORIA 3: 🔄 Trocas e Pagamento 
+ PERGUNTA 7: [pergunta] 
+ RESPOSTA 7: [resposta] 
+ PERGUNTA 8: [pergunta] 
+ RESPOSTA 8: [resposta] 
+ PERGUNTA 9: [pergunta] 
+ RESPOSTA 9: [resposta]""" 
+ 
+                    faq_result = "" 
+                    for m in MODELOS_TEXTO: 
+                        try: 
+                            config = {"thinking_config": {"thinking_budget": 0}} if "3.1" in m or "2.5" in m else {} 
+                            response = client.models.generate_content( 
+                                model=m, 
+                                contents=[faq_prompt], 
+                                config=config if config else None 
+                            ) 
+                            faq_result = response.text.strip() 
+                            break 
+                        except Exception as e: 
+                            time.sleep(2) 
+                            continue 
+ 
+                    if faq_result: 
+                        # Validar e avisar sobre limites de caracteres 
+                        avisos = [] 
+                        for linha in faq_result.split("\n"): 
+                            if linha.startswith("PERGUNTA") and ":" in linha: 
+                                texto = linha.split(":", 1)[1].strip() 
+                                if len(texto) > 80: 
+                                    avisos.append(f"⚠️ Pergunta muito longa ({len(texto)} chars): '{texto[:50]}...'") 
+                            elif linha.startswith("RESPOSTA") and ":" in linha: 
+                                texto = linha.split(":", 1)[1].strip() 
+                                if len(texto) > 500: 
+                                    avisos.append(f"⚠️ Resposta muito longa ({len(texto)} chars): '{texto[:50]}...'") 
+ 
+                        st.markdown("---") 
+                        st.markdown("### 📋 FAQ para o Assistente de IA do Seller Centre") 
+ 
+                        if avisos: 
+                            with st.expander("⚠️ Avisos de limite de caracteres"): 
+                                for a in avisos: 
+                                    st.warning(a) 
+ 
+                        st.info("""📌 **Como usar no Seller Centre:** 
+ 1. Acesse seller.shopee.com.br → Atendimento ao Cliente → Assistente de IA 
+ 2. Clique em "Adicionar Categoria" e crie as 3 categorias acima 
+ 3. Dentro de cada categoria, adicione as 3 perguntas correspondentes 
+ 4. Cole a pergunta e a resposta nos campos indicados 
+ 5. Salve e ative o Assistente""") 
+
+                        st.success("💡 **Dica:** O Chat AI Assistant nativo da Shopee aprende automaticamente com as descrições dos seus produtos. Use a função 'Otimização Completa' para melhorar essas descrições e o robô da Shopee ficará mais inteligente automaticamente.")
+
+                        # Exibir com botão de copiar por bloco 
+                        categorias = faq_result.split("\n\n") 
+                        for bloco in categorias: 
+                            if bloco.strip(): 
+                                st.code(bloco.strip(), language=None) 
+ 
+                        faq_result = faq_result.replace("**", "")
+                        st.download_button( 
+                            "⬇️ Baixar FAQ completo (.txt)", 
+                            data=faq_result, 
+                            file_name=f"faq_{shop_name}.txt", 
+                            mime="text/plain" 
+                        ) 
+                    else: 
+                        st.error("❌ Não foi possível gerar o FAQ. Tente novamente.") 
+        else: 
+            shop_name = st.session_state.shop_data.get("name", "Loja") 
+            catalog_context = build_catalog_context(produtos, shop_name) 
+ 
+            col_titulo, col_reset = st.columns([4, 1]) 
+            with col_titulo: 
+                st.markdown(f"### 💬 Chatbot — {shop_name}") 
+            with col_reset: 
+                if st.button("🔄 Reiniciar"): 
+                    st.session_state.chat_history = [] 
+                    st.rerun() 
+
+            with st.expander("📋 Construtor de FAQ Personalizado"): 
+                st.markdown("Use o chat para montar seu FAQ. Quando terminar, exporte abaixo.") 
+                
+                if 'faq_personalizado' not in st.session_state: 
+                    st.session_state.faq_personalizado = [] 
+ 
+                # Mostrar FAQ construído até agora 
+                if st.session_state.faq_personalizado: 
+                    st.markdown("**FAQ atual:**") 
+                    for i, item in enumerate(st.session_state.faq_personalizado): 
+                        col_faq, col_del = st.columns([10, 1]) 
+                        with col_faq: 
+                            st.markdown(f"**P{i+1}:** {item['pergunta']}") 
+                            st.markdown(f"**R{i+1}:** {item['resposta']}") 
+                            st.divider() 
+                        with col_del: 
+                            if st.button("🗑️", key=f"del_faq_{i}"): 
+                                st.session_state.faq_personalizado.pop(i) 
+                                st.rerun() 
+ 
+                # Adicionar novo par manualmente 
+                st.markdown("**Adicionar pergunta:**") 
+                col_p, col_r = st.columns(2) 
+                with col_p: 
+                    nova_pergunta = st.text_input( 
+                        "Pergunta", 
+                        placeholder="Ex: Vocês têm mochila azul?", 
+                        key="nova_pergunta", 
+                        max_chars=80 
+                    ) 
+                with col_r: 
+                    nova_resposta = st.text_area( 
+                        "Resposta", 
+                        placeholder="Ex: Sim! Temos modelos em azul disponíveis.", 
+                        key="nova_resposta", 
+                        max_chars=500, 
+                        height=80 
+                    ) 
+ 
+                col_btn1, col_btn2 = st.columns(2) 
+                with col_btn1: 
+                    if st.button("➕ Adicionar par") and nova_pergunta and nova_resposta: 
+                        st.session_state.faq_personalizado.append({ 
+                            "pergunta": nova_pergunta, 
+                            "resposta": nova_resposta 
+                        }) 
+                        st.rerun() 
+                with col_btn2: 
+                    if st.button("🤖 Gerar sugestão com IA") and nova_pergunta: 
+                        with st.spinner("Gerando resposta sugerida..."): 
+                            sugestao = chat_with_gemini( 
+                                f"Gere uma resposta curta e simpática (máx 500 chars) para esta pergunta de cliente: '{nova_pergunta}'. Baseie-se no catálogo da loja.", 
+                                [], 
+                                catalog_context 
+                            ) 
+                        st.session_state.faq_personalizado.append({ 
+                            "pergunta": nova_pergunta, 
+                            "resposta": sugestao[:500] 
+                        }) 
+                        st.rerun() 
+ 
+                # Exportar 
+                if st.session_state.faq_personalizado: 
+                    n = len(st.session_state.faq_personalizado) 
+                    faq_txt = "\n\n".join([ 
+                        f"PERGUNTA {i+1}: {item['pergunta']}\nRESPOSTA {i+1}: {item['resposta']}" 
+                        for i, item in enumerate(st.session_state.faq_personalizado) 
+                    ]) 
+                    faq_txt = faq_txt.replace("**", "")
+                    st.download_button( 
+                        f"⬇️ Exportar FAQ personalizado ({n} pares)", 
+                        data=faq_txt, 
+                        file_name=f"faq_personalizado_{shop_name}.txt", 
+                        mime="text/plain" 
+                    ) 
+                    if st.button("🗑️ Limpar FAQ personalizado"): 
+                        st.session_state.faq_personalizado = [] 
+                        st.rerun() 
+ 
+            # Exibir histórico 
+            for turn in st.session_state.chat_history: 
+                with st.chat_message("user"): 
+                    st.write(turn["user"]) 
+                with st.chat_message("assistant"): 
+                    st.write(turn["assistant"]) 
+ 
+            # Sugestões de perguntas iniciais 
+            if not st.session_state.chat_history: 
+                st.markdown("**💡 Sugestões para começar:**") 
+                sugestoes = [ 
+                    "Quais mochilas vocês têm disponíveis?", 
+                    "Tem mochila rosa ou lilás?", 
+                    "Qual mochila é ideal para escola?", 
+                    "Qual o produto mais barato?", 
+                ] 
+                cols_s = st.columns(2) 
+                for idx, sug in enumerate(sugestoes): 
+                    with cols_s[idx % 2]: 
+                        if st.button(sug, key=f"sug_{idx}"): 
+                            with st.spinner("Respondendo..."): 
+                                resposta = chat_with_gemini(sug, st.session_state.chat_history, catalog_context) 
+                            st.session_state.chat_history.append({"user": sug, "assistant": resposta}) 
+                            st.rerun() 
+ 
+            # Input do usuário 
+            user_input = st.chat_input("Digite sua pergunta sobre os produtos...") 
+            if user_input: 
+                with st.spinner("Respondendo..."): 
+                    resposta = chat_with_gemini(user_input, st.session_state.chat_history, catalog_context) 
+                st.session_state.chat_history.append({"user": user_input, "assistant": resposta}) 
+                st.rerun() 
 
 video_file = st.file_uploader("Upload do vídeo do produto (MP4)", type=["mp4"])
 
