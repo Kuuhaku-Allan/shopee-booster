@@ -630,6 +630,71 @@ def chat_with_gemini(user_message: str, history: list, catalog_context: str) -> 
     return f"⏳ Erro ao conectar com a IA. Tente novamente. ({ultimo_erro})" 
 
 
+from PIL import ImageEnhance, ImageFilter 
+ 
+def generate_ai_scenario(prompt_text: str) -> Image.Image | None: 
+    """Tenta Pollinations com retry; se falhar, retorna None para fallback local.""" 
+    from urllib.parse import quote 
+    prompt_encoded = quote(prompt_text) 
+ 
+    tentativas = [ 
+        f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=1024&height=1024&model=turbo&seed={random.randint(1,9999)}", 
+        f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=1024&height=1024&model=flux&seed={random.randint(1,9999)}", 
+    ] 
+    for url in tentativas: 
+        try: 
+            time.sleep(3)  # pausa entre tentativas para evitar 429 
+            res = requests.get(url, timeout=90, headers={ 
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" 
+            }) 
+            if res.status_code == 200 and "image" in res.headers.get("Content-Type", ""): 
+                return Image.open(io.BytesIO(res.content)).convert("RGBA") 
+            elif res.status_code == 429: 
+                time.sleep(10)  # espera maior se rate limit 
+        except Exception: 
+            continue 
+    return None 
+ 
+ 
+def generate_gradient_background(segmento: str) -> Image.Image: 
+    """Gera fundo gradiente local baseado no segmento — sempre funciona.""" 
+    import numpy as np 
+    size = 1024 
+    img_array = np.zeros((size, size, 3), dtype=np.uint8) 
+ 
+    paletas = { 
+        "Escolar / Juvenil": ((255, 230, 240), (200, 220, 255)),   # rosa → azul pastel 
+        "Profissional / Tech": ((20, 30, 48), (60, 80, 120)),       # azul escuro profissional 
+        "Viagem": ((255, 180, 100), (100, 160, 220)),               # laranja → azul céu 
+        "Moda": ((240, 230, 220), (200, 190, 210)),                 # bege → lilás suave 
+    } 
+    cor_top, cor_bot = paletas.get(segmento, ((240, 240, 240), (200, 200, 220))) 
+ 
+    for y in range(size): 
+        t = y / size 
+        r = int(cor_top[0] * (1 - t) + cor_bot[0] * t) 
+        g = int(cor_top[1] * (1 - t) + cor_bot[1] * t) 
+        b = int(cor_top[2] * (1 - t) + cor_bot[2] * t) 
+        img_array[y, :] = [r, g, b] 
+ 
+    return Image.fromarray(img_array, "RGB").convert("RGBA") 
+ 
+ 
+def improve_image_quality(img_pil: Image.Image) -> Image.Image: 
+    """Melhora nitidez e contraste para fotos de e-commerce.""" 
+    img = ImageEnhance.Sharpness(img_pil).enhance(2.0) 
+    img = ImageEnhance.Contrast(img).enhance(1.2) 
+    img = img.filter(ImageFilter.SMOOTH_MORE) 
+    return img 
+
+
+def upscale_image(img_pil: Image.Image, scale: int = 2) -> Image.Image: 
+    """Aumenta resolução usando LANCZOS — melhor qualidade sem dependências extras.""" 
+    novo_w = img_pil.width * scale 
+    novo_h = img_pil.height * scale 
+    return img_pil.resize((novo_w, novo_h), Image.LANCZOS) 
+
+
 def analyze_reviews_with_gemini(reviews, segmento):
     if not reviews:
         return "Sem avaliações para analisar"
@@ -699,68 +764,115 @@ if 'chatbot_active' not in st.session_state:
 with st.sidebar:
     st.header("⚙️ Configurações")
     segmento = st.selectbox("Nicho do Produto", ["Escolar / Juvenil", "Profissional / Tech", "Viagem", "Moda"])
-    st.subheader("🎨 Estúdio Visual")
-    gerar_cenario = st.checkbox("Gerar Cenário Lifestyle (AI)", value=False)
-    st.info("A remoção de fundo é obrigatória para o CTR de 9.5.")
 
-uploaded_file = st.file_uploader("Arraste a foto da mochila", type=["jpg", "png", "jpeg"])
-
-if uploaded_file:
-    col1, col2 = st.columns(2)
-    img_bytes = uploaded_file.getvalue()
-    img_original = Image.open(io.BytesIO(img_bytes))
-
-    with col1:
-        st.subheader("🖼️ Original")
-        st.image(img_original, width="stretch")
-
-    with col2:
-        st.subheader("✨ Resultado Otimizado")
-        if st.button("Executar Otimização Completa"):
-            with st.spinner("Removendo fundo e calculando estratégia..."):
-                no_bg_bytes = remove(img_bytes)
-                no_bg_img = Image.open(io.BytesIO(no_bg_bytes)).convert("RGBA")
-                final_img = no_bg_img
-
-                if gerar_cenario:
-                    st.write("🎨 Criando cenário ideal para o nicho...")
-                    prompt_cenario = f"Commercial photography of a {segmento} backpack on a clean aesthetic background, professional lighting, 4k, high resolution"
-                    if segmento == "Escolar / Juvenil":
-                        prompt_cenario = "A wooden school desk, natural sunlight from a window, blurred classroom background, aesthetic"
-                    bg_url = f"https://pollinations.ai/p/{prompt_cenario.replace(' ', '%20')}?width=1024&height=1024&seed=42"
-                    try:
-                        bg_res = requests.get(bg_url, timeout=15)
-                        if bg_res.status_code == 200 and "image" in bg_res.headers.get("Content-Type", ""):
-                            bg_img = Image.open(io.BytesIO(bg_res.content)).convert("RGBA").resize((1024, 1024))
-                            no_bg_img.thumbnail((800, 800))
-                            offset = ((bg_img.width - no_bg_img.width) // 2, (bg_img.height - no_bg_img.height) // 2)
-                            bg_img.paste(no_bg_img, offset, no_bg_img)
-                            final_img = bg_img
-                        else:
-                            st.warning("⚠️ Não foi possível gerar o cenário agora. Mantendo fundo limpo.")
-                    except Exception as e:
-                        st.warning(f"⚠️ Erro ao conectar ao gerador de cenários: {e}")
-
-                st.image(final_img, width="stretch")
-
-                prompt_seo = f"Analise esta mochila ({segmento}) e gere Título (60-70 chars), 20 Tags LSI e Descrição CR para Shopee 2026."
-                response = None
-                for m in MODELOS_VISION:
-                    try:
-                        response = client.models.generate_content(model=m, contents=[prompt_seo, img_original])
-                        st.success(f"Estratégia gerada com sucesso pelo modelo: {m}")
-                        break
-                    except Exception:
-                        continue
-
-                if response:
-                    st.markdown("### 📈 Diagnóstico de Listing")
-                    st.write(response.text)
-                else:
-                    st.error("❌ Todos os modelos de IA atingiram o limite de cota. Tente novamente em 60 segundos.")
-
-st.markdown("---")
-st.caption("Nota: Para geração de cenários reais (Flux API), adicione integração no bloco de processamento de imagem.")
+uploaded_files = st.file_uploader( 
+    "Arraste as fotos do produto (pode selecionar várias)", 
+    type=["jpg", "png", "jpeg"], 
+    accept_multiple_files=True 
+) 
+ 
+if uploaded_files: 
+    for idx, uploaded_file in enumerate(uploaded_files): 
+        st.markdown(f"#### 🖼️ Imagem {idx+1}: `{uploaded_file.name}`") 
+        col1, col2 = st.columns(2) 
+        img_bytes = uploaded_file.getvalue() 
+        img_original = Image.open(io.BytesIO(img_bytes)) 
+ 
+        with col1: 
+            st.subheader("Original") 
+            st.image(img_original, width="stretch") 
+            st.caption(f"Resolução: {img_original.width}×{img_original.height}px") 
+ 
+        with col2: 
+            st.subheader("✨ Resultado") 
+             
+            op_upscale  = st.checkbox("🔍 Aumentar qualidade (2×)", key=f"upscale_{idx}") 
+            op_rembg    = st.checkbox("✂️ Remover fundo", key=f"rembg_{idx}", value=True) 
+            op_cenario  = st.checkbox("🎨 Gerar cenário IA", key=f"cenario_{idx}") 
+ 
+            if op_cenario and not op_rembg: 
+                st.warning("⚠️ Gerar cenário requer remoção de fundo ativada.") 
+                op_cenario = False 
+ 
+            if st.button(f"▶️ Processar", key=f"proc_{idx}"): 
+                with st.spinner("Processando..."): 
+                    img_work = img_original.copy() 
+ 
+                    # 1. Upscale + melhoria de qualidade 
+                    if op_upscale: 
+                        img_work = upscale_image(img_work, scale=2) 
+                        img_work = improve_image_quality(img_work) 
+                        st.caption(f"📐 {img_work.width}×{img_work.height}px — qualidade melhorada") 
+ 
+                    # 2. Remoção de fundo 
+                    if op_rembg: 
+                        buf = io.BytesIO() 
+                        img_work.save(buf, format="PNG") 
+                        no_bg_bytes = remove(buf.getvalue()) 
+                        img_work = Image.open(io.BytesIO(no_bg_bytes)).convert("RGBA") 
+ 
+                    final_img = img_work 
+ 
+                    # 3. Cenário 
+                    if op_cenario: 
+                        st.write("🎨 Gerando cenário (pode levar até 90s)...") 
+                        prompt_cenario = "product photography backpack studio white background soft lighting" 
+                        if segmento == "Escolar / Juvenil": 
+                            prompt_cenario = "school desk sunlight classroom pastel colors soft background" 
+                        elif segmento == "Viagem": 
+                            prompt_cenario = "mountain landscape travel golden hour soft background" 
+                        elif segmento == "Profissional / Tech": 
+                            prompt_cenario = "office desk minimalist workspace soft lighting background" 
+                        elif segmento == "Moda": 
+                            prompt_cenario = "fashion studio white marble floor aesthetic soft light" 
+ 
+                        bg_img = generate_ai_scenario(prompt_cenario) 
+                        if bg_img: 
+                            st.success("✅ Cenário IA gerado!") 
+                        else: 
+                            # Fallback local — sempre funciona 
+                            bg_img = generate_gradient_background(segmento) 
+                            st.info("🎨 Pollinations indisponível — fundo gradiente gerado localmente.") 
+ 
+                        bg_img = bg_img.resize((1024, 1024)) 
+                        fg = img_work.copy() 
+                        fg.thumbnail((800, 800)) 
+                        offset = ((bg_img.width - fg.width) // 2, (bg_img.height - fg.height) // 2) 
+                        bg_img.paste(fg, offset, fg) 
+                        final_img = bg_img 
+ 
+                    st.image(final_img, width="stretch") 
+ 
+                    # Download da imagem processada 
+                    buf_out = io.BytesIO() 
+                    final_img.convert("RGB").save(buf_out, format="JPEG", quality=95) 
+                    st.download_button( 
+                        "⬇️ Baixar imagem processada", 
+                        data=buf_out.getvalue(), 
+                        file_name=f"processada_{idx+1}_{uploaded_file.name}", 
+                        mime="image/jpeg", 
+                        key=f"dl_{idx}" 
+                    ) 
+ 
+                    # 4. Análise SEO com Gemini (só na primeira imagem para economizar cota) 
+                    if idx == 0: 
+                        st.markdown("---") 
+                        prompt_seo = f"Analise esta mochila ({segmento}) e gere Título (60-70 chars), 20 Tags LSI e Descrição CR para Shopee 2026." 
+                        response = None 
+                        for m in MODELOS_VISION: 
+                            try: 
+                                response = client.models.generate_content(model=m, contents=[prompt_seo, img_original]) 
+                                st.success(f"✅ Estratégia SEO gerada ({m})") 
+                                break 
+                            except Exception: 
+                                continue 
+                        if response: 
+                            st.markdown("### 📈 Diagnóstico de Listing") 
+                            st.write(response.text) 
+                        else: 
+                            st.error("❌ Cota de IA atingida. Tente em 60s.") 
+ 
+        st.markdown("---") 
 
 # ── AUDITORIA DE LOJA ──────────────────────────────────────────
 st.markdown("---")
