@@ -13,6 +13,7 @@ import requests
 import re
 import time
 import random
+from functools import lru_cache
 
 import os
 from dotenv import load_dotenv
@@ -632,54 +633,160 @@ def chat_with_gemini(user_message: str, history: list, catalog_context: str) -> 
 
 from PIL import ImageEnhance, ImageFilter 
  
-def generate_ai_scenario(prompt_text: str) -> Image.Image | None: 
-    """Tenta Pollinations com retry; se falhar, retorna None para fallback local.""" 
+def generate_ai_scenario(prompt_text: str, segmento: str = "") -> Image.Image | None: 
+    """Gera cenário via Hugging Face (FLUX.1-dev), Together AI ou Pollinations com fallback gradiente.""" 
+    
+    # 1. TENTATIVA: Hugging Face (FLUX.1-dev) - QUALIDADE SUPERIOR
+    hf_token = os.getenv("HF_TOKEN", "")
+    if hf_token:
+        try:
+            from huggingface_hub import InferenceClient
+            client_hf = InferenceClient(api_key=hf_token)
+
+            # Prompts técnicos por nicho — Packshot minimalista de alta conversão
+            prompts_nicho = {
+                "Escolar / Juvenil": (
+                    "Professional e-commerce packshot background. A clean, minimalist white geometric podium "
+                    "centered in the frame. Soft neutral studio lighting with high-key lighting. "
+                    "Seamless light grey and soft lavender gradient background. Professional product photography, "
+                    "sharp focus on the podium surface, realistic ambient occlusion shadows, 8k, shot on Phase One IQ4."
+                ),
+                "Viagem": (
+                    "Professional outdoor studio background. A clean concrete or stone platform. "
+                    "Soft, out-of-focus mountain landscape at golden hour in the far distance. "
+                    "Premium travel photography style, soft natural shadows, 8k, sharp focus on the base."
+                ),
+                "Profissional / Tech": (
+                    "Minimalist modern office studio background. A sleek white desk surface. "
+                    "Soft LED studio lighting, clean grey gradient wall, professional advertising quality. "
+                    "Subtle contact shadows, 8k resolution, ultra-sharp focus."
+                ),
+                "Moda": (
+                    "High-end fashion editorial studio background. A white marble floor surface. "
+                    "Soft diffused lighting with rim light. Minimalist aesthetic with a neutral pastel wall "
+                    "in harmony with product colors, empty surface, 8k, professional packshot style."
+                ),
+            }
+            prompt_hf = prompts_nicho.get(segmento, prompts_nicho["Escolar / Juvenil"])
+
+            try:
+                img = client_hf.text_to_image(
+                    prompt=prompt_hf,
+                    model="black-forest-labs/FLUX.1-dev",  # dev > schnell em qualidade
+                )
+                return img.convert("RGBA")
+            except Exception:
+                # Fallback para schnell se dev não disponível
+                img = client_hf.text_to_image(
+                    prompt=prompt_hf,
+                    model="black-forest-labs/FLUX.1-schnell"
+                )
+                return img.convert("RGBA")
+        except Exception as e:
+            st.caption(f"🔍 Hugging Face falhou: {e}")
+
+    # 2. TENTATIVA: Together AI (FLUX.1-schnell-Free)
+    prompt_completo = ( 
+        f"Professional e-commerce packshot background. A clean, minimalist white geometric podium "
+        f"centered in the frame. Soft neutral studio lighting with high-key lighting. "
+        f"Seamless light grey and soft lavender gradient background. Professional product photography, "
+        f"sharp focus on the podium surface, realistic ambient occlusion shadows, 8k, shot on Phase One IQ4."
+    ) 
+    together_key = os.getenv("TOGETHER_API_KEY", "")
+    if together_key:
+        try:
+            res = requests.post(
+                "https://api.together.xyz/v1/images/generations",
+                headers={"Authorization": f"Bearer {together_key}"},
+                json={
+                    "model": "black-forest-labs/FLUX.1-schnell-Free",
+                    "prompt": prompt_completo,
+                    "width": 1024,
+                    "height": 1024,
+                    "steps": 4,
+                    "n": 1
+                },
+                timeout=45
+            )
+            if res.status_code == 200:
+                data = res.json()
+                img_url = data.get("data", [{}])[0].get("url")
+                if img_url:
+                    img_res = requests.get(img_url, timeout=30)
+                    return Image.open(io.BytesIO(img_res.content)).convert("RGBA")
+            elif res.status_code == 402:
+                st.caption("🔍 Together AI: Limite de créditos atingido (Free tier).")
+        except Exception as e:
+            st.caption(f"🔍 Together AI erro: {e}")
+    
+    # 3. TENTATIVA: Pollinations (Fallback gratuito comum)
+    pollinations_key = os.getenv("POLLINATIONS_SK_KEY", "") 
     from urllib.parse import quote 
     prompt_encoded = quote(prompt_text) 
- 
-    tentativas = [ 
-        f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=1024&height=1024&model=turbo&seed={random.randint(1,9999)}", 
-        f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=1024&height=1024&model=flux&seed={random.randint(1,9999)}", 
-    ] 
-    for url in tentativas: 
-        try: 
-            time.sleep(3)  # pausa entre tentativas para evitar 429 
-            res = requests.get(url, timeout=90, headers={ 
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" 
-            }) 
-            if res.status_code == 200 and "image" in res.headers.get("Content-Type", ""): 
-                return Image.open(io.BytesIO(res.content)).convert("RGBA") 
-            elif res.status_code == 429: 
-                time.sleep(10)  # espera maior se rate limit 
-        except Exception: 
-            continue 
-    return None 
+    url = f"https://image.pollinations.ai/prompt/{prompt_encoded}?width=1024&height=1024&model=turbo&seed={random.randint(1,9999)}" 
+    if pollinations_key: 
+        url += f"&key={pollinations_key}" 
+    try: 
+        time.sleep(2) 
+        res = requests.get(url, timeout=60, headers={ 
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" 
+        }) 
+        if res.status_code == 200 and "image" in res.headers.get("Content-Type", ""): 
+            return Image.open(io.BytesIO(res.content)).convert("RGBA") 
+    except Exception: 
+        pass 
+    
+    return None  # Ativa o fallback gradiente local 
  
  
+@lru_cache(maxsize=4)
 def generate_gradient_background(segmento: str) -> Image.Image: 
-    """Gera fundo gradiente local baseado no segmento — sempre funciona.""" 
+    """Fundo gradiente profissional estilo packshot — harmonia com o produto.""" 
     import numpy as np 
     size = 1024 
     img_array = np.zeros((size, size, 3), dtype=np.uint8) 
  
     paletas = { 
-        "Escolar / Juvenil": ((255, 230, 240), (200, 220, 255)),   # rosa → azul pastel 
-        "Profissional / Tech": ((20, 30, 48), (60, 80, 120)),       # azul escuro profissional 
-        "Viagem": ((255, 180, 100), (100, 160, 220)),               # laranja → azul céu 
-        "Moda": ((240, 230, 220), (200, 190, 210)),                 # bege → lilás suave 
+        "Escolar / Juvenil": ((255, 240, 248), (220, 210, 245)),  # branco rosado → lilás suave 
+        "Profissional / Tech": ((240, 245, 255), (210, 220, 240)),  # branco azulado → cinza azul 
+        "Viagem": ((255, 248, 235), (235, 220, 200)),              # branco quente → bege 
+        "Moda": ((255, 252, 255), (240, 230, 245)),                # branco → lilás muito suave 
     } 
-    cor_top, cor_bot = paletas.get(segmento, ((240, 240, 240), (200, 200, 220))) 
+    cor_top, cor_bot = paletas.get(segmento, ((250, 250, 255), (230, 225, 245))) 
+ 
+    cx, cy = size // 2, size // 2 
+    max_dist = (size * 0.75) 
  
     for y in range(size): 
-        t = y / size 
-        r = int(cor_top[0] * (1 - t) + cor_bot[0] * t) 
-        g = int(cor_top[1] * (1 - t) + cor_bot[1] * t) 
-        b = int(cor_top[2] * (1 - t) + cor_bot[2] * t) 
-        img_array[y, :] = [r, g, b] 
+        for x in range(size): 
+            dist = ((x - cx)**2 + (y - cy)**2) ** 0.5 
+            t = min(dist / max_dist, 1.0) 
+            r = int(cor_top[0] * (1 - t) + cor_bot[0] * t) 
+            g = int(cor_top[1] * (1 - t) + cor_bot[1] * t) 
+            b = int(cor_top[2] * (1 - t) + cor_bot[2] * t) 
+            img_array[y, x] = [r, g, b] 
  
     return Image.fromarray(img_array, "RGB").convert("RGBA") 
  
  
+def apply_contact_shadow(bg: Image.Image, fg: Image.Image, offset: tuple) -> Image.Image: 
+    """Adiciona sombra de contato para ancorar o produto no cenário.""" 
+    import numpy as np 
+    if fg.mode != "RGBA": 
+        fg = fg.convert("RGBA") 
+    alpha = fg.split()[-1] 
+    shadow = Image.new("L", fg.size, 0) 
+    shadow.paste(alpha, (0, 0)) 
+    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=18)) 
+    shadow_img = Image.new("RGBA", bg.size, (0, 0, 0, 0)) 
+    # Sombra levemente deslocada para baixo e para a direita 
+    shadow_offset = (offset[0] + 12, offset[1] + 20) 
+    shadow_layer = Image.new("RGBA", bg.size, (0, 0, 0, 0)) 
+    shadow_layer.paste(Image.new("RGBA", fg.size, (0, 0, 0, 100)), shadow_offset, mask=shadow) 
+    result = Image.alpha_composite(bg, shadow_layer) 
+    return result 
+
+
 def improve_image_quality(img_pil: Image.Image) -> Image.Image: 
     """Melhora nitidez e contraste para fotos de e-commerce.""" 
     img = ImageEnhance.Sharpness(img_pil).enhance(2.0) 
@@ -816,28 +923,32 @@ if uploaded_files:
                     # 3. Cenário 
                     if op_cenario: 
                         st.write("🎨 Gerando cenário (pode levar até 90s)...") 
-                        prompt_cenario = "product photography backpack studio white background soft lighting" 
+                        prompt_cenario = "product photography studio white background soft lighting" 
                         if segmento == "Escolar / Juvenil": 
-                            prompt_cenario = "school desk sunlight classroom pastel colors soft background" 
+                            prompt_cenario = "minimalist white geometric podium soft lavender background" 
                         elif segmento == "Viagem": 
-                            prompt_cenario = "mountain landscape travel golden hour soft background" 
+                            prompt_cenario = "stone platform outdoors golden hour soft focus" 
                         elif segmento == "Profissional / Tech": 
-                            prompt_cenario = "office desk minimalist workspace soft lighting background" 
+                            prompt_cenario = "sleek white desk surface modern office lighting" 
                         elif segmento == "Moda": 
-                            prompt_cenario = "fashion studio white marble floor aesthetic soft light" 
+                            prompt_cenario = "white marble floor fashion studio aesthetic" 
  
-                        bg_img = generate_ai_scenario(prompt_cenario) 
-                        if bg_img: 
-                            st.success("✅ Cenário IA gerado!") 
-                        else: 
-                            # Fallback local — sempre funciona 
+                        bg_img = generate_ai_scenario(prompt_cenario, segmento) 
+                        if not bg_img: 
                             bg_img = generate_gradient_background(segmento) 
-                            st.info("🎨 Pollinations indisponível — fundo gradiente gerado localmente.") 
+                        else:
+                            st.success("✅ Cenário IA gerado!") 
  
                         bg_img = bg_img.resize((1024, 1024)) 
                         fg = img_work.copy() 
                         fg.thumbnail((800, 800)) 
-                        offset = ((bg_img.width - fg.width) // 2, (bg_img.height - fg.height) // 2) 
+                        # Posiciona ligeiramente para baixo do centro para ficar "apoiada" 
+                        offset = ( 
+                            (bg_img.width - fg.width) // 2, 
+                            int((bg_img.height - fg.height) * 0.6) 
+                        ) 
+                        # Aplica sombra de contato ANTES de colar o produto 
+                        bg_img = apply_contact_shadow(bg_img, fg, offset) 
                         bg_img.paste(fg, offset, fg) 
                         final_img = bg_img 
  
