@@ -1,6 +1,8 @@
-pystray
-pywebview
-pillow
-requests
-tkinter
+# Dependências do launcher (adicionar ao requirements.txt principal)
+# Instalar com: pip install -r requirements_launcher.txt
+
+pystray==0.19.5        # Ícone na bandeja do sistema
+pywebview==5.3.2       # Janela nativa (wraps localhost)
+requests>=2.31.0       # Já deve estar no projeto (verificar atualizações)
+pillow>=10.0.0         # Já no projeto — usado para o ícone da bandeja
 pyinstaller
