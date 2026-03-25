@@ -1,0 +1,11 @@
+from PIL import Image
+
+# Carrega a imagem que você baixou (Ícone 4)
+img = Image.open("icon_original.png")
+
+# Define os tamanhos padrão para um ícone de Windows completo
+tamanhos = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+
+# Salva como .ico contendo todas as resoluções
+img.save("assets/icon.ico", format="ICO", sizes=tamanhos)
+print("✅ icon.ico gerado com sucesso em assets/")

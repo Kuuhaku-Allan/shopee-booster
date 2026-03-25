@@ -129,12 +129,13 @@ def baixar_e_aplicar_atualizacao(url_download: str):
 
         # Criar script bat que substitui o exe e reinicia
         bat_path = os.path.join(tmp_dir, "update.bat")
-        bat_conteudo = f"""@echo off
- timeout /t 2 /nobreak > nul
- copy /y "{caminho_novo}" "{caminho_atual}"
- start "" "{caminho_atual}"
- del "%~f0"
- """
+        bat_conteudo = (
+            "@echo off\n"
+            "timeout /t 2 /nobreak > nul\n"
+            f'copy /y "{caminho_novo}" "{caminho_atual}"\n'
+            f'start "" "{caminho_atual}"\n'
+            "del \"%~f0\"\n"
+        )
         with open(bat_path, "w") as f:
             f.write(bat_conteudo)
 
