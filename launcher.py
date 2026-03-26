@@ -84,17 +84,19 @@ def iniciar_streamlit():
             "--browser.gatherUsageStats", "false",
             "--theme.base", "light",
         ]
+    global log_file
+    log_file = open("streamlit_log.txt", "w", encoding="utf-8")
+    
     streamlit_proc = subprocess.Popen(
         cmd,
         cwd=BASE_DIR,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=log_file,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
 
-
 def encerrar_streamlit():
-    global streamlit_proc
+    global streamlit_proc, log_file
     if streamlit_proc and streamlit_proc.poll() is None:
         streamlit_proc.terminate()
         try:
@@ -219,8 +221,8 @@ def main():
     threading.Thread(target=_checar_e_notificar, daemon=True).start()
 
     # 3. Aguardar Streamlit subir
-    if not aguardar_streamlit(timeout=30):
-        ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (30s). Verifique os processos.\nO aplicativo será encerrado.", "Shopee Booster - Erro", 0 | 16)
+    if not aguardar_streamlit(timeout=60):
+        ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (60s). Verifique os processos.\nO aplicativo será encerrado.", "Shopee Booster - Erro", 0 | 16)
         sys.exit(1)
 
     # 4. Abrir janela nativa na inicialização
