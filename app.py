@@ -25,6 +25,14 @@ nest_asyncio.apply()
 
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
+
+if not API_KEY:
+    st.warning("⚠️ Chave da API do Google Gemini não encontrada.")
+    API_KEY = st.text_input("Insira sua GOOGLE_API_KEY para continuar usando o app:", type="password")
+    if not API_KEY:
+        st.info("Você precisa inserir uma chave de API válida para usar os recursos de IA do Shopee Booster.")
+        st.stop()
+
 client = genai.Client(api_key=API_KEY)
 
 # Modelos para tarefas COM imagem (multimodal) — cota limitada, usar com parcimônia
