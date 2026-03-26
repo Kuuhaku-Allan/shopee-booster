@@ -238,8 +238,10 @@ if __name__ == "__main__":
     
     # Interceptar a chamada "run" para lançar o streamlit embutido
     if len(sys.argv) > 1 and sys.argv[1] == "run":
-        import streamlit.web.cli as stcli
-        sys.argv = [sys.argv[0]] + sys.argv[2:]
+        try:
+            import streamlit.web.cli as stcli
+        except ImportError:
+            import streamlit.cli as stcli
         sys.exit(stcli.main())
         
     main()
