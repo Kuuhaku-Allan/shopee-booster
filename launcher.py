@@ -112,27 +112,20 @@ def encerrar_streamlit():
 def abrir_janela_nativa():
     """
     Abre o Streamlit numa janela nativa (modo 'instalado').
+    DEVE rodar na main thread no Windows para funcionar.
     Fechar a janela NÃO encerra o app — ele continua na bandeja.
     """
     global janela_webview
-
-    def _run():
-        global janela_webview
-        janela_webview = webview.create_window(
-            TITULO_JANELA,
-            URL_APP,
-            width=1280,
-            height=800,
-            resizable=True,
-            min_size=(900, 600),
-        )
-        # on_closed: apenas esconde, não mata o processo
-        # janela_webview.events.closed += lambda: None 
-        webview.start(debug=False)
-        janela_webview = None
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
+    janela_webview = webview.create_window(
+        TITULO_JANELA,
+        URL_APP,
+        width=1280,
+        height=800,
+        resizable=True,
+        min_size=(900, 600),
+    )
+    webview.start(debug=False)
+    janela_webview = None
 
 
 def abrir_no_navegador():
@@ -227,11 +220,11 @@ def main():
         ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (60s). Verifique os processos.\nO aplicativo será encerrado.", "Shopee Booster - Erro", 0 | 16)
         sys.exit(1)
 
-    # 4. Abrir janela nativa na inicialização
-    abrir_janela_nativa()
+    # 4. Iniciar bandeja em background
+    threading.Thread(target=iniciar_tray, daemon=True).start()
 
-    # 5. Iniciar bandeja (bloqueia até "Sair")
-    iniciar_tray()
+    # 5. Abrir janela nativa principal (bloqueante)
+    abrir_janela_nativa()
 
 
 if __name__ == "__main__":

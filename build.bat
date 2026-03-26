@@ -44,6 +44,7 @@ pyinstaller ^
     --collect-all pystray ^
     --collect-all webview ^
     --collect-all rembg ^
+    --collect-all onnxruntime ^
     --collect-all google ^
     --collect-all nest_asyncio ^
     --collect-all playwright ^
