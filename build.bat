@@ -45,6 +45,7 @@ pyinstaller ^
     --collect-all webview ^
     --collect-all rembg ^
     --collect-all onnxruntime ^
+    --collect-all opentelemetry ^
     --collect-all google ^
     --collect-all nest_asyncio ^
     --collect-all playwright ^
@@ -53,6 +54,7 @@ pyinstaller ^
     --hidden-import "PIL.ImageFilter" ^
     --hidden-import "PIL.ImageDraw" ^
     --hidden-import "google.genai" ^
+    --hidden-import "onnxruntime" ^
     --hidden-import "PIL._tkinter_finder" ^
     --hidden-import "pystray._win32" ^
     --hidden-import "nest_asyncio" ^

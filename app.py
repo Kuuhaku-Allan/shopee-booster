@@ -911,70 +911,75 @@ if uploaded_files:
  
             if st.button(f"▶️ Processar", key=f"proc_{idx}"): 
                 with st.spinner("Processando..."): 
-                    img_work = img_original.copy() 
+                    try:
+                        img_work = img_original.copy() 
  
-                    # 1. Upscale + melhoria de qualidade 
-                    if op_upscale: 
-                        img_work = upscale_image(img_work, scale=2) 
-                        img_work = improve_image_quality(img_work) 
-                        st.caption(f"📐 {img_work.width}×{img_work.height}px — qualidade melhorada") 
+                        # 1. Upscale + melhoria de qualidade 
+                        if op_upscale: 
+                            st.write("🔍 Aumentando qualidade...")
+                            img_work = upscale_image(img_work, scale=2) 
+                            img_work = improve_image_quality(img_work) 
+                            st.caption(f"📐 {img_work.width}×{img_work.height}px — qualidade melhorada") 
  
-                    # 2. Remoção de fundo 
-                    if op_rembg: 
-                        st.info("✂️ Removendo fundo... (No 1º uso, o modelo de IA (~176MB) será baixado. Aguarde.)") 
-                        buf = io.BytesIO() 
-                        img_work.save(buf, format="PNG") 
-                        from rembg import remove
-                        no_bg_bytes = remove(buf.getvalue()) 
-                        img_work = Image.open(io.BytesIO(no_bg_bytes)).convert("RGBA") 
-                        st.success("✅ Fundo removido com sucesso!") 
+                        # 2. Remoção de fundo 
+                        if op_rembg: 
+                            st.info("✂️ Removendo fundo... (No 1º uso, o modelo de IA (~176MB) será baixado. Aguarde.)") 
+                            buf = io.BytesIO() 
+                            img_work.save(buf, format="PNG") 
+                            from rembg import remove
+                            no_bg_bytes = remove(buf.getvalue()) 
+                            img_work = Image.open(io.BytesIO(no_bg_bytes)).convert("RGBA") 
+                            st.success("✅ Fundo removido com sucesso!") 
  
-                    final_img = img_work 
+                        final_img = img_work 
  
-                    # 3. Cenário 
-                    if op_cenario: 
-                        st.write("🎨 Gerando cenário (pode levar até 90s)...") 
-                        prompt_cenario = "product photography studio white background soft lighting" 
-                        if segmento == "Escolar / Juvenil": 
-                            prompt_cenario = "minimalist white geometric podium soft lavender background" 
-                        elif segmento == "Viagem": 
-                            prompt_cenario = "stone platform outdoors golden hour soft focus" 
-                        elif segmento == "Profissional / Tech": 
-                            prompt_cenario = "sleek white desk surface modern office lighting" 
-                        elif segmento == "Moda": 
-                            prompt_cenario = "white marble floor fashion studio aesthetic" 
+                        # 3. Cenário 
+                        if op_cenario: 
+                            st.write("🎨 Gerando cenário (pode levar até 90s)...") 
+                            prompt_cenario = "product photography studio white background soft lighting" 
+                            if segmento == "Escolar / Juvenil": 
+                                prompt_cenario = "minimalist white geometric podium soft lavender background" 
+                            elif segmento == "Viagem": 
+                                prompt_cenario = "stone platform outdoors golden hour soft focus" 
+                            elif segmento == "Profissional / Tech": 
+                                prompt_cenario = "sleek white desk surface modern office lighting" 
+                            elif segmento == "Moda": 
+                                prompt_cenario = "white marble floor fashion studio aesthetic" 
  
-                        bg_img = generate_ai_scenario(prompt_cenario, segmento) 
-                        if not bg_img: 
-                            bg_img = generate_gradient_background(segmento) 
-                        else:
-                            st.success("✅ Cenário IA gerado!") 
+                            bg_img = generate_ai_scenario(prompt_cenario, segmento) 
+                            if not bg_img: 
+                                bg_img = generate_gradient_background(segmento) 
+                            else:
+                                st.success("✅ Cenário IA gerado!") 
  
-                        bg_img = bg_img.resize((1024, 1024)) 
-                        fg = img_work.copy() 
-                        fg.thumbnail((800, 800)) 
-                        # Posiciona ligeiramente para baixo do centro para ficar "apoiada" 
-                        offset = ( 
-                            (bg_img.width - fg.width) // 2, 
-                            int((bg_img.height - fg.height) * 0.6) 
+                            bg_img = bg_img.resize((1024, 1024)) 
+                            fg = img_work.copy() 
+                            fg.thumbnail((800, 800)) 
+                            # Posiciona ligeiramente para baixo do centro para ficar "apoiada" 
+                            offset = ( 
+                                (bg_img.width - fg.width) // 2, 
+                                int((bg_img.height - fg.height) * 0.6) 
+                            ) 
+                            # Aplica sombra de contato ANTES de colar o produto 
+                            bg_img = apply_contact_shadow(bg_img, fg, offset) 
+                            bg_img.paste(fg, offset, fg) 
+                            final_img = bg_img 
+ 
+                        st.image(final_img, width="stretch") 
+ 
+                        # Download da imagem processada 
+                        buf_out = io.BytesIO() 
+                        final_img.convert("RGB").save(buf_out, format="JPEG", quality=95) 
+                        st.download_button( 
+                            "⬇️ Baixar imagem processada", 
+                            data=buf_out.getvalue(), 
+                            file_name=f"processada_{idx+1}_{uploaded_file.name}", 
+                            mime="image/jpeg", 
+                            key=f"dl_{idx}" 
                         ) 
-                        # Aplica sombra de contato ANTES de colar o produto 
-                        bg_img = apply_contact_shadow(bg_img, fg, offset) 
-                        bg_img.paste(fg, offset, fg) 
-                        final_img = bg_img 
- 
-                    st.image(final_img, width="stretch") 
- 
-                    # Download da imagem processada 
-                    buf_out = io.BytesIO() 
-                    final_img.convert("RGB").save(buf_out, format="JPEG", quality=95) 
-                    st.download_button( 
-                        "⬇️ Baixar imagem processada", 
-                        data=buf_out.getvalue(), 
-                        file_name=f"processada_{idx+1}_{uploaded_file.name}", 
-                        mime="image/jpeg", 
-                        key=f"dl_{idx}" 
-                    ) 
+                    except Exception as e:
+                        st.error(f"❌ Erro no processamento: {str(e)}")
+                        print(f">>> DEBUG ERROR: {e}", flush=True)
  
                     # 4. Análise SEO com Gemini (só na primeira imagem para economizar cota) 
                     if idx == 0: 
