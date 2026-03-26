@@ -4,3 +4,6 @@ venv/
 __pycache__/ 
 *.pyc 
 .streamlit/secrets.toml
+dist/
+build/
+*.spec

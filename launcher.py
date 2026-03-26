@@ -14,8 +14,7 @@ import time
 import threading
 import webbrowser
 import socket
-import tkinter as tk
-from tkinter import messagebox
+import ctypes
 
 import pystray
 from PIL import Image, ImageDraw
@@ -67,14 +66,24 @@ def iniciar_streamlit():
     if porta_em_uso(PORTA):
         return  # Já está rodando
 
-    cmd = [
-        sys.executable, "-m", "streamlit", "run", APP_PY,
-        "--server.port", str(PORTA),
-        "--server.headless", "true",
-        "--server.runOnSave", "false",
-        "--browser.gatherUsageStats", "false",
-        "--theme.base", "light",
-    ]
+    if getattr(sys, "frozen", False):
+        cmd = [
+            sys.executable, "run", APP_PY,
+            "--server.port", str(PORTA),
+            "--server.headless", "true",
+            "--server.runOnSave", "false",
+            "--browser.gatherUsageStats", "false",
+            "--theme.base", "light",
+        ]
+    else:
+        cmd = [
+            sys.executable, "-m", "streamlit", "run", APP_PY,
+            "--server.port", str(PORTA),
+            "--server.headless", "true",
+            "--server.runOnSave", "false",
+            "--browser.gatherUsageStats", "false",
+            "--theme.base", "light",
+        ]
     streamlit_proc = subprocess.Popen(
         cmd,
         cwd=BASE_DIR,
@@ -162,26 +171,17 @@ def acao_verificar_atualizacao(icon, item):
 
 def _checar_e_notificar():
     resultado = verificar_atualizacao()
-    root = tk.Tk()
-    root.withdraw()
     if resultado["disponivel"]:
-        resposta = messagebox.askyesno(
-            "Atualização disponível! 🚀",
-            f"Nova versão: {resultado['versao_nova']}\n"
-            f"Versão atual: {VERSAO_ATUAL}\n\n"
-            f"Deseja atualizar agora?\n"
-            f"O app será reiniciado automaticamente.",
-        )
-        if resposta:
+        msg = (f"Nova versão: {resultado['versao_nova']}\n"
+               f"Versão atual: {VERSAO_ATUAL}\n\n"
+               f"Deseja atualizar agora?\n"
+               f"O app será reiniciado automaticamente.")
+        res = ctypes.windll.user32.MessageBoxW(0, msg, "Atualização disponível! 🚀", 4 | 64)
+        if res == 6: # IDYES
             from updater import baixar_e_aplicar_atualizacao
-            root.destroy()
             baixar_e_aplicar_atualizacao(resultado["url_download"])
     else:
-        messagebox.showinfo(
-            "Shopee Booster",
-            f"✅ Você já está na versão mais recente ({VERSAO_ATUAL}).",
-        )
-    root.destroy()
+        ctypes.windll.user32.MessageBoxW(0, f"Você já está na versão mais recente ({VERSAO_ATUAL}).", "Shopee Booster", 0 | 64)
 
 
 def acao_sair(icon, item):
@@ -220,11 +220,7 @@ def main():
 
     # 3. Aguardar Streamlit subir
     if not aguardar_streamlit(timeout=30):
-        tk.Tk().withdraw()
-        messagebox.showerror(
-            "Shopee Booster",
-            "❌ O servidor não iniciou. Verifique o .env e tente novamente."
-        )
+        ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (30s). Verifique os processos.\nO aplicativo será encerrado.", "Shopee Booster - Erro", 0 | 16)
         sys.exit(1)
 
     # 4. Abrir janela nativa na inicialização
@@ -235,4 +231,13 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    
+    # Interceptar a chamada "run" para lançar o streamlit embutido
+    if len(sys.argv) > 1 and sys.argv[1] == "run":
+        import streamlit.web.cli as stcli
+        sys.argv = [sys.argv[0]] + sys.argv[2:]
+        sys.exit(stcli.main())
+        
     main()
