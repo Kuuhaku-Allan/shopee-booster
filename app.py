@@ -923,13 +923,27 @@ if uploaded_files:
  
                         # 2. Remoção de fundo 
                         if op_rembg: 
-                            st.info("✂️ Removendo fundo... (No 1º uso, o modelo de IA (~176MB) será baixado. Aguarde.)") 
-                            buf = io.BytesIO() 
-                            img_work.save(buf, format="PNG") 
-                            from rembg import remove
-                            no_bg_bytes = remove(buf.getvalue()) 
-                            img_work = Image.open(io.BytesIO(no_bg_bytes)).convert("RGBA") 
-                            st.success("✅ Fundo removido com sucesso!") 
+                            with st.status("✂️ Removendo fundo...", expanded=True) as status:
+                                try:
+                                    st.write("Iniciando motor de IA (rembg)...")
+                                    from rembg import remove, new_session
+                                    
+                                    st.write("Carregando modelo u2net... (Pode demorar no 1º uso para baixar ~176MB da internet)")
+                                    # Sessão explícita ajuda a isolar erros de motor de IA e manter conexão ativa
+                                    session = new_session("u2net")
+                                    
+                                    buf = io.BytesIO() 
+                                    img_work.save(buf, format="PNG") 
+                                    
+                                    st.write("Processando pixels e aplicando máscaras...")
+                                    no_bg_bytes = remove(buf.getvalue(), session=session) 
+                                    img_work = Image.open(io.BytesIO(no_bg_bytes)).convert("RGBA") 
+                                    
+                                    status.update(label="✅ Fundo removido!", state="complete")
+                                except Exception as e:
+                                    st.error(f"Falha Crítica no Motor de IA: {str(e)}")
+                                    st.info("Dica: Verifique sua conexão com a internet (na primeira vez) ou se o antivírus bloqueou o arquivo onnxruntime.dll.")
+                                    st.stop() 
  
                         final_img = img_work 
  
