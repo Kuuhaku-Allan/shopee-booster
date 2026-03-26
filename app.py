@@ -6,7 +6,7 @@ import nest_asyncio
 import json
 import subprocess
 from google import genai
-from rembg import remove
+# rembg é importado sob demanda para não travar a inicialização
 from PIL import Image
 import io
 import requests
@@ -923,6 +923,7 @@ if uploaded_files:
                     if op_rembg: 
                         buf = io.BytesIO() 
                         img_work.save(buf, format="PNG") 
+                        from rembg import remove
                         no_bg_bytes = remove(buf.getvalue()) 
                         img_work = Image.open(io.BytesIO(no_bg_bytes)).convert("RGBA") 
  
