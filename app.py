@@ -921,11 +921,13 @@ if uploaded_files:
  
                     # 2. Remoção de fundo 
                     if op_rembg: 
+                        st.info("✂️ Removendo fundo... (No 1º uso, o modelo de IA (~176MB) será baixado. Aguarde.)") 
                         buf = io.BytesIO() 
                         img_work.save(buf, format="PNG") 
                         from rembg import remove
                         no_bg_bytes = remove(buf.getvalue()) 
                         img_work = Image.open(io.BytesIO(no_bg_bytes)).convert("RGBA") 
+                        st.success("✅ Fundo removido com sucesso!") 
  
                     final_img = img_work 
  
