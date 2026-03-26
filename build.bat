@@ -44,9 +44,10 @@ pyinstaller ^
     --collect-all pystray ^
     --collect-all webview ^
     --collect-all rembg ^
-    --collect-all google.generativeai ^
+    --collect-all google ^
     --collect-all nest_asyncio ^
     --collect-all playwright ^
+    --hidden-import "google.genai" ^
     --hidden-import "PIL._tkinter_finder" ^
     --hidden-import "pystray._win32" ^
     --hidden-import "nest_asyncio" ^
