@@ -48,6 +48,10 @@ pyinstaller ^
     --collect-all google ^
     --collect-all nest_asyncio ^
     --collect-all playwright ^
+    --collect-all Pillow ^
+    --hidden-import "PIL.ImageEnhance" ^
+    --hidden-import "PIL.ImageFilter" ^
+    --hidden-import "PIL.ImageDraw" ^
     --hidden-import "google.genai" ^
     --hidden-import "PIL._tkinter_finder" ^
     --hidden-import "pystray._win32" ^
