@@ -74,6 +74,7 @@ def iniciar_streamlit():
             "--server.runOnSave", "false",
             "--browser.gatherUsageStats", "false",
             "--theme.base", "light",
+            "--global.developmentMode", "false",
         ]
     else:
         cmd = [
@@ -83,6 +84,7 @@ def iniciar_streamlit():
             "--server.runOnSave", "false",
             "--browser.gatherUsageStats", "false",
             "--theme.base", "light",
+            "--global.developmentMode", "false",
         ]
     global log_file
     log_file = open("streamlit_log.txt", "w", encoding="utf-8")
