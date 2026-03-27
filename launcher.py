@@ -16,6 +16,10 @@ import webbrowser
 import socket
 import ctypes
 
+import pystray
+import webview
+from PIL import Image, ImageDraw
+
 from updater import verificar_atualizacao, VERSAO_ATUAL
 
 # 🔥 MEDIDA DE SEGURANÇA: Forçar apenas CPU para evitar travamentos silenciosos da IA
