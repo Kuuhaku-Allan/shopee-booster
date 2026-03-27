@@ -1022,39 +1022,44 @@ if uploaded_files:
                             bg_img.paste(fg, offset, fg) 
                             final_img = bg_img 
  
-                        st.image(final_img, width="stretch") 
- 
-                        # Download da imagem processada 
-                        buf_out = io.BytesIO() 
-                        final_img.convert("RGB").save(buf_out, format="JPEG", quality=95) 
-                        st.download_button( 
-                            "⬇️ Baixar imagem processada", 
-                            data=buf_out.getvalue(), 
-                            file_name=f"processada_{idx+1}_{uploaded_file.name}", 
-                            mime="image/jpeg", 
-                            key=f"dl_{idx}" 
-                        ) 
+                        st.session_state[f"img_proc_result_{idx}"] = final_img 
                     except Exception as e:
                         st.error(f"❌ Erro no processamento: {str(e)}")
                         print(f">>> DEBUG ERROR: {e}", flush=True)
  
-                    # 4. Análise SEO com Gemini (só na primeira imagem para economizar cota) 
+                    # 4. Análise SEO com Gemini (só na primeira imagem) 
                     if idx == 0: 
-                        st.markdown("---") 
                         prompt_seo = f"Analise esta mochila ({segmento}) e gere Título (60-70 chars), 20 Tags LSI e Descrição CR para Shopee 2026." 
                         response = None 
                         for m in MODELOS_VISION: 
                             try: 
                                 response = client.models.generate_content(model=m, contents=[prompt_seo, img_original]) 
-                                st.success(f"✅ Estratégia SEO gerada ({m})") 
                                 break 
                             except Exception: 
                                 continue 
                         if response: 
-                            st.markdown("### 📈 Diagnóstico de Listing") 
-                            st.write(response.text) 
+                            st.session_state[f"seo_result_{idx}"] = response.text 
                         else: 
                             st.error("❌ Cota de IA atingida. Tente em 60s.") 
+
+            if f"img_proc_result_{idx}" in st.session_state:
+                final_img = st.session_state[f"img_proc_result_{idx}"]
+                st.image(final_img, width="stretch") 
+                
+                buf_out = io.BytesIO() 
+                final_img.convert("RGB").save(buf_out, format="JPEG", quality=95) 
+                st.download_button( 
+                    "⬇️ Baixar imagem processada", 
+                    data=buf_out.getvalue(), 
+                    file_name=f"processada_{idx+1}_{uploaded_file.name}", 
+                    mime="image/jpeg", 
+                    key=f"dl_{idx}" 
+                ) 
+                
+            if f"seo_result_{idx}" in st.session_state:
+                st.markdown("---")
+                st.markdown("### 📈 Diagnóstico de Listing") 
+                st.write(st.session_state[f"seo_result_{idx}"])
  
         st.markdown("---") 
 
@@ -1182,7 +1187,8 @@ if st.session_state.selected_product:
             "⬇️ Baixar otimização (.txt)", 
             data=st.session_state.optimization_result, 
             file_name=f"otimizacao_{prod['itemid']}.txt", 
-            mime="text/plain" 
+            mime="text/plain",
+            key=f"dl_full_opt_{prod['itemid']}"
         ) 
 
 # ── TABS: CONCORRENTES + AVALIAÇÕES + CHATBOT ──────────────────
@@ -1357,52 +1363,56 @@ with tab3:
                             time.sleep(2) 
                             continue 
  
-                    if faq_result: 
-                        # Validar e avisar sobre limites de caracteres 
-                        avisos = [] 
-                        for linha in faq_result.split("\n"): 
-                            if linha.startswith("PERGUNTA") and ":" in linha: 
-                                texto = linha.split(":", 1)[1].strip() 
-                                if len(texto) > 80: 
-                                    avisos.append(f"⚠️ Pergunta muito longa ({len(texto)} chars): '{texto[:50]}...'") 
-                            elif linha.startswith("RESPOSTA") and ":" in linha: 
-                                texto = linha.split(":", 1)[1].strip() 
-                                if len(texto) > 500: 
-                                    avisos.append(f"⚠️ Resposta muito longa ({len(texto)} chars): '{texto[:50]}...'") 
+                        st.session_state["faq_ia_geral"] = faq_result
+                    else: 
+                        st.error("❌ Não foi possível gerar o FAQ. Tente novamente.") 
+
+            if st.session_state.get("faq_ia_geral"):
+                faq_result = st.session_state["faq_ia_geral"]
+                # Validar e avisar sobre limites de caracteres 
+                avisos = [] 
+                for linha in faq_result.split("\n"): 
+                    if linha.startswith("PERGUNTA") and ":" in linha: 
+                        texto = linha.split(":", 1)[1].strip() 
+                        if len(texto) > 80: 
+                            avisos.append(f"⚠️ Pergunta muito longa ({len(texto)} chars): '{texto[:50]}...'") 
+                    elif linha.startswith("RESPOSTA") and ":" in linha: 
+                        texto = linha.split(":", 1)[1].strip() 
+                        if len(texto) > 500: 
+                            avisos.append(f"⚠️ Resposta muito longa ({len(texto)} chars): '{texto[:50]}...'") 
  
-                        st.markdown("---") 
-                        st.markdown("### 📋 FAQ para o Assistente de IA do Seller Centre") 
+                st.markdown("---") 
+                st.markdown("### 📋 FAQ para o Assistente de IA do Seller Centre") 
  
-                        if avisos: 
-                            with st.expander("⚠️ Avisos de limite de caracteres"): 
-                                for a in avisos: 
-                                    st.warning(a) 
+                if avisos: 
+                    with st.expander("⚠️ Avisos de limite de caracteres"): 
+                        for a in avisos: 
+                            st.warning(a) 
  
-                        st.info("""📌 **Como usar no Seller Centre:** 
+                st.info("""📌 **Como usar no Seller Centre:** 
  1. Acesse seller.shopee.com.br → Atendimento ao Cliente → Assistente de IA 
  2. Clique em "Adicionar Categoria" e crie as 3 categorias acima 
  3. Dentro de cada categoria, adicione as 3 perguntas correspondentes 
  4. Cole a pergunta e a resposta nos campos indicados 
  5. Salve e ative o Assistente""") 
 
-                        st.success("💡 **Dica:** O Chat AI Assistant nativo da Shopee aprende automaticamente com as descrições dos seus produtos. Use a função 'Otimização Completa' para melhorar essas descrições e o robô da Shopee ficará mais inteligente automaticamente.")
+                st.success("💡 **Dica:** O Chat AI Assistant nativo da Shopee aprende automaticamente com as descrições dos seus produtos. Use a função 'Otimização Completa' para melhorar essas descrições e o robô da Shopee ficará mais inteligente automaticamente.")
 
-                        # Exibir com botão de copiar por bloco 
-                        categorias = faq_result.split("\n\n") 
-                        for bloco in categorias: 
-                            if bloco.strip(): 
-                                st.code(bloco.strip(), language=None) 
+                # Exibir com botão de copiar por bloco 
+                categorias = faq_result.split("\n\n") 
+                for bloco in categorias: 
+                    if bloco.strip(): 
+                        st.code(bloco.strip(), language=None) 
  
-                        faq_result = faq_result.replace("**", "")
-                        st.download_button( 
-                            "⬇️ Baixar FAQ completo (.txt)", 
-                            data=faq_result, 
-                            file_name=f"faq_{shop_name}.txt", 
-                            mime="text/plain" 
-                        ) 
-                    else: 
-                        st.error("❌ Não foi possível gerar o FAQ. Tente novamente.") 
-        else: 
+                faq_result = faq_result.replace("**", "")
+                st.download_button( 
+                    "⬇️ Baixar FAQ completo (.txt)", 
+                    data=faq_result, 
+                    file_name=f"faq_{shop_name}.txt", 
+                    mime="text/plain",
+                    key="dl_faq"
+                ) 
+        else:
             shop_name = st.session_state.shop_data.get("name", "Loja") 
             catalog_context = build_catalog_context(produtos, shop_name) 
  
@@ -1487,7 +1497,8 @@ with tab3:
                         f"⬇️ Exportar FAQ personalizado ({n} pares)", 
                         data=faq_txt, 
                         file_name=f"faq_personalizado_{shop_name}.txt", 
-                        mime="text/plain" 
+                        mime="text/plain",
+                        key="dl_faq_perso"
                     ) 
                     if st.button("🗑️ Limpar FAQ personalizado"): 
                         st.session_state.faq_personalizado = [] 
