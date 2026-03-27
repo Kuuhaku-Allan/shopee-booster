@@ -16,11 +16,13 @@ import webbrowser
 import socket
 import ctypes
 
-import pystray
-from PIL import Image, ImageDraw
-import webview
-
 from updater import verificar_atualizacao, VERSAO_ATUAL
+
+# 🔥 MEDIDA DE SEGURANÇA: Forçar apenas CPU para evitar travamentos silenciosos da IA
+# No Windows/PyInstaller, o onnxruntime trava tentando buscar drivers de GPU (CUDA/DirectML)
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["ORT_LOGGING_LEVEL"] = "3" # Suprime logs fúteis
+os.environ["ONNXRUNTIME_PROVIDERS"] = "CPUExecutionProvider" # Força o motor local já no launcher
 
 # ── Configurações ─────────────────────────────────────────────
 PORTA = 8501

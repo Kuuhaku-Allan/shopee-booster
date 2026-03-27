@@ -6,7 +6,6 @@ import nest_asyncio
 import json
 import subprocess
 from google import genai
-# rembg é importado sob demanda para não travar a inicialização
 from PIL import Image
 import io
 import requests
@@ -16,6 +15,14 @@ import random
 from functools import lru_cache
 
 import os
+import sys
+
+# 🔥 MEDIDA DE SEGURANÇA: Forçar apenas CPU para evitar travamentos silenciosos da IA
+# Evita que o onnxruntime tente carregar DLLs de GPU inexistentes e trave.
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["ORT_LOGGING_LEVEL"] = "3"
+os.environ["ONNXRUNTIME_PROVIDERS"] = "CPUExecutionProvider"
+
 from dotenv import load_dotenv
 
 if getattr(sys, "frozen", False):

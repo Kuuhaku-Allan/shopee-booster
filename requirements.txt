@@ -36,7 +36,7 @@ nest-asyncio==1.6.0
 networkx==3.6.1
 numba==0.64.0
 numpy==2.4.3
-onnxruntime==1.24.3
+onnxruntime-cpu==1.24.3
 packaging==26.0
 pandas==2.3.3
 pillow==12.1.1
