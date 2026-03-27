@@ -131,6 +131,10 @@ def abrir_janela_nativa():
     Fechar a janela NÃO encerra o app — ele continua na bandeja.
     """
     global janela_webview
+    
+    # Downloads vão automaticamente para a pasta Downloads do usuário
+    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+    
     janela_webview = webview.create_window(
         TITULO_JANELA,
         URL_APP,
@@ -139,7 +143,7 @@ def abrir_janela_nativa():
         resizable=True,
         min_size=(900, 600),
     )
-    webview.start(debug=False)
+    webview.start(debug=False, download_dir=downloads_dir)
     janela_webview = None
 
 
