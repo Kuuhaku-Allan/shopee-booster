@@ -69,11 +69,33 @@ MODELOS_TEXTO = [
 
 
 def playwright_intercept(script: str) -> dict | list | None:
+    import tempfile
     try:
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True, text=True, timeout=150
-        )
+        if getattr(sys, "frozen", False):
+            # No .exe, sys.executable é ShopeeBooster.exe — não aceita -c
+            # Escrevemos o script em arquivo temporário e usamos o modo "runscript"
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            ) as f:
+                f.write(script)
+                script_path = f.name
+            try:
+                result = subprocess.run(
+                    [sys.executable, "runscript", script_path],
+                    capture_output=True, text=True, timeout=150
+                )
+            finally:
+                try:
+                    os.unlink(script_path)
+                except Exception:
+                    pass
+        else:
+            # Modo dev normal — python.exe aceita -c diretamente
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                capture_output=True, text=True, timeout=150
+            )
+
         if result.stderr.strip():
             st.caption(f"🔍 Debug stderr: {result.stderr.strip()[:2000]}")
         if result.returncode != 0:

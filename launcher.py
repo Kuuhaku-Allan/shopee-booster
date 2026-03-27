@@ -248,5 +248,17 @@ if __name__ == "__main__":
         except ImportError:
             import streamlit.cli as stcli
         sys.exit(stcli.main())
+    
+    # 🚀 NOVO: Handler para rodar scripts em background (Playwright)
+    # Isso evita que o ShopeeBooster.exe abra uma nova janela ao tentar rodar um script
+    elif len(sys.argv) > 1 and sys.argv[1] == "runscript":
+        try:
+            script_path = sys.argv[2]
+            with open(script_path, "r", encoding="utf-8") as f:
+                exec(compile(f.read(), script_path, "exec"))
+            sys.exit(0)
+        except Exception as e:
+            print(f"Erro ao rodar script: {e}")
+            sys.exit(1)
         
     main()
