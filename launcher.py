@@ -143,7 +143,7 @@ def abrir_janela_nativa():
         resizable=True,
         min_size=(900, 600),
     )
-    webview.start(debug=False, download_dir=downloads_dir)
+    webview.start(debug=False)
     janela_webview = None
 
 
