@@ -31,6 +31,8 @@ os.environ["REM_BG_CHECK_MODEL"] = "0" # Desativa check online que pode travar
 try:
     import onnxruntime as ort
     os.environ["ORT_LOGGING_LEVEL"] = "3" # Apenas erros críticos
+    # Garante que só CPU seja tentado globalmente para não travar no .exe
+    ort.set_default_logger_severity(3)
 except:
     pass
 
@@ -941,7 +943,8 @@ if uploaded_files:
                                     st.write("Conectando ao motor de IA local...")
                                     from rembg import remove, new_session
                                     # Usamos a sessão local para garantir que ele não tente baixar nada
-                                    session = new_session("u2net")
+                                    # Forçamos CPUExecutionProvider para não travar procurando GPU no .exe
+                                    session = new_session("u2net", providers=["CPUExecutionProvider"])
                                     
                                     buf = io.BytesIO() 
                                     img_work.save(buf, format="PNG") 
