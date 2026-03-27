@@ -18,8 +18,21 @@ from functools import lru_cache
 import os
 from dotenv import load_dotenv
 
-if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+if getattr(sys, "frozen", False):
+    BASE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Força o rembg a procurar o modelo na pasta que vamos embutir
+os.environ["U2NET_HOME"] = os.path.join(BASE_DIR, "models")
+os.environ["REM_BG_CHECK_MODEL"] = "0" # Desativa check online que pode travar
+
+# Otimização para o motor de IA rodar leve no executável
+try:
+    import onnxruntime as ort
+    os.environ["ORT_LOGGING_LEVEL"] = "3" # Apenas erros críticos
+except:
+    pass
 
 nest_asyncio.apply()
 
@@ -925,11 +938,9 @@ if uploaded_files:
                         if op_rembg: 
                             with st.status("✂️ Removendo fundo...", expanded=True) as status:
                                 try:
-                                    st.write("Iniciando motor de IA (rembg)...")
+                                    st.write("Conectando ao motor de IA local...")
                                     from rembg import remove, new_session
-                                    
-                                    st.write("Carregando modelo u2net... (Pode demorar no 1º uso para baixar ~176MB da internet)")
-                                    # Sessão explícita ajuda a isolar erros de motor de IA e manter conexão ativa
+                                    # Usamos a sessão local para garantir que ele não tente baixar nada
                                     session = new_session("u2net")
                                     
                                     buf = io.BytesIO() 

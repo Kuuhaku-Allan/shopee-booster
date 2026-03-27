@@ -40,6 +40,7 @@ pyinstaller ^
     --add-data "app.py;." ^
     --add-data "updater.py;." ^
     --add-data "version.txt;." ^
+    --add-data "models;models" ^
     --collect-all streamlit ^
     --collect-all pystray ^
     --collect-all webview ^
