@@ -42,6 +42,11 @@ else:
 
 APP_PY = os.path.join(BASE_DIR, "app.py")
 
+# Aponta o Playwright para os browsers embutidos no .exe
+if getattr(sys, "frozen", False):
+    pw_browsers = os.path.join(BASE_DIR, "pw-browsers")
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = pw_browsers
+
 # ── Estado global ─────────────────────────────────────────────
 streamlit_proc = None
 janela_webview = None
@@ -252,13 +257,16 @@ if __name__ == "__main__":
     # 🚀 NOVO: Handler para rodar scripts em background (Playwright)
     # Isso evita que o ShopeeBooster.exe abra uma nova janela ao tentar rodar um script
     elif len(sys.argv) > 1 and sys.argv[1] == "runscript":
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
         try:
             script_path = sys.argv[2]
             with open(script_path, "r", encoding="utf-8") as f:
                 exec(compile(f.read(), script_path, "exec"))
             sys.exit(0)
         except Exception as e:
-            print(f"Erro ao rodar script: {e}")
+            print(f"Erro ao rodar script: {e}", file=sys.stderr)
             sys.exit(1)
         
     main()

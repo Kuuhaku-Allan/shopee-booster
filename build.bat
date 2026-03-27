@@ -42,6 +42,7 @@ pyinstaller ^
     --add-data "version.txt;." ^
     --add-data ".env;." ^
     --add-data "models;models" ^
+    --add-data "%LOCALAPPDATA%\ms-playwright;pw-browsers" ^
     --copy-metadata pymatting ^
     --copy-metadata rembg ^
     --copy-metadata onnxruntime ^
