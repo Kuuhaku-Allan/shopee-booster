@@ -40,7 +40,11 @@ pyinstaller ^
     --add-data "app.py;." ^
     --add-data "updater.py;." ^
     --add-data "version.txt;." ^
+    --add-data ".env;." ^
     --add-data "models;models" ^
+    --copy-metadata pymatting ^
+    --copy-metadata rembg ^
+    --copy-metadata onnxruntime ^
     --collect-all streamlit ^
     --collect-all pystray ^
     --collect-all webview ^
