@@ -1389,7 +1389,9 @@ with tab3:
                         except Exception as e: 
                             time.sleep(2) 
                             continue 
- 
+                
+                    # FORA do for — executa depois do break
+                    if faq_result:
                         st.session_state["faq_ia_geral"] = faq_result
                     else: 
                         st.error("❌ Não foi possível gerar o FAQ. Tente novamente.") 
