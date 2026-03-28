@@ -48,6 +48,33 @@ nest_asyncio.apply()
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
 
+def salvar_ou_baixar(label: str, data: bytes | str, file_name: str, mime: str, key: str):
+    """
+    No .exe (pywebview): salva direto em ~/Downloads e avisa o usuário.
+    No navegador normal: usa st.download_button normalmente.
+    """
+    if getattr(sys, "frozen", False):
+        # Estamos no .exe — pywebview não suporta downloads de blob
+        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+        caminho = os.path.join(downloads, file_name)
+        
+        if st.button(f"⬇️ {label}", key=key):
+            try:
+                modo = "wb" if isinstance(data, bytes) else "w"
+                enc = None if isinstance(data, bytes) else "utf-8"
+                with open(caminho, modo, encoding=enc) as f:
+                    f.write(data)
+                st.success(f"✅ Salvo em: `{caminho}`")
+                # Abre o Explorer na pasta Downloads
+                import subprocess as _sp
+                _sp.Popen(["explorer", "/select,", caminho])
+            except Exception as e:
+                st.error(f"Erro ao salvar: {e}")
+    else:
+        # Modo desenvolvimento — download normal do navegador
+        st.download_button(label=f"⬇️ {label}", data=data,
+                           file_name=file_name, mime=mime, key=key)
+
 if not API_KEY:
     st.warning("⚠️ Chave da API do Google Gemini não encontrada.")
     API_KEY = st.text_input("Insira sua GOOGLE_API_KEY para continuar usando o app:", type="password")
@@ -1048,8 +1075,8 @@ if uploaded_files:
                 
                 buf_out = io.BytesIO() 
                 final_img.convert("RGB").save(buf_out, format="JPEG", quality=95) 
-                st.download_button( 
-                    "⬇️ Baixar imagem processada", 
+                salvar_ou_baixar( 
+                    "Baixar imagem processada", 
                     data=buf_out.getvalue(), 
                     file_name=f"processada_{idx+1}_{uploaded_file.name}", 
                     mime="image/jpeg", 
@@ -1183,8 +1210,8 @@ if st.session_state.selected_product:
         st.markdown("---") 
         st.markdown("### 📈 Listing Otimizado pela IA") 
         st.markdown(st.session_state.optimization_result) 
-        st.download_button( 
-            "⬇️ Baixar otimização (.txt)", 
+        salvar_ou_baixar( 
+            "Baixar otimização (.txt)", 
             data=st.session_state.optimization_result, 
             file_name=f"otimizacao_{prod['itemid']}.txt", 
             mime="text/plain",
@@ -1405,8 +1432,8 @@ with tab3:
                         st.code(bloco.strip(), language=None) 
  
                 faq_result = faq_result.replace("**", "")
-                st.download_button( 
-                    "⬇️ Baixar FAQ completo (.txt)", 
+                salvar_ou_baixar( 
+                    "Baixar FAQ completo (.txt)", 
                     data=faq_result, 
                     file_name=f"faq_{shop_name}.txt", 
                     mime="text/plain",
@@ -1493,8 +1520,8 @@ with tab3:
                         for i, item in enumerate(st.session_state.faq_personalizado) 
                     ]) 
                     faq_txt = faq_txt.replace("**", "")
-                    st.download_button( 
-                        f"⬇️ Exportar FAQ personalizado ({n} pares)", 
+                    salvar_ou_baixar( 
+                        f"Exportar FAQ personalizado ({n} pares)", 
                         data=faq_txt, 
                         file_name=f"faq_personalizado_{shop_name}.txt", 
                         mime="text/plain",
