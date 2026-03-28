@@ -1,4 +1,6 @@
 # .gitignore 
+# Configurações de Usuário (Privado)
+.shopee_config
 .env 
 venv/ 
 __pycache__/ 

@@ -40,7 +40,7 @@ pyinstaller ^
     --add-data "app.py;." ^
     --add-data "updater.py;." ^
     --add-data "version.txt;." ^
-    --add-data ".env;." ^
+    --add-data "assets;assets" ^
     --add-data "models;models" ^
     --add-data "%LOCALAPPDATA%\ms-playwright;pw-browsers" ^
     --copy-metadata pymatting ^

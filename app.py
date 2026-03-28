@@ -46,7 +46,48 @@ except:
 nest_asyncio.apply()
 
 load_dotenv()
+
+# ── Gerenciamento de Configurações Persistentes (@.shopee_config) ──────
+# Em vez de salvar no .env interno (somente leitura), salvamos num arquivo 
+# ao lado do executável para que a chave API sobreviva a reinicializações.
+if getattr(sys, "frozen", False):
+    CONFIG_DIR = os.path.dirname(sys.executable)  # Pasta onde está o ShopeeBooster.exe
+else:
+    CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+
+CONFIG_ENV = os.path.join(CONFIG_DIR, ".shopee_config")
+load_dotenv(CONFIG_ENV) # Tenta carregar do arquivo de config externo primeiro
 API_KEY = os.getenv("GOOGLE_API_KEY")
+
+if not API_KEY:
+    # Caso não tenha chave, mostramos uma tela de configuração limpa antes do app carregar
+    st.set_page_config(page_title="Shopee Booster - Configuração", page_icon="🔑", layout="centered")
+    st.title("🔑 Configuração da API")
+    st.markdown("""
+    Bem-vindo ao **Shopee Booster**! Para utilizar as funcionalidades de IA (Remover Fundo, Gerar Cenários, Auditoria), 
+    você precisa configurar sua chave de API do Google Gemini.
+    
+    A chave será salva localmente no arquivo `.shopee_config` e você não precisará inseri-la novamente.
+    """)
+    
+    nova_chave = st.text_input("Insira sua GOOGLE_API_KEY:", type="password", placeholder="AIzaSy...")
+    
+    st.info("💡 Você pode obter uma chave gratuita em: [aistudio.google.com](https://aistudio.google.com/app/apikey)")
+    
+    if st.button("🚀 Salvar e Iniciar Aplicativo", type="primary", use_container_width=True):
+        if nova_chave.strip().startswith("AIza"):
+            try:
+                with open(CONFIG_ENV, "w", encoding="utf-8") as f:
+                    f.write(f"GOOGLE_API_KEY={nova_chave.strip()}\n")
+                st.success("✅ Chave configurada com sucesso! Reiniciando...")
+                time.sleep(1.5)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao salvar arquivo de configuração: {e}")
+        else:
+            st.error("⚠️ Por favor, insira uma chave válida do Google Gemini (começa com 'AIza').")
+    
+    st.stop() # Interrompe o carregamento do restante do app até ter a chave
 
 def salvar_ou_baixar(label: str, data: bytes | str, file_name: str, mime: str, key: str):
     """
@@ -74,13 +115,6 @@ def salvar_ou_baixar(label: str, data: bytes | str, file_name: str, mime: str, k
         # Modo desenvolvimento — download normal do navegador
         st.download_button(label=f"⬇️ {label}", data=data,
                            file_name=file_name, mime=mime, key=key)
-
-if not API_KEY:
-    st.warning("⚠️ Chave da API do Google Gemini não encontrada.")
-    API_KEY = st.text_input("Insira sua GOOGLE_API_KEY para continuar usando o app:", type="password")
-    if not API_KEY:
-        st.info("Você precisa inserir uma chave de API válida para usar os recursos de IA do Shopee Booster.")
-        st.stop()
 
 client = genai.Client(api_key=API_KEY)
 

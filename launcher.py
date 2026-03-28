@@ -154,12 +154,17 @@ def abrir_no_navegador():
 
 # ── Ícone da bandeja ──────────────────────────────────────────
 def criar_icone_imagem() -> Image.Image:
-    """Carrega o ícone da pasta assets ou gera um simples se não existir."""
-    icon_path = os.path.join(BASE_DIR, "assets", "icon.ico")
-    if os.path.exists(icon_path):
-        return Image.open(icon_path)
+    """Carrega o ícone da pasta assets (preferência PNG para transparência) ou gera um fallback."""
+    png_path = os.path.join(BASE_DIR, "assets", "icon.png")
+    ico_path = os.path.join(BASE_DIR, "assets", "icon.ico")
     
-    # Fallback
+    if os.path.exists(png_path):
+        # PNG com alpha é melhor para evitar a 'barra cinza' na bandeja do Windows
+        return Image.open(png_path).convert("RGBA").resize((64, 64), Image.Resampling.LANCZOS)
+    elif os.path.exists(ico_path):
+        return Image.open(ico_path).convert("RGBA")
+    
+    # Fallback caso nada seja encontrado
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     draw.ellipse([4, 4, 60, 60], fill=(238, 77, 45, 255))
@@ -201,8 +206,10 @@ def _checar_e_notificar():
 
 
 def acao_sair(icon, item):
+    """Encerra tudo de forma agressiva para não deixar processos zumbis."""
     icon.stop()
     encerrar_streamlit()
+    # os._exit garante que o processo pai e todos os threads/subprocessos morram
     os._exit(0)
 
 
@@ -231,19 +238,26 @@ def main():
     # 1. Iniciar Streamlit em background
     iniciar_streamlit()
 
-    # 2. Verificar atualização silenciosamente em thread separada
+    # 2. Verificar atualização silenciosamente
     threading.Thread(target=_checar_e_notificar, daemon=True).start()
 
     # 3. Aguardar Streamlit subir
     if not aguardar_streamlit(timeout=60):
-        ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (60s). Verifique os processos.\nO aplicativo será encerrado.", "Shopee Booster - Erro", 0 | 16)
+        ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (60s).", "Shopee Booster - Erro", 0 | 16)
         sys.exit(1)
 
-    # 4. Iniciar bandeja em background
-    threading.Thread(target=iniciar_tray, daemon=True).start()
+    # 4. Iniciar bandeja em thread NÃO-DAEMON
+    # Isso faz com que o processo Python continue vivo mesmo se a janela principal fechar
+    tray_thread = threading.Thread(target=iniciar_tray, daemon=False)
+    tray_thread.start()
 
     # 5. Abrir janela nativa principal (bloqueante)
     abrir_janela_nativa()
+
+    # 🚀 Se chegamos aqui, o usuário fechou a janela no "X"
+    # O app continua rodando via tray_thread (não-daemon)
+    # Aguardamos a thread da bandeja terminar (quando clicar em 'Sair')
+    tray_thread.join()
 
 
 if __name__ == "__main__":
