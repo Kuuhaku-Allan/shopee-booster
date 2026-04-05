@@ -740,7 +740,7 @@ def render_chatbot():
             )
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.button("🚀 Ativar Chatbot", type="primary", use_container_width=True, key="btn_ativar_chat"):
+                if st.button("🚀 Ativar Chatbot", type="primary", width='stretch', key="btn_ativar_chat"):
                     st.session_state.chatbot_active           = True
                     st.session_state.chat_history             = []
                     st.session_state.chat_attachments         = []
@@ -750,7 +750,7 @@ def render_chatbot():
                     st.session_state.chat_preview_captions    = []
                     st.rerun()
             with col_b:
-                if st.button("📋 Gerar FAQ para Seller Centre", use_container_width=True, key="btn_gerar_faq_welcome"):
+                if st.button("📋 Gerar FAQ para Seller Centre", width='stretch', key="btn_gerar_faq_welcome"):
                     _gerar_faq(full_context, shop_name_ctx)
 
         _render_faq_output(shop_name_ctx)
@@ -785,7 +785,7 @@ def render_chatbot():
                         idx_rev = len(preview_imgs) - 1 - i
                         cap = caps[idx_rev] if idx_rev < len(caps) else ""
 
-                    st.image(pimg, caption=cap, use_container_width=True)
+                    st.image(pimg, caption=cap, width='stretch')
 
                     # Botão de download para cada imagem
                     buf_dl = io.BytesIO()
@@ -815,7 +815,7 @@ def render_chatbot():
                 prod = st.session_state.selected_product
                 img_url = (prod["image"] if prod["image"].startswith("http")
                            else f"https://down-br.img.susercontent.com/file/{prod['image']}")
-                st.image(img_url, caption=f"⚡ {prod['name'][:28]}", use_container_width=True)
+                st.image(img_url, caption=f"⚡ {prod['name'][:28]}", width='stretch')
 
     # ── PAINEL ESQUERDO: Chat ─────────────────────────────────
     with col_chat:
@@ -824,11 +824,11 @@ def render_chatbot():
         with ch1:
             st.markdown(f"### 💬 {shop_name_ctx}")
         with ch2:
-            if st.button("📋 FAQ", key="btn_faq_chat", use_container_width=True, help="Gerar FAQ para Seller Centre"):
+            if st.button("📋 FAQ", key="btn_faq_chat", width='stretch', help="Gerar FAQ para Seller Centre"):
                 _gerar_faq(full_context, shop_name_ctx)
                 st.rerun()
         with ch3:
-            if st.button("🔄", key="btn_reset_chat", use_container_width=True, help="Reiniciar conversa"):
+            if st.button("🔄", key="btn_reset_chat", width='stretch', help="Reiniciar conversa"):
                 st.session_state.chat_history             = []
                 st.session_state.chat_attachments         = []
                 st.session_state.chat_attachment_types    = []
@@ -853,7 +853,7 @@ def render_chatbot():
                             att_cols = st.columns(min(len(turn["attachment_previews"]), 4))
                             for ai, aprev in enumerate(turn["attachment_previews"]):
                                 with att_cols[ai]:
-                                    st.image(aprev, use_container_width=True)
+                                    st.image(aprev, width=350)
                         st.write(turn["user"])
                     with st.chat_message("assistant"):
                         st.write(turn["assistant"])
@@ -865,7 +865,7 @@ def render_chatbot():
                                     rcap = ""
                                     if turn.get("result_captions") and ri < len(turn["result_captions"]):
                                         rcap = turn["result_captions"][ri]
-                                    st.image(rimg, caption=rcap, use_container_width=True)
+                                    st.image(rimg, caption=rcap, width=350)
 
         # ── Sugestões iniciais ────────────────────────────────
         if not st.session_state.chat_history:
@@ -893,8 +893,8 @@ def render_chatbot():
             sug_cols = st.columns(2)
             for idx_s, sug in enumerate(all_sugs[:4]):
                 with sug_cols[idx_s % 2]:
-                    if st.button(sug, key=f"sug_{idx_s}", use_container_width=True):
-                        _send_message(sug, [], [], [], full_context, "Moda") # Usar fallback de segmento
+                    if st.button(sug, key=f"sug_{idx_s}", width='stretch'):
+                        _send_message(sug, [], [], [], full_context, segmento)
 
         # ── Área de anexo (toggle "+") ────────────────────────
         _render_attachment_area()
@@ -905,7 +905,7 @@ def render_chatbot():
             attachments  = st.session_state.get("chat_attachments",         [])
             att_types    = st.session_state.get("chat_attachment_types",    [])
             att_previews = st.session_state.get("chat_attachment_previews", [])
-            _send_message(user_input, attachments, att_types, att_previews, full_context, "Moda")
+            _send_message(user_input, attachments, att_types, att_previews, full_context, segmento)
 
     # ── FAQ em expander abaixo do layout ─────────────────────
     _render_faq_output(shop_name_ctx)
@@ -920,7 +920,7 @@ def _render_attachment_area():
     is_open = st.session_state.get("show_attach_panel", False)
     label   = "📎 Fechar anexos" if is_open else "📎 Anexar imagem / vídeo"
 
-    if st.button(label, key="btn_toggle_attach", use_container_width=True):
+    if st.button(label, key="btn_toggle_attach", width='stretch'):
         st.session_state.show_attach_panel = not is_open
         if not st.session_state.show_attach_panel:
             # Fecha o painel E limpa os anexos pendentes
@@ -968,7 +968,7 @@ def _render_attachment_area():
                     for fi, fp in enumerate(att_previews):
                         if fp is not None:
                             with prev_cols[pi % len(prev_cols)]:
-                                st.image(fp, use_container_width=True,
+                                st.image(fp, width='stretch',
                                          caption=f"{'🎬' if att_types[fi]=='video' else '🖼️'} {uploaded[fi].name[:20]}")
                             pi += 1
 

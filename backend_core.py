@@ -1111,6 +1111,19 @@ def process_chat_turn(
 
     result = {"text": "", "images": [], "intent": intent, "captions": []}
 
+    # ── Intent de mídia sem anexo → instrui o usuário ──────
+    MEDIA_INTENTS = {"remove_bg", "generate_scene", "upscale", "analyze_image", "analyze_video"}
+    if not has_media and intent in MEDIA_INTENTS:
+        msgs = {
+            "remove_bg":      "📎 Para remover o fundo, clique em **📎 Anexar imagem / vídeo**, selecione a foto e reenvie sua mensagem.",
+            "generate_scene": "📎 Para gerar um cenário IA, clique em **📎 Anexar imagem / vídeo**, selecione a foto do produto e reenvie.",
+            "upscale":        "📎 Para aumentar a qualidade, clique em **📎 Anexar imagem / vídeo**, selecione a imagem e reenvie.",
+            "analyze_image":  "📎 Para analisar a imagem, clique em **📎 Anexar imagem / vídeo**, selecione a foto e reenvie sua pergunta.",
+            "analyze_video":  "📎 Para analisar o vídeo, clique em **📎 Anexar imagem / vídeo**, selecione o arquivo MP4 e reenvie.",
+        }
+        result["text"] = msgs.get(intent, "📎 Por favor, anexe o arquivo pelo botão **📎 Anexar imagem / vídeo** e reenvie.")
+        return result
+
     # ── Sem mídia: chat normal enriquecido ──────────────────
     if not has_media or intent in ("optimize_listing", "general"):
         contents  = [full_context + "\n\n---\nHistórico:\n"]
