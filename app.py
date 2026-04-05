@@ -96,6 +96,8 @@ from backend_core import (
     generate_ai_scenario, generate_gradient_background,
     apply_contact_shadow, improve_image_quality, upscale_image,
     MODELOS_VISION, client,
+    build_full_chat_context, detect_chat_intent,
+    analyze_product_image_vision, process_chat_turn,
 )
 from PIL import Image
 from ui_theme import init_theme, apply_theme, render_theme_toggle
@@ -119,6 +121,13 @@ _DEFAULTS = {
     "chat_history":            [],
     "chatbot_active":          False,
     "faq_personalizado":       [],
+    "chat_attachments":        [],
+    "chat_attachment_types":   [],
+    "chat_attachment_previews":[],
+    "show_attach_panel":       False,
+    "chat_preview_images":     [],
+    "chat_preview_captions":   [],
+    "faq_ia_geral":            None,
 }
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
@@ -663,265 +672,464 @@ def render_auditoria():
 # PARTIÇÃO II — CHATBOT CONCIERGE
 # ══════════════════════════════════════════════════════════════════════════
 def render_chatbot():
-    # ── Cabeçalho ─────────────────────────────────────────────
     st.markdown("""
     <div class="page-header">
         <div class="page-header-icon">🤖</div>
         <div>
             <div class="page-header-title">Chatbot Concierge</div>
-            <div class="page-header-sub">Assistente virtual inteligente treinado com o catálogo da sua loja</div>
+            <div class="page-header-sub">Assistente multimodal — texto, imagens e vídeos</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    if not st.session_state.shop_data or not st.session_state.shop_produtos:
-        st.info("👈 Carregue uma loja primeiro na partição **Auditoria Pro** (menu lateral).")
-        st.markdown("""
-        <div style="text-align:center; padding:3rem; opacity:0.4;">
-            <div style="font-size:64px;">🏪</div>
-            <div style="font-size:14px; margin-top:0.5rem;">Nenhuma loja conectada</div>
-        </div>
-        """, unsafe_allow_html=True)
+    # ── Banner de contexto ativo da Auditoria ─────────────────
+    has_shop   = bool(st.session_state.shop_data)
+    has_prod   = bool(st.session_state.selected_product)
+    has_comp   = (st.session_state.df_competitors is not None
+                  and not st.session_state.df_competitors.empty)
+    has_rev    = bool(st.session_state.optimization_reviews)
+
+    if has_shop or has_prod or has_comp or has_rev:
+        shop_name = (st.session_state.shop_data or {}).get("name", "Loja")
+        badges = []
+        if has_shop:    badges.append(f"🏪 {shop_name}")
+        if has_comp:    badges.append(f"📡 {len(st.session_state.df_competitors)} concorrentes")
+        if has_rev:     badges.append(f"💬 {len(st.session_state.optimization_reviews)} avaliações")
+        if has_prod:    badges.append(f"⚡ {st.session_state.selected_product['name'][:30]}")
+        st.markdown(
+            f'<div class="loja-status-bar">🔗 Contexto da Auditoria: {" · ".join(badges)}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info(
+            "💡 Carregue sua loja na **Auditoria** para enriquecer o chatbot com dados de produtos, "
+            "concorrentes e avaliações. Sem isso, ele ainda funciona como atendente geral.",
+            icon=None,
+        )
+
+    # ── Monta o contexto completo ─────────────────────────────
+    shop_name_ctx  = (st.session_state.shop_data or {}).get("name", "Loja")
+    full_context   = build_full_chat_context(
+        shop_data            = st.session_state.shop_data,
+        produtos             = st.session_state.shop_produtos,
+        selected_product     = st.session_state.selected_product,
+        df_competitors       = st.session_state.df_competitors,
+        optimization_reviews = st.session_state.optimization_reviews,
+        shop_name            = shop_name_ctx,
+    )
+
+    # ── Tela de boas-vindas (chatbot não ativo) ───────────────
+    if not st.session_state.chatbot_active:
+        with st.container(border=True):
+            st.markdown(f"### 🤖 Chatbot — {shop_name_ctx}")
+            n_prod = len(st.session_state.shop_produtos or [])
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if n_prod:
+                    st.success(f"✅ {n_prod} produtos no catálogo")
+                else:
+                    st.warning("⚠️ Sem catálogo carregado")
+            with c2:
+                st.info("📎 Imagens e vídeos via botão +")
+            with c3:
+                st.info("💬 Texto · Análise · Processamento")
+
+            st.markdown(
+                "O chatbot responde perguntas de clientes, analisa imagens de produtos, "
+                "remove fundos, gera cenários e otimiza listings — tudo pelo chat."
+            )
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("🚀 Ativar Chatbot", type="primary", use_container_width=True, key="btn_ativar_chat"):
+                    st.session_state.chatbot_active           = True
+                    st.session_state.chat_history             = []
+                    st.session_state.chat_attachments         = []
+                    st.session_state.chat_attachment_types    = []
+                    st.session_state.chat_attachment_previews = []
+                    st.session_state.chat_preview_images      = []
+                    st.session_state.chat_preview_captions    = []
+                    st.rerun()
+            with col_b:
+                if st.button("📋 Gerar FAQ para Seller Centre", use_container_width=True, key="btn_gerar_faq_welcome"):
+                    _gerar_faq(full_context, shop_name_ctx)
+
+        _render_faq_output(shop_name_ctx)
         return
 
-    shop_name = st.session_state.shop_data.get("name", "Loja")
-    produtos = st.session_state.shop_produtos
-    catalog_context = build_catalog_context(produtos, shop_name)
+    # ══════════════════════════════════════════════════════════
+    # CHAT ATIVO — Layout: painel esquerdo (chat) + direito (preview)
+    # ══════════════════════════════════════════════════════════
+    col_chat, col_preview = st.columns([2, 1])
 
-    if not st.session_state.chatbot_active:
-        # ── Tela de boas-vindas do chatbot ────────────────────
-        col_l, col_r = st.columns([3, 2])
+    # ── PAINEL DIREITO: Preview de imagens processadas ────────
+    with col_preview:
+        with st.container(border=True):
+            col_title, col_reset = st.columns([3, 1])
+            with col_title:
+                st.markdown(
+                    '<p class="section-label" style="margin:0">🖼️ Preview</p>',
+                    unsafe_allow_html=True,
+                )
+            with col_reset:
+                if st.button("✕", key="btn_clear_preview", help="Limpar preview"):
+                    st.session_state.chat_preview_images  = []
+                    st.session_state.chat_preview_captions = []
+                    st.rerun()
 
-        with col_l:
-            st.markdown(f"### 🤖 Chatbot da loja **{shop_name}**")
-            st.markdown(f"O assistente vai conhecer todos os **{len(produtos)} produtos** e responder clientes em tempo real com linguagem natural.")
+            preview_imgs = st.session_state.get("chat_preview_images", [])
+            if preview_imgs:
+                for i, pimg in enumerate(reversed(preview_imgs[-4:])):  # até 4 últimas
+                    cap = ""
+                    caps = st.session_state.get("chat_preview_captions", [])
+                    if caps:
+                        idx_rev = len(preview_imgs) - 1 - i
+                        cap = caps[idx_rev] if idx_rev < len(caps) else ""
 
-            c1, c2 = st.columns(2)
-            with c1:
-                st.success(f"✅ {len(produtos)} produtos carregados")
-            with c2:
-                st.info("💬 Multi-turn · Recomendações · FAQs")
+                    st.image(pimg, caption=cap, use_container_width=True)
 
-            st.markdown("---")
+                    # Botão de download para cada imagem
+                    buf_dl = io.BytesIO()
+                    if hasattr(pimg, "mode"):
+                        save_img = pimg.convert("RGB") if pimg.mode == "RGBA" else pimg
+                        save_img.save(buf_dl, format="JPEG", quality=95)
+                    salvar_ou_baixar(
+                        "Baixar",
+                        data=buf_dl.getvalue(),
+                        file_name=f"resultado_{i+1}.jpg",
+                        mime="image/jpeg",
+                        key=f"dl_preview_{i}_{len(preview_imgs)}",
+                    )
 
-            if st.button("🚀 Ativar Chatbot", type="primary", width='stretch'):
-                st.session_state.chatbot_active = True
-                st.session_state.chat_history = []
+                    if i < len(preview_imgs) - 1:
+                        st.markdown("---")
+            else:
+                st.markdown(
+                    "<div style='text-align:center;padding:2rem 0;opacity:0.35;font-size:13px'>"
+                    "📷<br>Imagens processadas<br>aparecerão aqui</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # ── Contexto ativo compacto ────────────────────
+            if has_prod:
+                st.markdown("---")
+                prod = st.session_state.selected_product
+                img_url = (prod["image"] if prod["image"].startswith("http")
+                           else f"https://down-br.img.susercontent.com/file/{prod['image']}")
+                st.image(img_url, caption=f"⚡ {prod['name'][:28]}", use_container_width=True)
+
+    # ── PAINEL ESQUERDO: Chat ─────────────────────────────────
+    with col_chat:
+        # Cabeçalho do chat
+        ch1, ch2, ch3 = st.columns([4, 1, 1])
+        with ch1:
+            st.markdown(f"### 💬 {shop_name_ctx}")
+        with ch2:
+            if st.button("📋 FAQ", key="btn_faq_chat", use_container_width=True, help="Gerar FAQ para Seller Centre"):
+                _gerar_faq(full_context, shop_name_ctx)
+                st.rerun()
+        with ch3:
+            if st.button("🔄", key="btn_reset_chat", use_container_width=True, help="Reiniciar conversa"):
+                st.session_state.chat_history             = []
+                st.session_state.chat_attachments         = []
+                st.session_state.chat_attachment_types    = []
+                st.session_state.chat_attachment_previews = []
+                st.session_state.chatbot_active           = False
                 st.rerun()
 
-        with col_r:
-            # ── Gerador de FAQ ─────────────────────────────────
-            st.markdown('<p class="section-label">Gerar FAQ para Seller Centre</p>', unsafe_allow_html=True)
+        # Histórico de mensagens
+        chat_container = st.container(height=420)
+        with chat_container:
+            if not st.session_state.chat_history:
+                st.markdown(
+                    "<div style='text-align:center;padding:3rem 0;opacity:0.35;font-size:13px'>"
+                    "💬<br>Comece uma conversa abaixo</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                for turn in st.session_state.chat_history:
+                    with st.chat_message("user"):
+                        # Mostra prévia de anexos se houver
+                        if turn.get("attachment_previews"):
+                            att_cols = st.columns(min(len(turn["attachment_previews"]), 4))
+                            for ai, aprev in enumerate(turn["attachment_previews"]):
+                                with att_cols[ai]:
+                                    st.image(aprev, use_container_width=True)
+                        st.write(turn["user"])
+                    with st.chat_message("assistant"):
+                        st.write(turn["assistant"])
+                        # Imagens inline na bolha de resposta
+                        if turn.get("result_images"):
+                            ri_cols = st.columns(min(len(turn["result_images"]), 2))
+                            for ri, rimg in enumerate(turn["result_images"]):
+                                with ri_cols[ri]:
+                                    rcap = ""
+                                    if turn.get("result_captions") and ri < len(turn["result_captions"]):
+                                        rcap = turn["result_captions"][ri]
+                                    st.image(rimg, caption=rcap, use_container_width=True)
 
-            if st.button("📋 Gerar FAQ Automático", type="secondary", width='stretch', key="btn_gerar_faq"):
-                with st.spinner("Gerando FAQ com IA..."):
-                    faq_prompt = f"""Você é especialista em e-commerce Shopee Brasil.
+        # ── Sugestões iniciais ────────────────────────────────
+        if not st.session_state.chat_history:
+            st.markdown(
+                '<p class="section-label" style="margin-top:0.5rem">Sugestões</p>',
+                unsafe_allow_html=True,
+            )
+            sugestoes_base = [
+                "Quais produtos vocês têm disponíveis?",
+                "Qual o produto mais barato?",
+            ]
+            sugestoes_media = [
+                "📎 Analise a imagem que vou enviar",
+                "📎 Remova o fundo desta foto",
+            ]
+            sugestoes_audit = []
+            if has_prod:
+                prod_name = st.session_state.selected_product["name"][:25]
+                sugestoes_audit = [
+                    f"Otimize o listing da {prod_name}",
+                    f"Compare a {prod_name} com os concorrentes",
+                ]
+
+            all_sugs = (sugestoes_audit or sugestoes_base) + sugestoes_media
+            sug_cols = st.columns(2)
+            for idx_s, sug in enumerate(all_sugs[:4]):
+                with sug_cols[idx_s % 2]:
+                    if st.button(sug, key=f"sug_{idx_s}", use_container_width=True):
+                        _send_message(sug, [], [], [], full_context, "Moda") # Usar fallback de segmento
+
+        # ── Área de anexo (toggle "+") ────────────────────────
+        _render_attachment_area()
+
+        # ── Campo de texto + enviar ───────────────────────────
+        user_input = st.chat_input("Mensagem, pergunta ou comando de imagem...")
+        if user_input:
+            attachments  = st.session_state.get("chat_attachments",         [])
+            att_types    = st.session_state.get("chat_attachment_types",    [])
+            att_previews = st.session_state.get("chat_attachment_previews", [])
+            _send_message(user_input, attachments, att_types, att_previews, full_context, "Moda")
+
+    # ── FAQ em expander abaixo do layout ─────────────────────
+    _render_faq_output(shop_name_ctx)
+
+
+# ══════════════════════════════════════════════════════════════
+# FUNÇÕES AUXILIARES DO CHATBOT
+# ══════════════════════════════════════════════════════════════
+
+def _render_attachment_area():
+    """Renderiza o painel de anexo com botão + e uploader toggleável."""
+    is_open = st.session_state.get("show_attach_panel", False)
+    label   = "📎 Fechar anexos" if is_open else "📎 Anexar imagem / vídeo"
+
+    if st.button(label, key="btn_toggle_attach", use_container_width=True):
+        st.session_state.show_attach_panel = not is_open
+        if not st.session_state.show_attach_panel:
+            # Fecha o painel E limpa os anexos pendentes
+            st.session_state.chat_attachments         = []
+            st.session_state.chat_attachment_types    = []
+            st.session_state.chat_attachment_previews = []
+        st.rerun()
+
+    if st.session_state.get("show_attach_panel"):
+        with st.container(border=True):
+            st.markdown(
+                '<p class="section-label" style="margin:0 0 0.5rem 0">Arquivos anexados</p>',
+                unsafe_allow_html=True,
+            )
+            uploaded = st.file_uploader(
+                "Selecione imagens ou vídeo",
+                type=["jpg", "jpeg", "png", "mp4"],
+                accept_multiple_files=True,
+                key="chat_file_uploader",
+                label_visibility="collapsed",
+            )
+            if uploaded:
+                attachments  = []
+                att_types    = []
+                att_previews = []
+                for f in uploaded:
+                    ftype = "video" if f.name.lower().endswith(".mp4") else "image"
+                    att_types.append(ftype)
+                    raw = f.read()
+                    attachments.append(raw)
+                    if ftype == "image":
+                        pimg = Image.open(io.BytesIO(raw)).convert("RGB")
+                        att_previews.append(pimg)
+                    else:
+                        att_previews.append(None)
+
+                st.session_state.chat_attachments         = attachments
+                st.session_state.chat_attachment_types    = att_types
+                st.session_state.chat_attachment_previews = [p for p in att_previews if p is not None]
+
+                # Preview dos arquivos selecionados
+                if att_previews:
+                    prev_cols = st.columns(min(len([p for p in att_previews if p]), 4))
+                    pi = 0
+                    for fi, fp in enumerate(att_previews):
+                        if fp is not None:
+                            with prev_cols[pi % len(prev_cols)]:
+                                st.image(fp, use_container_width=True,
+                                         caption=f"{'🎬' if att_types[fi]=='video' else '🖼️'} {uploaded[fi].name[:20]}")
+                            pi += 1
+
+                st.success(f"✅ {len(uploaded)} arquivo(s) prontos para envio — escreva sua mensagem acima.")
+
+
+def _send_message(
+    user_message: str,
+    attachments:  list,
+    att_types:    list,
+    att_previews: list,
+    full_context: str,
+    segmento:     str,
+):
+    """Processa e registra um turno de chat."""
+    # Converte bytes → PIL para processamento
+    pil_images = []
+    for i, att in enumerate(attachments):
+        if att_types[i] == "image" and isinstance(att, bytes):
+            pil_images.append(Image.open(io.BytesIO(att)).convert("RGBA"))
+        else:
+            pil_images.append(att)  # bytes de vídeo ficam como bytes
+
+    with st.spinner("Processando..."):
+        result = process_chat_turn(
+            user_message   = user_message,
+            attachments    = pil_images,
+            attachment_types = att_types,
+            chat_history   = st.session_state.chat_history,
+            full_context   = full_context,
+            segmento       = segmento,
+        )
+
+    # Registra no histórico
+    turn_entry = {
+        "user":               user_message,
+        "assistant":          result["text"],
+        "attachment_previews": list(att_previews),
+        "result_images":      list(result["images"]),
+        "result_captions":    list(result["captions"]),
+    }
+    st.session_state.chat_history.append(turn_entry)
+
+    # Empurra imagens para o painel de preview
+    if result["images"]:
+        st.session_state.chat_preview_images  = (
+            st.session_state.get("chat_preview_images", []) + result["images"]
+        )[-8:]  # Mantém apenas as 8 últimas para não pesar a sessão
+        st.session_state.chat_preview_captions = (
+            st.session_state.get("chat_preview_captions", []) + result["captions"]
+        )[-8:]
+
+    # Limpa anexos após envio
+    st.session_state.chat_attachments         = []
+    st.session_state.chat_attachment_types    = []
+    st.session_state.chat_attachment_previews = []
+    st.session_state.show_attach_panel        = False
+
+    st.rerun()
+
+
+def _gerar_faq(full_context: str, shop_name: str):
+    """Gera o FAQ automático via Gemini e salva no session_state."""
+    produtos = st.session_state.shop_produtos or []
+    faq_prompt = f"""Você é especialista em e-commerce Shopee Brasil.
 
 Com base neste catálogo da loja '{shop_name}':
-{chr(10).join(f"- {p['name']} | R$ {p['price']:.2f}" for p in produtos)}
+{chr(10).join(f"- {p['name']} | R$ {p['price']:.2f}" for p in produtos[:30]) or "(catálogo não carregado)"}
 
 Gere EXATAMENTE 9 perguntas divididas em 3 categorias, com 3 perguntas cada.
 Categorias: "📦 Produtos e Modelos", "🚚 Entrega e Frete", "🔄 Trocas e Pagamento"
-Regras OBRIGATÓRIAS:
+REGRAS OBRIGATÓRIAS:
 - Cada pergunta: máximo 80 caracteres
 - Cada resposta: máximo 500 caracteres
-- Respostas curtas, simpáticas, em português brasileiro
-- As perguntas devem ser GENÉRICAS, sem citar nomes específicos de produtos
+- Respostas simpáticas, em português brasileiro
+- Perguntas GENÉRICAS, sem citar nomes específicos de produtos
 
 Formato EXATO:
 
 CATEGORIA 1: 📦 Produtos e Modelos
-PERGUNTA 1: [pergunta]
-RESPOSTA 1: [resposta]
-PERGUNTA 2: [pergunta]
-RESPOSTA 2: [resposta]
-PERGUNTA 3: [pergunta]
-RESPOSTA 3: [resposta]
+PERGUNTA 1: [texto]
+RESPOSTA 1: [texto]
+PERGUNTA 2: [texto]
+RESPOSTA 2: [texto]
+PERGUNTA 3: [texto]
+RESPOSTA 3: [texto]
 
 CATEGORIA 2: 🚚 Entrega e Frete
-PERGUNTA 4: [pergunta]
-RESPOSTA 4: [resposta]
-PERGUNTA 5: [pergunta]
-RESPOSTA 5: [resposta]
-PERGUNTA 6: [pergunta]
-RESPOSTA 6: [resposta]
+PERGUNTA 4: [texto]
+RESPOSTA 4: [texto]
+PERGUNTA 5: [texto]
+RESPOSTA 5: [texto]
+PERGUNTA 6: [texto]
+RESPOSTA 6: [texto]
 
 CATEGORIA 3: 🔄 Trocas e Pagamento
-PERGUNTA 7: [pergunta]
-RESPOSTA 7: [resposta]
-PERGUNTA 8: [pergunta]
-RESPOSTA 8: [resposta]
-PERGUNTA 9: [pergunta]
-RESPOSTA 9: [resposta]"""
+PERGUNTA 7: [texto]
+RESPOSTA 7: [texto]
+PERGUNTA 8: [texto]
+RESPOSTA 8: [texto]
+PERGUNTA 9: [texto]
+RESPOSTA 9: [texto]"""
 
-                    from backend_core import MODELOS_TEXTO, client
-                    faq_result = ""
-                    for m in MODELOS_TEXTO:
-                        try:
-                            from backend_core import client as bc_client
-                            config = {"thinking_config": {"thinking_budget": 0}} if "3.1" in m or "2.5" in m else {}
-                            response = bc_client().models.generate_content(
-                                model=m,
-                                contents=[faq_prompt],
-                                config=config if config else None
-                            )
-                            faq_result = response.text.strip()
-                            break
-                        except Exception:
-                            import time; time.sleep(2)
-                            continue
-
-                    if faq_result:
-                        st.session_state["faq_ia_geral"] = faq_result
-                    else:
-                        st.error("❌ Não foi possível gerar o FAQ. Tente novamente.")
-
-            if st.session_state.get("faq_ia_geral"):
-                faq_result = st.session_state["faq_ia_geral"]
-                avisos = []
-                for linha in faq_result.split("\n"):
-                    if linha.startswith("PERGUNTA") and ":" in linha:
-                        texto = linha.split(":", 1)[1].strip()
-                        if len(texto) > 80:
-                            avisos.append(f"⚠️ Pergunta longa ({len(texto)} chars): '{texto[:50]}...'")
-                    elif linha.startswith("RESPOSTA") and ":" in linha:
-                        texto = linha.split(":", 1)[1].strip()
-                        if len(texto) > 500:
-                            avisos.append(f"⚠️ Resposta longa ({len(texto)} chars): '{texto[:50]}...'")
-
-                st.markdown("---")
-                st.markdown("### 📋 FAQ Gerado")
-
-                if avisos:
-                    with st.expander("⚠️ Avisos de limite"):
-                        for a in avisos:
-                            st.warning(a)
-
-                st.info("📌 **Como usar:** Seller Centre → Atendimento → Assistente de IA → Adicionar Categoria")
-                st.success("💡 Use 'Otimização Completa' para melhorar as descrições — o Assistente nativo da Shopee aprende automaticamente.")
-
-                categorias = faq_result.split("\n\n")
-                for bloco in categorias:
-                    if bloco.strip():
-                        st.code(bloco.strip(), language=None)
-
-                faq_clean = faq_result.replace("**", "")
-                salvar_ou_baixar(
-                    "Baixar FAQ completo (.txt)",
-                    data=faq_clean,
-                    file_name=f"faq_{shop_name}.txt",
-                    mime="text/plain",
-                    key="dl_faq"
+    with st.spinner("Gerando FAQ com IA..."):
+        faq_result = ""
+        for m in MODELOS_TEXTO:
+            try:
+                cfg = {"thinking_config": {"thinking_budget": 0}} if ("3.1" in m or "2.5" in m) else {}
+                resp = get_client().models.generate_content(
+                    model=m, contents=[faq_prompt], config=cfg if cfg else None
                 )
+                faq_result = resp.text.strip()
+                break
+            except Exception:
+                import time; time.sleep(2)
 
+    if faq_result:
+        st.session_state.faq_ia_geral = faq_result
     else:
-        # ── Interface de Chat ──────────────────────────────────
-        col_titulo, col_reset = st.columns([4, 1])
-        with col_titulo:
-            st.markdown(f"### 💬 {shop_name} — Assistente Virtual")
-        with col_reset:
-            if st.button("🔄 Reiniciar", key="btn_reset_chat"):
-                st.session_state.chat_history = []
-                st.session_state.chatbot_active = False
-                st.rerun()
+        st.error("❌ Não foi possível gerar o FAQ. Tente novamente.")
 
-        # Construtor de FAQ personalizado
-        with st.expander("📋 Construtor de FAQ Personalizado"):
-            st.markdown("Use o chat para montar seu FAQ. Quando terminar, exporte abaixo.")
 
-            if st.session_state.faq_personalizado:
-                st.markdown("**FAQ atual:**")
-                for i, item in enumerate(st.session_state.faq_personalizado):
-                    col_faq, col_del = st.columns([10, 1])
-                    with col_faq:
-                        st.markdown(f"**P{i+1}:** {item['pergunta']}")
-                        st.markdown(f"**R{i+1}:** {item['resposta']}")
-                        st.divider()
-                    with col_del:
-                        if st.button("🗑️", key=f"del_faq_{i}"):
-                            st.session_state.faq_personalizado.pop(i)
-                            st.rerun()
+def _render_faq_output(shop_name: str):
+    """Exibe o FAQ gerado se houver."""
+    if not st.session_state.get("faq_ia_geral"):
+        return
 
-            st.markdown("**Adicionar pergunta:**")
-            col_p, col_r = st.columns(2)
-            with col_p:
-                nova_pergunta = st.text_input(
-                    "Pergunta",
-                    placeholder="Ex: Vocês têm mochila azul?",
-                    key="nova_pergunta", max_chars=80
-                )
-            with col_r:
-                nova_resposta = st.text_area(
-                    "Resposta",
-                    placeholder="Ex: Sim! Temos modelos em azul disponíveis.",
-                    key="nova_resposta", max_chars=500, height=80
-                )
+    faq_result = st.session_state.faq_ia_geral
+    st.markdown("---")
+    with st.expander("📋 FAQ para o Seller Centre — clique para expandir", expanded=False):
+        st.info("""📌 **Como usar no Seller Centre:**
+1. Acesse seller.shopee.com.br → Atendimento ao Cliente → Assistente de IA
+2. Clique em "Adicionar Categoria" e crie as 3 categorias
+3. Dentro de cada categoria, adicione as 3 perguntas e salve""")
 
-            col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                if st.button("➕ Adicionar par", key="btn_add_faq") and nova_pergunta and nova_resposta:
-                    st.session_state.faq_personalizado.append({"pergunta": nova_pergunta, "resposta": nova_resposta})
-                    st.rerun()
-            with col_btn2:
-                if st.button("🤖 Sugerir resposta com IA", key="btn_sugerir_ia") and nova_pergunta:
-                    with st.spinner("Gerando resposta..."):
-                        sugestao = chat_with_gemini(
-                            f"Gere uma resposta curta e simpática (máx 500 chars) para: '{nova_pergunta}'",
-                            [], catalog_context
-                        )
-                    st.session_state.faq_personalizado.append({"pergunta": nova_pergunta, "resposta": sugestao[:500]})
-                    st.rerun()
+        avisos = []
+        for linha in faq_result.split("\\n"):
+            if linha.startswith("PERGUNTA") and ":" in linha:
+                txt = linha.split(":", 1)[1].strip()
+                if len(txt) > 80:
+                    avisos.append(f"⚠️ Pergunta longa ({len(txt)} chars): '{txt[:50]}...'")
+            elif linha.startswith("RESPOSTA") and ":" in linha:
+                txt = linha.split(":", 1)[1].strip()
+                if len(txt) > 500:
+                    avisos.append(f"⚠️ Resposta longa ({len(txt)} chars): '{txt[:50]}...'")
+        if avisos:
+            for a in avisos:
+                st.warning(a)
 
-            if st.session_state.faq_personalizado:
-                n = len(st.session_state.faq_personalizado)
-                faq_txt = "\n\n".join([
-                    f"PERGUNTA {i+1}: {item['pergunta']}\nRESPOSTA {i+1}: {item['resposta']}"
-                    for i, item in enumerate(st.session_state.faq_personalizado)
-                ])
-                faq_txt = faq_txt.replace("**", "")
-                salvar_ou_baixar(
-                    f"Exportar FAQ ({n} pares)",
-                    data=faq_txt,
-                    file_name=f"faq_personalizado_{shop_name}.txt",
-                    mime="text/plain",
-                    key="dl_faq_perso"
-                )
-                if st.button("🗑️ Limpar FAQ", key="btn_limpar_faq"):
-                    st.session_state.faq_personalizado = []
-                    st.rerun()
+        for bloco in faq_result.split("\\n\\n"):
+            if bloco.strip():
+                st.code(bloco.strip(), language=None)
 
-        # Exibir histórico de chat
-        for turn in st.session_state.chat_history:
-            with st.chat_message("user"):
-                st.write(turn["user"])
-            with st.chat_message("assistant"):
-                st.write(turn["assistant"])
-
-        # Sugestões iniciais
-        if not st.session_state.chat_history:
-            st.markdown('<p class="section-label">Sugestões para começar</p>', unsafe_allow_html=True)
-            sugestoes = [
-                "Quais mochilas vocês têm disponíveis?",
-                "Tem mochila rosa ou lilás?",
-                "Qual mochila é ideal para escola?",
-                "Qual o produto mais barato?",
-            ]
-            cols_s = st.columns(2)
-            for idx, sug in enumerate(sugestoes):
-                with cols_s[idx % 2]:
-                    if st.button(sug, key=f"sug_{idx}"):
-                        with st.spinner("Respondendo..."):
-                            resposta = chat_with_gemini(sug, st.session_state.chat_history, catalog_context)
-                        st.session_state.chat_history.append({"user": sug, "assistant": resposta})
-                        st.rerun()
-
-        # Input do usuário
-        user_input = st.chat_input("Digite sua pergunta sobre os produtos...")
-        if user_input:
-            with st.spinner("Respondendo..."):
-                resposta = chat_with_gemini(user_input, st.session_state.chat_history, catalog_context)
-            st.session_state.chat_history.append({"user": user_input, "assistant": resposta})
-            st.rerun()
+        faq_clean = faq_result.replace("**", "")
+        salvar_ou_baixar(
+            "Baixar FAQ (.txt)",
+            data=faq_clean,
+            file_name=f"faq_{shop_name}.txt",
+            mime="text/plain",
+            key="dl_faq_final",
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════

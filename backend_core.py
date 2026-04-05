@@ -916,3 +916,333 @@ def upscale_image(img_pil: Image.Image, scale: int = 2) -> Image.Image:
     novo_w = img_pil.width * scale
     novo_h = img_pil.height * scale
     return img_pil.resize((novo_w, novo_h), Image.LANCZOS)
+
+# ══════════════════════════════════════════════════════════════
+# CONTEXTO ENRIQUECIDO (Auditoria → Chatbot)
+# ══════════════════════════════════════════════════════════════
+
+def build_full_chat_context(
+    shop_data: dict | None,
+    produtos: list | None,
+    selected_product: dict | None,
+    df_competitors,          # pd.DataFrame | None
+    optimization_reviews: list | None,
+    shop_name: str = "Loja",
+) -> str:
+    """
+    Monta o contexto completo para o chatbot, aproveitando tudo que
+    foi coletado na Auditoria. Nenhum campo é obrigatório.
+    """
+    linhas = [
+        f"Você é o assistente inteligente da loja '{shop_name}' na Shopee Brasil.",
+        "Você combina três papéis: atendimento ao cliente, especialista em e-commerce e estúdio de imagens.",
+        "Responda SEMPRE em português brasileiro, de forma simpática e objetiva.",
+        "Use emojis com moderação. Nunca invente informações que não estão nos dados abaixo.",
+        "",
+    ]
+
+    # ── Catálogo de produtos ────────────────────────────────
+    if produtos:
+        linhas.append(f"=== CATÁLOGO DA LOJA ({len(produtos)} produtos) ===")
+        for i, p in enumerate(produtos, 1):
+            linhas.append(f"{i}. {p['name']} — R$ {p['price']:.2f} (ID: {p['itemid']})")
+        linhas.append("")
+
+    # ── Produto atualmente selecionado para análise ─────────
+    if selected_product:
+        linhas.append("=== PRODUTO EM FOCO (selecionado na Auditoria) ===")
+        linhas.append(f"Nome:    {selected_product.get('name', '')}")
+        linhas.append(f"Preço:   R$ {selected_product.get('price', 0):.2f}")
+        linhas.append(f"Item ID: {selected_product.get('itemid', '')}")
+        linhas.append(f"Shop ID: {selected_product.get('shopid', '')}")
+        img = selected_product.get("image", "")
+        if img:
+            img_url = img if img.startswith("http") else f"https://down-br.img.susercontent.com/file/{img}"
+            linhas.append(f"Imagem:  {img_url}")
+        linhas.append("")
+
+    # ── Dados de concorrentes ───────────────────────────────
+    if df_competitors is not None and not df_competitors.empty:
+        linhas.append("=== TOP CONCORRENTES COLETADOS ===")
+        for _, r in df_competitors.iterrows():
+            linhas.append(
+                f"• {r['nome']} | R$ {r['preco']:.2f} | "
+                f"{r.get('avaliações', 0)} avaliações | ⭐{r.get('estrelas', 0)}"
+            )
+        pm = df_competitors["preco"].mean()
+        linhas.append(f"Preço médio de mercado: R$ {pm:.2f}")
+        linhas.append("")
+
+    # ── Avaliações do mercado coletadas ────────────────────
+    if optimization_reviews:
+        linhas.append("=== AVALIAÇÕES/RECLAMAÇÕES DO MERCADO ===")
+        for rv in optimization_reviews[:6]:
+            linhas.append(f"• {rv}")
+        linhas.append("")
+
+    linhas.append("=== FIM DO CONTEXTO ===")
+    return "\n".join(linhas)
+
+
+# ══════════════════════════════════════════════════════════════
+# DETECÇÃO DE INTENÇÃO
+# ══════════════════════════════════════════════════════════════
+
+_INTENT_PROMPT = """Você é um classificador de intenção para um assistente de e-commerce.
+Analise a mensagem do usuário e classifique em UMA das categorias:
+
+remove_bg       → quer remover o fundo da imagem
+generate_scene  → quer gerar cenário / fundo para o produto
+upscale         → quer melhorar qualidade / aumentar resolução
+analyze_image   → quer feedback, análise, avaliação ou dicas sobre a imagem
+optimize_listing → quer otimizar título, descrição, tags ou preço do produto
+analyze_video   → quer analisar vídeo do produto
+general         → pergunta geral sobre produtos, loja, entrega, etc.
+
+Responda APENAS com a palavra-chave da categoria, sem pontuação.
+
+Mensagem: {msg}
+Tem anexo de imagem/vídeo: {has_media}
+"""
+
+def detect_chat_intent(user_message: str, has_media: bool) -> str:
+    """
+    Detecta a intenção da mensagem usando heurísticas rápidas
+    (sem chamar a API para não gastar cota em classificação simples).
+    """
+    msg = user_message.lower()
+
+    # Heurísticas diretas — evita chamada de API
+    if any(w in msg for w in ["remov", "sem fundo", "fundo branco", "transparente", "recortar", "recort"]):
+        return "remove_bg"
+    if any(w in msg for w in ["cenário", "cena", "fundo bonito", "fundo ia", "gerar fundo", "estúdio", "packshot"]):
+        return "generate_scene"
+    if any(w in msg for w in ["qualidade", "upscale", "aumentar", "resolução", "nítid", "melhorar imagem"]):
+        return "upscale"
+    if any(w in msg for w in ["otimiz", "título", "descrição", "tag", "preço", "listing", "seo", "keyword"]):
+        return "optimize_listing"
+    if any(w in msg for w in ["vídeo", "video", "retenção", "hook", "gancho"]):
+        return "analyze_video"
+    if has_media and any(w in msg for w in [
+        "boa", "ruim", "melhorar", "feedback", "avaliar", "analisar",
+        "o que acha", "está bom", "tá bom", "tá boa", "está boa",
+        "funciona", "serve", "adequad"
+    ]):
+        return "analyze_image"
+    if has_media:
+        # Tem mídia mas não classificou → assume análise de imagem
+        return "analyze_image"
+
+    return "general"
+
+
+# ══════════════════════════════════════════════════════════════
+# ANÁLISE DE IMAGEM (Gemini Vision)
+# ══════════════════════════════════════════════════════════════
+
+def analyze_product_image_vision(
+    image: "Image.Image",
+    user_message: str,
+    product_context: str,
+    segmento: str,
+) -> str:
+    """
+    Usa Gemini Vision para analisar a imagem do produto em contexto
+    de e-commerce e responder à pergunta do usuário.
+    """
+    from PIL import Image as PILImage
+    import io as _io
+    import time as _time
+
+    system_prompt = f"""Você é um especialista em fotografia de produto para e-commerce Shopee Brasil.
+Segmento do produto: {segmento}
+
+{product_context}
+
+Analise a imagem enviada e responda à pergunta do usuário de forma objetiva e prática.
+Forneça feedback específico sobre: qualidade, iluminação, composição, fundo, apelo visual.
+Pontue de 1-10 e dê sugestões concretas de melhoria.
+"""
+    full_prompt = f"{system_prompt}\n\nPergunta do usuário: {user_message}"
+
+    for m in MODELOS_VISION:
+        try:
+            response = get_client().models.generate_content(
+                model=m,
+                contents=[full_prompt, image]
+            )
+            return response.text
+        except Exception:
+            _time.sleep(1)
+            continue
+
+    return "⏳ Não foi possível analisar a imagem agora. Verifique sua cota de API."
+
+
+# ══════════════════════════════════════════════════════════════
+# PROCESSAMENTO COMPLETO DE MÍDIA NO CHAT
+# ══════════════════════════════════════════════════════════════
+
+def process_chat_turn(
+    user_message: str,
+    attachments: list,          # lista de PIL.Image ou bytes
+    attachment_types: list,     # "image" | "video" por índice
+    chat_history: list,
+    full_context: str,
+    segmento: str,
+) -> dict:
+    """
+    Orquestra um turno do chat com possível mídia.
+    
+    Retorna:
+    {
+        "text":     str,                  # resposta em texto
+        "images":   list[PIL.Image],      # imagens processadas (pode ser vazia)
+        "intent":   str,                  # intenção detectada
+        "captions": list[str],            # legenda de cada imagem
+    }
+    """
+    import io as _io
+    import time as _time
+    from PIL import Image
+
+    has_media = len(attachments) > 0
+    intent    = detect_chat_intent(user_message, has_media)
+
+    result = {"text": "", "images": [], "intent": intent, "captions": []}
+
+    # ── Sem mídia: chat normal enriquecido ──────────────────
+    if not has_media or intent in ("optimize_listing", "general"):
+        contents  = [full_context + "\n\n---\nHistórico:\n"]
+        for turn in chat_history[-8:]:  # Últimos 8 turnos para não explodir contexto
+            contents.append(f"Usuário: {turn['user']}")
+            contents.append(f"Assistente: {turn['assistant']}")
+        contents.append(f"Usuário: {user_message}\nAssistente:")
+
+        prompt = "\n".join(contents)
+        text   = ""
+        for m in MODELOS_TEXTO:
+            try:
+                cfg = {"thinking_config": {"thinking_budget": 0}} if ("3.1" in m or "2.5" in m) else {}
+                resp = get_client().models.generate_content(
+                    model=m, contents=[prompt],
+                    config=cfg if cfg else None
+                )
+                text = resp.text.strip()
+                break
+            except Exception:
+                _time.sleep(2)
+        result["text"] = text or "⏳ Erro de API. Tente novamente."
+        return result
+
+    # ── Com mídia: processa cada anexo ──────────────────────
+    processed_images = []
+    captions         = []
+    text_parts       = []
+
+    for i, attachment in enumerate(attachments):
+        atype = attachment_types[i] if i < len(attachment_types) else "image"
+
+        if atype == "video":
+            result["text"] = (
+                "🎬 Recebi o vídeo! A análise completa de vídeo frame-a-frame está "
+                "chegando em breve. Por enquanto: certifique-se de mostrar o produto "
+                "em uso nos primeiros 3 segundos para maximizar a retenção."
+            )
+            result["intent"] = "analyze_video"
+            return result
+
+        # É imagem — converte para PIL se necessário
+        if isinstance(attachment, bytes):
+            img = Image.open(_io.BytesIO(attachment)).convert("RGBA")
+        else:
+            img = attachment.convert("RGBA") if attachment.mode != "RGBA" else attachment
+
+        # ── remove_bg ───────────────────────────────────────
+        if intent == "remove_bg":
+            try:
+                from rembg import remove as rembg_remove
+                buf = _io.BytesIO()
+                img.convert("RGB").save(buf, format="PNG")
+                no_bg = rembg_remove(buf.getvalue())
+                result_img = Image.open(_io.BytesIO(no_bg)).convert("RGBA")
+                processed_images.append(result_img)
+                captions.append("✂️ Fundo removido")
+                text_parts.append("✅ Fundo removido com sucesso! A imagem com transparência está pronta.")
+            except Exception as e:
+                text_parts.append(f"❌ Erro ao remover fundo: {e}")
+
+        # ── generate_scene ──────────────────────────────────
+        elif intent == "generate_scene":
+            # Primeiro remove o fundo se a imagem não for RGBA com transparência
+            img_fg = img
+            alpha = img_fg.split()[-1] if img_fg.mode == "RGBA" else None
+            if alpha is None or alpha.getextrema()[0] == 255:
+                # Imagem sem transparência — remove fundo primeiro
+                try:
+                    from rembg import remove as rembg_remove
+                    buf = _io.BytesIO()
+                    img.convert("RGB").save(buf, format="PNG")
+                    no_bg = rembg_remove(buf.getvalue())
+                    img_fg = Image.open(_io.BytesIO(no_bg)).convert("RGBA")
+                    text_parts.append("✂️ Fundo removido automaticamente...")
+                except Exception:
+                    pass
+
+            prompt_map = {
+                "Escolar / Juvenil": "minimalist white geometric podium soft lavender background",
+                "Viagem":            "stone platform outdoors golden hour soft focus",
+                "Profissional / Tech": "sleek white desk surface modern office lighting",
+                "Moda":              "white marble floor fashion studio aesthetic",
+            }
+            prompt_cenario = prompt_map.get(segmento, "product photography studio white background soft lighting")
+
+            bg = generate_ai_scenario(prompt_cenario, segmento)
+            if not bg:
+                bg = generate_gradient_background(segmento)
+                text_parts.append("🎨 Cenário gerado com gradiente local (APIs de imagem indisponíveis).")
+            else:
+                text_parts.append("🎨 Cenário IA gerado com sucesso!")
+
+            bg = bg.resize((1024, 1024))
+            fg = img_fg.copy()
+            fg.thumbnail((800, 800))
+            offset = (
+                (bg.width  - fg.width)  // 2,
+                int((bg.height - fg.height) * 0.6),
+            )
+            bg = apply_contact_shadow(bg, fg, offset)
+            bg.paste(fg, offset, fg)
+            processed_images.append(bg)
+            captions.append("🎨 Produto com cenário IA")
+
+        # ── upscale ─────────────────────────────────────────
+        elif intent == "upscale":
+            img_rgb = img.convert("RGB")
+            up  = upscale_image(img_rgb, scale=2)
+            up  = improve_image_quality(up)
+            processed_images.append(up)
+            captions.append(f"🔍 Upscale 2× — {up.width}×{up.height}px")
+            text_parts.append(
+                f"✅ Qualidade aumentada para **{up.width}×{up.height}px** (2×)! "
+                "Nitidez e contraste melhorados."
+            )
+
+        # ── analyze_image ───────────────────────────────────
+        elif intent == "analyze_image":
+            feedback = analyze_product_image_vision(
+                img.convert("RGB"),
+                user_message,
+                full_context,
+                segmento,
+            )
+            text_parts.append(feedback)
+            # Retorna a imagem original para referência
+            processed_images.append(img.convert("RGB"))
+            captions.append("🔍 Imagem em análise")
+
+    result["text"]     = "\n\n".join(text_parts) if text_parts else "✅ Processamento concluído!"
+    result["images"]   = processed_images
+    result["captions"] = captions
+    return result
+
