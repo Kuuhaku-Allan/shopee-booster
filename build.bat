@@ -38,6 +38,8 @@ pyinstaller ^
     --name "ShopeeBooster" ^
     --icon "assets\icon.ico" ^
     --add-data "app.py;." ^
+    --add-data "backend_core.py;." ^
+    --add-data "ui_theme.py;." ^
     --add-data "updater.py;." ^
     --add-data "version.txt;." ^
     --add-data "assets;assets" ^
