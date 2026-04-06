@@ -33,7 +33,7 @@ echo.
 
 pyinstaller ^
     --noconfirm ^
-    --onedir ^
+    --onefile ^
     --windowed ^
     --name "ShopeeBooster" ^
     --icon "assets\icon.ico" ^
