@@ -1258,7 +1258,7 @@ def _render_attachment_area():
                     for fi, fp in enumerate(att_previews):
                         if fp is not None:
                             with prev_cols[pi % len(prev_cols)]:
-                                st.image(fp, width='stretch',
+                                st.image(fp, width=180,
                                          caption=f"{'🎬' if att_types[fi]=='video' else '🖼️'} {uploaded[fi].name[:20]}")
                             pi += 1
 

@@ -53,6 +53,59 @@ _CSS_DARK = """
 .stWarning div {
     color: var(--warning) !important;
 }
+
+/* ===== FIX FORZADO PARA QUANDO O BASE-THEME É LIGHT (Como no .exe) ===== */
+/* Chat Input Container e sua caixa interna */
+.stChatInputContainer, 
+[data-testid="stChatInput"],
+[data-testid="stChatInput"] > div,
+[data-testid="stChatInput"] textarea {
+    background-color: var(--bg-surface) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Fix para stCode (Resultados de programação / FAQ gerado) */
+.stCode,
+.stCode pre,
+code[class*="language-"],
+pre[class*="language-"] {
+    background-color: var(--bg-card) !important;
+    color: var(--text-primary) !important;
+}
+
+.stCode code {
+    color: var(--text-primary) !important;
+}
+
+/* Expander - Cabeçalho do FAQ / Elementos drop-down */
+[data-testid="stExpander"] > details > summary {
+    background-color: var(--bg-card) !important;
+    color: var(--text-primary) !important;
+}
+
+[data-testid="stExpander"] > details > div {
+    background-color: var(--bg-primary) !important;
+}
+
+[data-baseweb="button"],
+.stButton > button {
+    background-color: var(--bg-card) !important;
+    border-color: var(--border-color) !important;
+    color: var(--text-primary) !important;
+}
+.stButton > button:hover {
+    background-color: var(--bg-card-hover) !important;
+    border-color: var(--accent) !important;
+    color: var(--text-primary) !important;
+}
+.stButton > button[kind="primary"] {
+    background-color: var(--accent) !important;
+    color: var(--text-on-accent) !important;
+    border-color: var(--accent) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background-color: var(--accent-hover) !important;
+}
 """
 
 _CSS_LIGHT = """
