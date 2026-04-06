@@ -1090,6 +1090,7 @@ def process_chat_turn(
     chat_history: list,
     full_context: str,
     segmento: str,
+    **kwargs,                   # selected_product, df_competitors, optimization_reviews
 ) -> dict:
     """
     Orquestra um turno do chat com possível mídia.
@@ -1124,8 +1125,28 @@ def process_chat_turn(
         result["text"] = msgs.get(intent, "📎 Por favor, anexe o arquivo pelo botão **📎 Anexar imagem / vídeo** e reenvie.")
         return result
 
+    # ── Otimização de listing direto pelo chat ─────────────
+    if not has_media and intent == "optimize_listing":
+        prod   = kwargs.get("selected_product")
+        df_comp = kwargs.get("df_competitors")
+        reviews = kwargs.get("optimization_reviews") or []
+        seg     = segmento
+
+        if prod:
+            from backend_core import generate_full_optimization
+            result["text"] = generate_full_optimization(prod, df_comp, reviews, seg)
+        else:
+            # Sem produto selecionado — responde pelo chat geral orientando o usuário
+            result["text"] = (
+                "⚡ Para gerar uma otimização completa, selecione um produto na aba "
+                "**Auditoria Pro** clicando em '⚡ Otimizar'. Assim terei acesso ao "
+                "preço, imagem e dados de concorrentes para gerar um listing preciso.\n\n"
+                "Se quiser, posso analisar o mercado em geral — é só descrever o produto!"
+            )
+        return result
+
     # ── Sem mídia: chat normal enriquecido ──────────────────
-    if not has_media or intent in ("optimize_listing", "general"):
+    if not has_media or intent in ("general",):
         contents  = [full_context + "\n\n---\nHistórico:\n"]
         for turn in chat_history[-8:]:  # Últimos 8 turnos para não explodir contexto
             contents.append(f"Usuário: {turn['user']}")
@@ -1259,3 +1280,80 @@ def process_chat_turn(
     result["captions"] = captions
     return result
 
+
+
+# ══════════════════════════════════════════════════════════════
+# FAQ INTELIGENTE — Sugestão automática a partir do histórico
+# ══════════════════════════════════════════════════════════════
+
+def suggest_faq_from_history(chat_history: list, shop_name: str, segmento: str = "") -> list:
+    """
+    Analisa o histórico do chat e extrai pares de pergunta/resposta
+    adequados para o FAQ do Seller Centre da Shopee.
+
+    Retorna uma lista de dicts: [{"pergunta": str, "resposta": str}, ...]
+    """
+    import time as _time
+
+    if not chat_history:
+        return []
+
+    # Formata o histórico para o modelo
+    historico_txt = ""
+    for i, turn in enumerate(chat_history[-20:], 1):  # Últimos 20 turnos
+        historico_txt += f"[{i}] Cliente: {turn['user']}\nAssistente: {turn['assistant']}\n\n"
+
+    prompt = f"""Você é um especialista em e-commerce Shopee Brasil.
+
+Analise este histórico de atendimento ao cliente da loja '{shop_name}' (segmento: {segmento or 'geral'}):
+
+{historico_txt}
+
+Extraia as perguntas mais relevantes que os clientes fizeram e transforme-as em pares de FAQ.
+REGRAS:
+- Selecione de 3 a 6 pares mais úteis
+- Cada pergunta: máximo 80 caracteres, linguagem natural
+- Cada resposta: máximo 500 caracteres, simpática, em português brasileiro
+- Perguntas GENÉRICAS, sem mencionar nomes específicos de produtos
+- Se o histórico for sobre processamento de imagens ou otimização de listings, IGNORE — foque em atendimento ao cliente
+- Se não houver turnos úteis para FAQ de cliente, retorne lista vazia: []
+
+Responda APENAS com JSON válido, sem markdown, sem explicações:
+[
+  {{"pergunta": "Texto da pergunta", "resposta": "Texto da resposta"}},
+  ...
+]
+"""
+
+    from backend_core import get_client, MODELOS_TEXTO
+    for m in MODELOS_TEXTO:
+        try:
+            cfg = {"thinking_config": {"thinking_budget": 0}} if ("3.1" in m or "2.5" in m) else {}
+            resp = get_client().models.generate_content(
+                model=m, contents=[prompt],
+                config=cfg if cfg else None
+            )
+            raw = resp.text.strip()
+            # Limpa possível markdown
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
+            import json as _json
+            pares = _json.loads(raw)
+            if isinstance(pares, list):
+                # Valida e trunca campos
+                result = []
+                for p in pares:
+                    if isinstance(p, dict) and p.get("pergunta") and p.get("resposta"):
+                        result.append({
+                            "pergunta": str(p["pergunta"])[:80],
+                            "resposta": str(p["resposta"])[:500],
+                        })
+                return result[:6]
+        except Exception:
+            _time.sleep(2)
+            continue
+
+    return []

@@ -98,6 +98,7 @@ from backend_core import (
     MODELOS_VISION, client,
     build_full_chat_context, detect_chat_intent,
     analyze_product_image_vision, process_chat_turn,
+    suggest_faq_from_history, MODELOS_TEXTO, get_client,
 )
 from PIL import Image
 from ui_theme import init_theme, apply_theme, render_theme_toggle
@@ -994,12 +995,16 @@ def _send_message(
 
     with st.spinner("Processando..."):
         result = process_chat_turn(
-            user_message   = user_message,
-            attachments    = pil_images,
+            user_message     = user_message,
+            attachments      = pil_images,
             attachment_types = att_types,
-            chat_history   = st.session_state.chat_history,
-            full_context   = full_context,
-            segmento       = segmento,
+            chat_history     = st.session_state.chat_history,
+            full_context     = full_context,
+            segmento         = segmento,
+            # Contexto estruturado da Auditoria — permite otimização direta pelo chat
+            selected_product     = st.session_state.get("selected_product"),
+            df_competitors       = st.session_state.get("df_competitors"),
+            optimization_reviews = st.session_state.get("optimization_reviews"),
         )
 
     # Registra no histórico
