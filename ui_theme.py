@@ -46,6 +46,13 @@ _CSS_DARK = """
     --radius-pill:     999px;
     --transition:      all 0.2s ease;
 }
+
+/* stWarning texto visível no dark */
+.stWarning p,
+.stWarning span,
+.stWarning div {
+    color: var(--warning) !important;
+}
 """
 
 _CSS_LIGHT = """
@@ -66,7 +73,7 @@ _CSS_LIGHT = """
     --text-muted:      #9ca3af;
     --text-on-accent:  #ffffff;
     --success:         #16a34a;
-    --warning:         #d97706;
+    --warning:         #92400e;
     --error:           #dc2626;
     --info:            #2563eb;
     --shadow-card:     0 2px 16px rgba(0,0,0,0.08);
@@ -77,6 +84,49 @@ _CSS_LIGHT = """
     --radius-lg:       20px;
     --radius-pill:     999px;
     --transition:      all 0.2s ease;
+}
+
+/* Fix de Contraste para Placeholders (Modo Claro) */
+[data-testid="stTextInput"] input::placeholder,
+input::placeholder,
+textarea::placeholder {
+    color: #5B5B5B !important; /* Cinza escuro para máxima legibilidade */
+    opacity: 1 !important;     /* Remove a transparência que "apaga" o texto */
+}
+
+/* Inversão persistente para containers que permanecem escuros */
+[data-testid="stSidebar"] *, 
+.product-card-body *,
+.st-key-auditoria-container * {
+    color: var(--text-primary) !important;
+}
+
+/* Se houver algum componente que VOCÊ quer que continue preto com texto branco */
+.dark-container-fix {
+    background-color: #0f0f10 !important;
+    color: #ffffff !important;
+}
+
+/* Alertas Acessíveis (WCAG Compliant) */
+.stWarning {
+    background: #FFF9E6 !important; /* Fundo Creme */
+    border-color: #ffeeba !important;
+}
+.stWarning p, .stWarning span, .stWarning div {
+    color: #856404 !important; /* Texto Marrom Escuro */
+    font-weight: 600 !important;
+}
+
+/* Fix para st.code no Tema Claro — fundo claro + texto escuro */
+.stCode,
+.stCode pre,
+code[class*="language-"],
+pre[class*="language-"] {
+    background-color: #f1f3f5 !important;
+    color: #1a1a2e !important;
+}
+.stCode code {
+    color: #1a1a2e !important;
 }
 """
 
