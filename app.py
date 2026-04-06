@@ -795,6 +795,67 @@ Retorne APENAS UM NÚMERO (0, 1, 2...), e NADA MAIS. Se a imagem não for defini
             # Aciona o dialog do streamlit (que por si só obriga a interface do usuário fluir para o modal)
             show_product_linking_dialog()
 
+
+@st.dialog("Vincular loja ao Chatbot", width="large")
+def _show_store_url_dialog():
+    """Popup para digitar URL da loja antes de ativar o chatbot."""
+    st.markdown(
+        "Para que o chatbot conheça seus produtos, concorrentes e avaliações, "
+        "carregue sua loja da Shopee. Você pode pular esta etapa — o chatbot "
+        "funcionará como atendente geral."
+    )
+    st.markdown("---")
+
+    url_input = st.text_input(
+        "URL da sua loja",
+        placeholder="https://shopee.com.br/nome_da_loja",
+        key="dialog_store_url_input",
+    )
+
+    col_carregar, col_pular = st.columns(2)
+    with col_carregar:
+        if st.button("🔍 Carregar loja e ativar", type="primary",
+                     width="stretch", key="btn_dialog_carregar"):
+            if url_input.strip():
+                from backend_core import resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept
+                resolved = resolve_shopee_url(url_input.strip())
+                if not resolved or resolved["type"] != "shop":
+                    st.error("URL inválida. Use: shopee.com.br/nome_da_loja")
+                else:
+                    username = resolved["username"]
+                    with st.spinner("Carregando loja... (30-60s)"):
+                        shop_raw = fetch_shop_info(username)
+                    d = shop_raw.get("data", shop_raw)
+                    if d:
+                        st.session_state.shop_data = d
+                        shopid = d.get("shopid") or d.get("shop_id")
+                        with st.spinner("Carregando catálogo..."):
+                            st.session_state.shop_produtos = (
+                                fetch_shop_products_intercept(username, shopid)
+                            )
+                        st.success(f"✅ Loja **{d.get('name', username)}** carregada!")
+                        _activate_chatbot()
+                    else:
+                        st.error("Não foi possível carregar a loja. Verifique a URL.")
+            else:
+                st.warning("Digite a URL da sua loja.")
+
+    with col_pular:
+        if st.button("💬 Usar sem loja", width="stretch", key="btn_dialog_pular"):
+            _activate_chatbot()
+
+
+def _activate_chatbot():
+    """Inicializa o estado do chatbot e faz rerun."""
+    st.session_state.chatbot_active           = True
+    st.session_state.chat_history             = []
+    st.session_state.chat_attachments         = []
+    st.session_state.chat_attachment_types    = []
+    st.session_state.chat_attachment_previews = []
+    st.session_state.chat_preview_images      = []
+    st.session_state.chat_preview_captions    = []
+    st.rerun()
+
 def render_chatbot():
     st.markdown("""
     <div class="page-header">
@@ -865,14 +926,11 @@ def render_chatbot():
             col_a, col_b = st.columns(2)
             with col_a:
                 if st.button("🚀 Ativar Chatbot", type="primary", width='stretch', key="btn_ativar_chat"):
-                    st.session_state.chatbot_active           = True
-                    st.session_state.chat_history             = []
-                    st.session_state.chat_attachments         = []
-                    st.session_state.chat_attachment_types    = []
-                    st.session_state.chat_attachment_previews = []
-                    st.session_state.chat_preview_images      = []
-                    st.session_state.chat_preview_captions    = []
-                    st.rerun()
+                    if not st.session_state.shop_data:
+                        # Sem loja vinculada → abre popup para digitar URL
+                        _show_store_url_dialog()
+                    else:
+                        _activate_chatbot()
             with col_b:
                 if st.button("📋 Gerar FAQ para Seller Centre", width='stretch', key="btn_gerar_faq_welcome"):
                     _gerar_faq(full_context, shop_name_ctx)
@@ -1031,7 +1089,115 @@ def render_chatbot():
             att_previews = st.session_state.get("chat_attachment_previews", [])
             _handle_chat_input_with_vision(user_input, attachments, att_types, att_previews, full_context, segmento)
 
-    # ── FAQ em expander abaixo do layout ─────────────────────
+    # ── Construtor de FAQ personalizado ──────────────────────
+    with st.expander("📋 Construtor de FAQ Personalizado", expanded=False):
+        st.markdown(
+            "Adicione pares manualmente, gere respostas com IA ou deixe o chatbot "
+            "sugerir automaticamente a partir do histórico da conversa."
+        )
+
+        faq_pers = st.session_state.get("faq_personalizado", [])
+
+        # Lista atual
+        if faq_pers:
+            st.markdown("**Pares adicionados:**")
+            for _i, _item in enumerate(faq_pers):
+                _c1, _c2 = st.columns([10, 1])
+                with _c1:
+                    st.markdown(f"**P{_i+1}:** {_item['pergunta']}")
+                    st.markdown(f"**R{_i+1}:** {_item['resposta']}")
+                    st.divider()
+                with _c2:
+                    if st.button("🗑️", key=f"del_faq_{_i}"):
+                        st.session_state.faq_personalizado.pop(_i)
+                        st.rerun()
+        else:
+            st.caption("Nenhum par adicionado ainda.")
+
+        # Campos para novo par
+        st.markdown("**Adicionar pergunta:**")
+        _cp, _cr = st.columns(2)
+        with _cp:
+            _nova_p = st.text_input(
+                "Pergunta", placeholder="Ex: Têm mochila azul?",
+                key="faq_nova_p", max_chars=80
+            )
+        with _cr:
+            _nova_r = st.text_area(
+                "Resposta", placeholder="Ex: Sim! Temos em azul.",
+                key="faq_nova_r", max_chars=500, height=80
+            )
+
+        _b1, _b2, _b3 = st.columns(3)
+        with _b1:
+            if st.button("➕ Adicionar", key="btn_faq_add",
+                         width="stretch") and _nova_p and _nova_r:
+                st.session_state.faq_personalizado.append(
+                    {"pergunta": _nova_p, "resposta": _nova_r}
+                )
+                st.rerun()
+        with _b2:
+            if st.button("🤖 Sugerir resposta", key="btn_faq_resp",
+                         width="stretch") and _nova_p:
+                with st.spinner("Gerando resposta..."):
+                    _sugestao = chat_with_gemini(
+                        f"Gere uma resposta curta e simpática (máx 500 chars) para: '{_nova_p}'",
+                        [], full_context
+                    )
+                st.session_state.faq_personalizado.append(
+                    {"pergunta": _nova_p, "resposta": _sugestao[:500]}
+                )
+                st.rerun()
+        with _b3:
+            _n_turns = len(st.session_state.chat_history)
+            if st.button(
+                f"✨ Sugerir do histórico ({_n_turns}t)",
+                key="btn_faq_historico",
+                width="stretch",
+                disabled=not st.session_state.chat_history,
+            ):
+                with st.spinner("Analisando histórico..."):
+                    _sugestoes = suggest_faq_from_history(
+                        st.session_state.chat_history,
+                        shop_name_ctx,
+                        segmento,
+                    )
+                if _sugestoes:
+                    _ja_tem = [x["pergunta"] for x in st.session_state.faq_personalizado]
+                    _added = sum(
+                        1 for s in _sugestoes
+                        if s["pergunta"] not in _ja_tem
+                        and not st.session_state.faq_personalizado.append(s)
+                    )
+                    if _added:
+                        st.success(f"✅ {_added} par(es) sugerido(s) adicionado(s)!")
+                        st.rerun()
+                    else:
+                        st.info("Todos os pares sugeridos já estavam no FAQ.")
+                else:
+                    st.warning(
+                        "Não encontrei perguntas de clientes úteis no histórico. "
+                        "Continue a conversa e tente novamente."
+                    )
+
+        # Exportar
+        if faq_pers:
+            _faq_txt = "\n\n".join(
+                f"PERGUNTA {_i+1}: {_item['pergunta']}\nRESPOSTA {_i+1}: {_item['resposta']}"
+                for _i, _item in enumerate(faq_pers)
+            ).replace("**", "")
+            salvar_ou_baixar(
+                f"Exportar FAQ ({len(faq_pers)} pares)",
+                data=_faq_txt,
+                file_name=f"faq_personalizado_{shop_name_ctx}.txt",
+                mime="text/plain",
+                key="dl_faq_perso",
+            )
+            if st.button("🗑️ Limpar FAQ", key="btn_faq_limpar"):
+                st.session_state.faq_personalizado = []
+                st.rerun()
+
+    # ── FAQ gerado automaticamente ─────────────────────────────
     _render_faq_output(shop_name_ctx)
 
 
