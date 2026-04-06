@@ -1005,35 +1005,419 @@ Mensagem: {msg}
 Tem anexo de imagem/vídeo: {has_media}
 """
 
-def detect_chat_intent(user_message: str, has_media: bool) -> str:
+def detect_chat_intents(user_message: str, has_media: bool) -> list:
     """
-    Detecta a intenção da mensagem usando heurísticas rápidas
-    (sem chamar a API para não gastar cota em classificação simples).
+    Detecta UMA OU MAIS intenções na mensagem.
+    Retorna lista ordenada pelo encadeamento natural de execução.
+    Exemplos:
+      "remove o fundo e gera cenário"   → ["remove_bg", "generate_scene"]
+      "melhora a qualidade e analisa"   → ["upscale", "analyze_image"]
+      "bota um badge à prova d'água"    → ["creative_edit"]
     """
     msg = user_message.lower()
+    intents = []
 
-    # Heurísticas diretas — evita chamada de API
-    if any(w in msg for w in ["remov", "sem fundo", "fundo branco", "transparente", "recortar", "recort"]):
-        return "remove_bg"
-    if any(w in msg for w in ["cenário", "cena", "fundo bonito", "fundo ia", "gerar fundo", "estúdio", "packshot"]):
-        return "generate_scene"
-    if any(w in msg for w in ["qualidade", "upscale", "aumentar", "resolução", "nítid", "melhorar imagem"]):
-        return "upscale"
-    if any(w in msg for w in ["otimiz", "título", "descrição", "tag", "preço", "listing", "seo", "keyword"]):
-        return "optimize_listing"
-    if any(w in msg for w in ["vídeo", "video", "retenção", "hook", "gancho"]):
-        return "analyze_video"
-    if has_media and any(w in msg for w in [
+    # ── Detecção individual ───────────────────────────────────
+    is_remove_bg = any(w in msg for w in [
+        "remov", "sem fundo", "fundo branco", "transparente", "recort"
+    ])
+    is_scene = any(w in msg for w in [
+        "cenário", "cena", "fundo bonito", "fundo ia", "gerar fundo",
+        "estúdio", "packshot", "ambiente", "paisagem", "fundo clean",
+        "fundo limpo"
+    ])
+    is_upscale = any(w in msg for w in [
+        "qualidade", "upscale", "aumentar", "resolução", "nítid", "melhorar imagem"
+    ])
+    is_optimize = any(w in msg for w in [
+        "otimiz", "título", "descrição", "tag", "listing", "seo", "keyword"
+    ])
+    is_video = any(w in msg for w in ["vídeo", "video", "retenção", "hook", "gancho"])
+    is_analyze = has_media and any(w in msg for w in [
         "boa", "ruim", "melhorar", "feedback", "avaliar", "analisar",
         "o que acha", "está bom", "tá bom", "tá boa", "está boa",
-        "funciona", "serve", "adequad"
-    ]):
-        return "analyze_image"
-    if has_media:
-        # Tem mídia mas não classificou → assume análise de imagem
-        return "analyze_image"
+        "funciona", "serve", "adequad", "avaliaç", "opinion",
+        "nota", "pontu", "qualidade da imagem"
+    ])
 
-    return "general"
+    # Edição criativa: qualquer instrução que implica manipular pixels
+    # de forma aberta (badge, iluminação, detalhe de material, etc.)
+    is_creative = any(w in msg for w in [
+        "badge", "etiqueta", "selos", "texto", "escrit", "escreve",
+        "coloc", "adiciona", "bot", "colocar", "botar", "add",
+        "iluminaç", "luz", "brilh", "sombra", "contrast", "saturação",
+        "cor", "trocal", "mudal", "filtro", "efeito",
+        "recort", "detal", "ampli", "zoom", "mostra",
+        "prova", "resistente", "imperme", "material", "tecido",
+        "profissional", "montag", "composição",
+    ])
+
+    # ── Ordem natural de encadeamento ────────────────────────
+    # upscale → remove_bg → generate_scene → analyze → creative_edit
+    if is_upscale:
+        intents.append("upscale")
+    if is_remove_bg:
+        intents.append("remove_bg")
+    if is_scene:
+        intents.append("generate_scene")
+    if is_analyze and not intents:
+        intents.append("analyze_image")
+    if is_creative and "analyze_image" not in intents:
+        # Criativo coexiste com processamento mas não com análise pura
+        intents.append("creative_edit")
+
+    # Se tem mídia mas não classificou → análise genérica
+    if has_media and not intents:
+        intents.append("analyze_image")
+
+    if is_optimize:
+        intents.append("optimize_listing")
+
+    if is_video:
+        intents.append("analyze_video")
+
+    if not intents:
+        intents.append("general")
+
+    return intents
+
+
+# Manter alias para compatibilidade reversa (caso haja código antigo chamando)
+def detect_chat_intent(user_message: str, has_media: bool) -> str:
+    return detect_chat_intents(user_message, has_media)[0]
+
+
+# ══════════════════════════════════════════════════════════════
+# ADICIONAR creative_edit_with_vision() — nova função
+# ══════════════════════════════════════════════════════════════
+
+def creative_edit_with_vision(
+    image: "Image.Image",
+    instruction: str,
+    product_context: str,
+    segmento: str,
+) -> tuple:
+    """
+    Usa Gemini Vision para interpretar uma instrução criativa aberta
+    e aplica as operações via PIL.
+
+    Retorna (imagem_editada, descricao_do_que_foi_feito).
+    """
+    import io as _io
+    import time as _time
+    import json as _json
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+
+    # ── 1. Gemini interpreta a instrução ─────────────────────
+    schema_prompt = f"""Você é um especialista em edição de imagens para e-commerce.
+Analise esta imagem de produto e a instrução do usuário.
+
+INSTRUÇÃO: "{instruction}"
+SEGMENTO: {segmento}
+CONTEXTO DO PRODUTO: {product_context[:500]}
+
+Responda APENAS com JSON válido (sem markdown), com as operações a executar:
+
+{{
+  "operations": [
+    // Operações disponíveis (use apenas as necessárias):
+    
+    // Ajuste global de imagem:
+    // {{"type": "brightness", "value": 1.0}}   → 0.5=escuro, 1.5=claro
+    // {{"type": "contrast", "value": 1.0}}     → 0.5=baixo, 1.5=alto
+    // {{"type": "saturation", "value": 1.0}}   → 0=pb, 1.5=saturado
+    // {{"type": "sharpness", "value": 1.0}}    → 0=blur, 2=nítido
+    // {{"type": "warmth", "value": 0}}          → -50=frio, +50=quente
+    
+    // Badge/Texto sobre a imagem:
+    // {{"type": "badge", "text": "À prova d'água", "position": "bottom-right",
+    //   "text_color": "#FFFFFF", "bg_color": "#1565C0",
+    //   "icon": "💧"}}
+    // position: "top-left" | "top-right" | "bottom-left" | "bottom-right" | "center"
+    
+    // Recorte de detalhe (cria uma miniatura circular num canto):
+    // {{"type": "detail_callout", "region": "top-left",
+    //   "crop_hint": "canto superior esquerdo com textura",
+    //   "label": "Tecido Ripstop", "callout_position": "bottom-left"}}
+    // region: onde está o detalhe na imagem original
+    // callout_position: onde colocar o medallhão de detalhe
+    
+    // Vinheta (escurece as bordas para dar foco ao produto):
+    // {{"type": "vignette", "intensity": 0.4}}  → 0.1=suave, 0.7=forte
+    
+    // Borda clean ao redor do produto (borda fina colorida):
+    // {{"type": "border", "color": "#E0E0E0", "width": 8}}
+  ],
+  "description": "Explicação em português do que foi feito"
+}}
+
+REGRAS:
+- Use apenas operações da lista acima
+- Para badges de feature do produto (à prova d'água, resistente, etc.) use badge com ícone
+- Se a instrução pedir iluminação mais quente → warmth positivo + brightness +0.1
+- Se pedir mais profissional → contrast +0.1 + sharpness +0.2 + vinheta suave
+- Máximo 4 operações para não poluir a imagem
+- description deve ser amigável e explicar o que foi feito
+"""
+
+    ops = []
+    description = "Edição criativa aplicada."
+
+    from backend_core import get_client, MODELOS_VISION
+    for m in MODELOS_VISION:
+        try:
+            img_rgb = image.convert("RGB") if image.mode != "RGB" else image
+            response = get_client().models.generate_content(
+                model=m,
+                contents=[schema_prompt, img_rgb]
+            )
+            raw = response.text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
+            parsed = _json.loads(raw)
+            ops = parsed.get("operations", [])
+            description = parsed.get("description", description)
+            break
+        except Exception as e:
+            _time.sleep(1)
+            continue
+
+    if not ops:
+        return image, "⚠️ Não foi possível interpretar a instrução. Tente descrever de forma mais específica."
+
+    # ── 2. Aplica as operações com PIL ───────────────────────
+    result = image.convert("RGBA")
+    w, h = result.size
+
+    for op in ops:
+        op_type = op.get("type", "")
+
+        try:
+            # ── Ajustes globais ──────────────────────────────
+            if op_type == "brightness":
+                base = result.convert("RGB")
+                base = ImageEnhance.Brightness(base).enhance(float(op.get("value", 1.0)))
+                result = base.convert("RGBA") if result.mode == "RGBA" else base
+
+            elif op_type == "contrast":
+                base = result.convert("RGB")
+                base = ImageEnhance.Contrast(base).enhance(float(op.get("value", 1.0)))
+                result = base.convert("RGBA") if result.mode == "RGBA" else base
+
+            elif op_type == "saturation":
+                base = result.convert("RGB")
+                base = ImageEnhance.Color(base).enhance(float(op.get("value", 1.0)))
+                result = base.convert("RGBA") if result.mode == "RGBA" else base
+
+            elif op_type == "sharpness":
+                base = result.convert("RGB")
+                base = ImageEnhance.Sharpness(base).enhance(float(op.get("value", 1.0)))
+                result = base.convert("RGBA") if result.mode == "RGBA" else base
+
+            elif op_type == "warmth":
+                import numpy as np
+                val = float(op.get("value", 0))
+                base = result.convert("RGB")
+                arr = np.array(base, dtype=np.float32)
+                if val > 0:
+                    arr[:, :, 0] = np.clip(arr[:, :, 0] + val, 0, 255)   # mais vermelho
+                    arr[:, :, 2] = np.clip(arr[:, :, 2] - val * 0.5, 0, 255)  # menos azul
+                else:
+                    arr[:, :, 2] = np.clip(arr[:, :, 2] - val, 0, 255)   # mais azul
+                    arr[:, :, 0] = np.clip(arr[:, :, 0] + val * 0.5, 0, 255)
+                base = Image.fromarray(arr.astype(np.uint8), "RGB")
+                result = base.convert("RGBA") if result.mode == "RGBA" else base
+
+            # ── Badge de texto ────────────────────────────────
+            elif op_type == "badge":
+                canvas = result.copy().convert("RGBA")
+                draw = ImageDraw.Draw(canvas)
+
+                text    = str(op.get("text", ""))
+                icon    = str(op.get("icon", ""))
+                full_text = f"{icon} {text}".strip() if icon else text
+                pos     = op.get("position", "bottom-right")
+                bg_hex  = op.get("bg_color", "#1565C0")
+                fg_hex  = op.get("text_color", "#FFFFFF")
+
+                # Converte hex → RGB
+                def hex2rgb(h):
+                    h = h.lstrip("#")
+                    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+                bg_color = hex2rgb(bg_hex)
+                fg_color = hex2rgb(fg_hex)
+
+                # Tenta carregar fonte, fallback para default
+                try:
+                    fsize = max(18, w // 28)
+                    font = ImageFont.truetype("arial.ttf", fsize)
+                except Exception:
+                    try:
+                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
+                    except Exception:
+                        font = ImageFont.load_default()
+
+                # Mede o texto
+                bbox = draw.textbbox((0, 0), full_text, font=font)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
+
+                pad_x, pad_y = 18, 10
+                bw = tw + pad_x * 2
+                bh = th + pad_y * 2
+                margin = max(16, w // 40)
+
+                # Posição do badge
+                pos_map = {
+                    "top-left":     (margin, margin),
+                    "top-right":    (w - bw - margin, margin),
+                    "bottom-left":  (margin, h - bh - margin),
+                    "bottom-right": (w - bw - margin, h - bh - margin),
+                    "center":       ((w - bw) // 2, (h - bh) // 2),
+                }
+                x0, y0 = pos_map.get(pos, pos_map["bottom-right"])
+                x1, y1 = x0 + bw, y0 + bh
+
+                # Desenha badge com cantos arredondados (via ellipse nas bordas)
+                radius = bh // 3
+                badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+                bd = ImageDraw.Draw(badge_layer)
+                bd.rounded_rectangle([x0, y0, x1, y1], radius=radius,
+                                     fill=(*bg_color, 220))
+                canvas = Image.alpha_composite(canvas, badge_layer)
+
+                # Texto
+                draw2 = ImageDraw.Draw(canvas)
+                tx = x0 + pad_x
+                ty = y0 + pad_y
+                draw2.text((tx, ty), full_text, font=font, fill=(*fg_color, 255))
+                result = canvas
+
+            # ── Detail callout (medallhão de detalhe) ─────────
+            elif op_type == "detail_callout":
+                base_img = result.convert("RGBA")
+                bw, bh   = base_img.size
+
+                # Região da imagem original a recortar
+                region_map = {
+                    "top-left":     (0, 0, bw // 3, bh // 3),
+                    "top-right":    (bw * 2 // 3, 0, bw, bh // 3),
+                    "center":       (bw // 3, bh // 3, bw * 2 // 3, bh * 2 // 3),
+                    "bottom-left":  (0, bh * 2 // 3, bw // 3, bh),
+                    "bottom-right": (bw * 2 // 3, bh * 2 // 3, bw, bh),
+                }
+                reg = op.get("region", "top-right")
+                crop_box = region_map.get(reg, region_map["top-right"])
+                detail = base_img.crop(crop_box)
+
+                # Tamanho do medallhão
+                medal_size = max(120, bw // 5)
+                detail = detail.resize((medal_size, medal_size), Image.LANCZOS)
+
+                # Máscara circular
+                mask = Image.new("L", (medal_size, medal_size), 0)
+                md   = ImageDraw.Draw(mask)
+                md.ellipse([0, 0, medal_size, medal_size], fill=255)
+
+                circle_img = Image.new("RGBA", (medal_size, medal_size), (0, 0, 0, 0))
+                circle_img.paste(detail, (0, 0))
+                circle_img.putalpha(mask)
+
+                # Borda branca
+                border_size = medal_size + 8
+                bordered = Image.new("RGBA", (border_size, border_size), (0, 0, 0, 0))
+                bd_draw  = ImageDraw.Draw(bordered)
+                bd_draw.ellipse([0, 0, border_size, border_size], fill=(255, 255, 255, 230))
+                bordered.paste(circle_img, (4, 4), circle_img)
+
+                # Posição do medallhão no canvas
+                callout_pos = op.get("callout_position", "bottom-left")
+                medal_margin = 20
+                cpos_map = {
+                    "top-left":     (medal_margin, medal_margin),
+                    "top-right":    (bw - border_size - medal_margin, medal_margin),
+                    "bottom-left":  (medal_margin, bh - border_size - medal_margin),
+                    "bottom-right": (bw - border_size - medal_margin,
+                                     bh - border_size - medal_margin),
+                }
+                cx, cy = cpos_map.get(callout_pos, cpos_map["bottom-left"])
+
+                canvas = base_img.copy()
+                canvas.paste(bordered, (cx, cy), bordered)
+
+                # Label abaixo do medallhão
+                label = str(op.get("label", ""))
+                if label:
+                    draw = ImageDraw.Draw(canvas)
+                    try:
+                        fsize = max(14, bw // 38)
+                        font = ImageFont.truetype("arial.ttf", fsize)
+                    except Exception:
+                        font = ImageFont.load_default()
+
+                    bbox = draw.textbbox((0, 0), label, font=font)
+                    lw = bbox[2] - bbox[0]
+                    lx = cx + (border_size - lw) // 2
+                    ly = cy + border_size + 4
+
+                    # Fundo semitransparente atrás do texto
+                    if 0 <= ly < bh:
+                        lb = draw.textbbox((lx, ly), label, font=font)
+                        draw.rounded_rectangle(
+                            [lb[0]-4, lb[1]-2, lb[2]+4, lb[3]+2],
+                            radius=4, fill=(0, 0, 0, 160)
+                        )
+                        draw.text((lx, ly), label, font=font, fill=(255, 255, 255, 255))
+
+                result = canvas
+
+            # ── Vinheta ──────────────────────────────────────
+            elif op_type == "vignette":
+                import numpy as np
+                intensity = float(op.get("intensity", 0.4))
+                base = result.convert("RGBA")
+                arr  = np.array(base, dtype=np.float32)
+
+                yw = np.linspace(-1, 1, h)
+                xw = np.linspace(-1, 1, w)
+                X, Y = np.meshgrid(xw, yw)
+                dist = np.sqrt(X**2 + Y**2)
+                dist = dist / dist.max()
+                vign = 1 - intensity * dist**1.5
+                vign = np.clip(vign, 0, 1)
+
+                for c in range(3):
+                    arr[:, :, c] *= vign
+
+                result = Image.fromarray(arr.astype(np.uint8), "RGBA")
+
+            # ── Borda fina ────────────────────────────────────
+            elif op_type == "border":
+                def hex2rgb(h):
+                    h = h.lstrip("#")
+                    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+                brd_color = hex2rgb(op.get("color", "#E0E0E0"))
+                brd_width = int(op.get("width", 8))
+                canvas    = result.convert("RGBA")
+                draw_brd  = ImageDraw.Draw(canvas)
+                draw_brd.rectangle(
+                    [brd_width // 2, brd_width // 2,
+                     w - brd_width // 2, h - brd_width // 2],
+                    outline=(*brd_color, 255), width=brd_width
+                )
+                result = canvas
+
+        except Exception as op_err:
+            # Operação falhou silenciosamente — continua com as outras
+            continue
+
+    return result, description
+
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1085,58 +1469,52 @@ Pontue de 1-10 e dê sugestões concretas de melhoria.
 
 def process_chat_turn(
     user_message: str,
-    attachments: list,          # lista de PIL.Image ou bytes
-    attachment_types: list,     # "image" | "video" por índice
+    attachments: list,
+    attachment_types: list,
     chat_history: list,
     full_context: str,
     segmento: str,
-    **kwargs,                   # selected_product, df_competitors, optimization_reviews
+    **kwargs,
 ) -> dict:
     """
-    Orquestra um turno do chat com possível mídia.
-    
-    Retorna:
-    {
-        "text":     str,                  # resposta em texto
-        "images":   list[PIL.Image],      # imagens processadas (pode ser vazia)
-        "intent":   str,                  # intenção detectada
-        "captions": list[str],            # legenda de cada imagem
-    }
+    Orquestra um turno do chat com suporte a multi-intent encadeado.
+    kwargs aceita: selected_product, df_competitors, optimization_reviews
     """
     import io as _io
     import time as _time
     from PIL import Image
 
     has_media = len(attachments) > 0
-    intent    = detect_chat_intent(user_message, has_media)
+    intents   = detect_chat_intents(user_message, has_media)
 
-    result = {"text": "", "images": [], "intent": intent, "captions": []}
+    result = {"text": "", "images": [], "intent": intents[0], "captions": []}
 
-    # ── Intent de mídia sem anexo → instrui o usuário ──────
-    MEDIA_INTENTS = {"remove_bg", "generate_scene", "upscale", "analyze_image", "analyze_video"}
-    if not has_media and intent in MEDIA_INTENTS:
+    # ── Intent de mídia sem anexo → instrui o usuário ────────
+    MEDIA_INTENTS = {"remove_bg", "generate_scene", "upscale",
+                     "analyze_image", "analyze_video", "creative_edit"}
+    if not has_media and any(i in MEDIA_INTENTS for i in intents):
         msgs = {
-            "remove_bg":      "📎 Para remover o fundo, clique em **📎 Anexar imagem / vídeo**, selecione a foto e reenvie sua mensagem.",
-            "generate_scene": "📎 Para gerar um cenário IA, clique em **📎 Anexar imagem / vídeo**, selecione a foto do produto e reenvie.",
-            "upscale":        "📎 Para aumentar a qualidade, clique em **📎 Anexar imagem / vídeo**, selecione a imagem e reenvie.",
-            "analyze_image":  "📎 Para analisar a imagem, clique em **📎 Anexar imagem / vídeo**, selecione a foto e reenvie sua pergunta.",
-            "analyze_video":  "📎 Para analisar o vídeo, clique em **📎 Anexar imagem / vídeo**, selecione o arquivo MP4 e reenvie.",
+            "remove_bg":     "📎 Para remover o fundo, clique em **📎 Anexar imagem / vídeo**, selecione a foto e reenvie.",
+            "generate_scene":"📎 Para gerar um cenário, anexe a foto pelo botão **📎 Anexar imagem / vídeo** e reenvie.",
+            "upscale":       "📎 Para aumentar a qualidade, anexe a imagem e reenvie.",
+            "analyze_image": "📎 Para analisar a imagem, anexe a foto e reenvie sua pergunta.",
+            "analyze_video": "📎 Para analisar o vídeo, anexe o arquivo MP4 e reenvie.",
+            "creative_edit": "📎 Para editar a imagem, anexe a foto pelo botão **📎 Anexar imagem / vídeo** e reenvie com a instrução.",
         }
-        result["text"] = msgs.get(intent, "📎 Por favor, anexe o arquivo pelo botão **📎 Anexar imagem / vídeo** e reenvie.")
+        media_intent = next((i for i in intents if i in MEDIA_INTENTS), intents[0])
+        result["text"] = msgs.get(media_intent, "📎 Por favor, anexe o arquivo e reenvie.")
         return result
 
-    # ── Otimização de listing direto pelo chat ─────────────
-    if not has_media and intent == "optimize_listing":
-        prod   = kwargs.get("selected_product")
+    # ── Otimização de listing sem mídia ─────────────────────
+    from backend_core import get_client, MODELOS_TEXTO
+    if "optimize_listing" in intents and not has_media:
+        prod    = kwargs.get("selected_product")
         df_comp = kwargs.get("df_competitors")
         reviews = kwargs.get("optimization_reviews") or []
-        seg     = segmento
-
         if prod:
             from backend_core import generate_full_optimization
-            result["text"] = generate_full_optimization(prod, df_comp, reviews, seg)
+            result["text"] = generate_full_optimization(prod, df_comp, reviews, segmento)
         else:
-            # Sem produto selecionado — responde pelo chat geral orientando o usuário
             result["text"] = (
                 "⚡ Para gerar uma otimização completa, selecione um produto na aba "
                 "**Auditoria Pro** clicando em '⚡ Otimizar'. Assim terei acesso ao "
@@ -1145,22 +1523,20 @@ def process_chat_turn(
             )
         return result
 
-    # ── Sem mídia: chat normal enriquecido ──────────────────
-    if not has_media or intent in ("general",):
-        contents  = [full_context + "\n\n---\nHistórico:\n"]
-        for turn in chat_history[-8:]:  # Últimos 8 turnos para não explodir contexto
+    # ── Chat geral sem mídia ─────────────────────────────────
+    if not has_media or intents == ["general"]:
+        contents = [full_context + "\n\n---\nHistórico:\n"]
+        for turn in chat_history[-8:]:
             contents.append(f"Usuário: {turn['user']}")
             contents.append(f"Assistente: {turn['assistant']}")
         contents.append(f"Usuário: {user_message}\nAssistente:")
-
         prompt = "\n".join(contents)
-        text   = ""
+        text = ""
         for m in MODELOS_TEXTO:
             try:
                 cfg = {"thinking_config": {"thinking_budget": 0}} if ("3.1" in m or "2.5" in m) else {}
                 resp = get_client().models.generate_content(
-                    model=m, contents=[prompt],
-                    config=cfg if cfg else None
+                    model=m, contents=[prompt], config=cfg if cfg else None
                 )
                 text = resp.text.strip()
                 break
@@ -1169,118 +1545,127 @@ def process_chat_turn(
         result["text"] = text or "⏳ Erro de API. Tente novamente."
         return result
 
-    # ── Com mídia: processa cada anexo ──────────────────────
+    # ── Processamento de mídia com encadeamento multi-intent ─
     processed_images = []
     captions         = []
     text_parts       = []
 
+    from backend_core import upscale_image, improve_image_quality, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, analyze_product_image_vision
     for i, attachment in enumerate(attachments):
         atype = attachment_types[i] if i < len(attachment_types) else "image"
 
         if atype == "video":
             result["text"] = (
-                "🎬 Recebi o vídeo! A análise completa de vídeo frame-a-frame está "
-                "chegando em breve. Por enquanto: certifique-se de mostrar o produto "
-                "em uso nos primeiros 3 segundos para maximizar a retenção."
+                "🎬 Recebi o vídeo! A análise completa de vídeo está chegando em breve. "
+                "Por enquanto: mostre o produto em uso nos primeiros 3 segundos para "
+                "maximizar a retenção."
             )
             result["intent"] = "analyze_video"
             return result
 
-        # É imagem — converte para PIL se necessário
+        # Converte para PIL
         if isinstance(attachment, bytes):
             img = Image.open(_io.BytesIO(attachment)).convert("RGBA")
         else:
             img = attachment.convert("RGBA") if attachment.mode != "RGBA" else attachment
 
-        # ── remove_bg ───────────────────────────────────────
-        if intent == "remove_bg":
-            try:
-                from rembg import remove as rembg_remove
-                buf = _io.BytesIO()
-                img.convert("RGB").save(buf, format="PNG")
-                no_bg = rembg_remove(buf.getvalue())
-                result_img = Image.open(_io.BytesIO(no_bg)).convert("RGBA")
-                processed_images.append(result_img)
-                captions.append("✂️ Fundo removido")
-                text_parts.append("✅ Fundo removido com sucesso! A imagem com transparência está pronta.")
-            except Exception as e:
-                text_parts.append(f"❌ Erro ao remover fundo: {e}")
+        # ── Encadeia as operações de imagem ───────────────────
+        current_img = img
 
-        # ── generate_scene ──────────────────────────────────
-        elif intent == "generate_scene":
-            # Primeiro remove o fundo se a imagem não for RGBA com transparência
-            img_fg = img
-            alpha = img_fg.split()[-1] if img_fg.mode == "RGBA" else None
-            if alpha is None or alpha.getextrema()[0] == 255:
-                # Imagem sem transparência — remove fundo primeiro
+        for intent in intents:
+            if intent == "upscale":
+                from backend_core import upscale_image, improve_image_quality
+                current_img = upscale_image(current_img.convert("RGB"), scale=2)
+                current_img = improve_image_quality(current_img)
+                current_img = current_img.convert("RGBA")
+                text_parts.append(f"🔍 Qualidade aumentada para **{current_img.width}×{current_img.height}px** (2×).")
+
+            elif intent == "remove_bg":
                 try:
                     from rembg import remove as rembg_remove
                     buf = _io.BytesIO()
-                    img.convert("RGB").save(buf, format="PNG")
+                    current_img.convert("RGB").save(buf, format="PNG")
                     no_bg = rembg_remove(buf.getvalue())
-                    img_fg = Image.open(_io.BytesIO(no_bg)).convert("RGBA")
-                    text_parts.append("✂️ Fundo removido automaticamente...")
-                except Exception:
-                    pass
+                    current_img = Image.open(_io.BytesIO(no_bg)).convert("RGBA")
+                    text_parts.append("✂️ Fundo removido com sucesso.")
+                except Exception as e:
+                    text_parts.append(f"❌ Erro ao remover fundo: {e}")
 
-            prompt_map = {
-                "Escolar / Juvenil": "minimalist white geometric podium soft lavender background",
-                "Viagem":            "stone platform outdoors golden hour soft focus",
-                "Profissional / Tech": "sleek white desk surface modern office lighting",
-                "Moda":              "white marble floor fashion studio aesthetic",
-            }
-            prompt_cenario = prompt_map.get(segmento, "product photography studio white background soft lighting")
+            elif intent == "generate_scene":
+                from backend_core import generate_ai_scenario, generate_gradient_background, apply_contact_shadow
+                prompt_map = {
+                    "Escolar / Juvenil": "minimalist white geometric podium soft lavender background",
+                    "Viagem":            "stone platform outdoors golden hour soft focus",
+                    "Profissional / Tech": "sleek white desk surface modern office lighting",
+                    "Moda":              "white marble floor fashion studio aesthetic",
+                }
+                prompt_cenario = prompt_map.get(
+                    segmento, "product photography studio white background soft lighting"
+                )
+                # Garante transparência antes de compor cenário
+                img_fg = current_img
+                alpha = img_fg.split()[-1] if img_fg.mode == "RGBA" else None
+                if alpha is None or alpha.getextrema()[0] == 255:
+                    try:
+                        from rembg import remove as rembg_remove
+                        buf = _io.BytesIO()
+                        img_fg.convert("RGB").save(buf, format="PNG")
+                        no_bg = rembg_remove(buf.getvalue())
+                        img_fg = Image.open(_io.BytesIO(no_bg)).convert("RGBA")
+                        if "✂️ Fundo removido" not in " ".join(text_parts):
+                            text_parts.append("✂️ Fundo removido automaticamente para compor o cenário.")
+                    except Exception:
+                        pass
 
-            bg = generate_ai_scenario(prompt_cenario, segmento)
-            if not bg:
-                bg = generate_gradient_background(segmento)
-                text_parts.append("🎨 Cenário gerado com gradiente local (APIs de imagem indisponíveis).")
-            else:
-                text_parts.append("🎨 Cenário IA gerado com sucesso!")
+                bg = generate_ai_scenario(prompt_cenario, segmento)
+                if not bg:
+                    bg = generate_gradient_background(segmento)
+                    text_parts.append("🎨 Cenário gradiente gerado (APIs de imagem indisponíveis).")
+                else:
+                    text_parts.append("🎨 Cenário IA gerado com sucesso!")
 
-            bg = bg.resize((1024, 1024))
-            fg = img_fg.copy()
-            fg.thumbnail((800, 800))
-            offset = (
-                (bg.width  - fg.width)  // 2,
-                int((bg.height - fg.height) * 0.6),
-            )
-            bg = apply_contact_shadow(bg, fg, offset)
-            bg.paste(fg, offset, fg)
-            processed_images.append(bg)
-            captions.append("🎨 Produto com cenário IA")
+                bg = bg.resize((1024, 1024))
+                fg = img_fg.copy()
+                fg.thumbnail((800, 800))
+                offset = (
+                    (bg.width - fg.width) // 2,
+                    int((bg.height - fg.height) * 0.6),
+                )
+                bg = apply_contact_shadow(bg, fg, offset)
+                bg.paste(fg, offset, fg)
+                current_img = bg
 
-        # ── upscale ─────────────────────────────────────────
-        elif intent == "upscale":
-            img_rgb = img.convert("RGB")
-            up  = upscale_image(img_rgb, scale=2)
-            up  = improve_image_quality(up)
-            processed_images.append(up)
-            captions.append(f"🔍 Upscale 2× — {up.width}×{up.height}px")
-            text_parts.append(
-                f"✅ Qualidade aumentada para **{up.width}×{up.height}px** (2×)! "
-                "Nitidez e contraste melhorados."
-            )
+            elif intent == "creative_edit":
+                from backend_core import creative_edit_with_vision
+                edited, desc = creative_edit_with_vision(
+                    current_img, user_message, full_context, segmento
+                )
+                current_img = edited
+                text_parts.append(f"✨ {desc}")
 
-        # ── analyze_image ───────────────────────────────────
-        elif intent == "analyze_image":
-            feedback = analyze_product_image_vision(
-                img.convert("RGB"),
-                user_message,
-                full_context,
-                segmento,
-            )
-            text_parts.append(feedback)
-            # Retorna a imagem original para referência
-            processed_images.append(img.convert("RGB"))
-            captions.append("🔍 Imagem em análise")
+            elif intent == "analyze_image":
+                from backend_core import analyze_product_image_vision
+                feedback = analyze_product_image_vision(
+                    current_img.convert("RGB"),
+                    user_message,
+                    full_context,
+                    segmento,
+                )
+                text_parts.append(feedback)
+
+        processed_images.append(current_img)
+        cap_parts = []
+        if "remove_bg" in intents:   cap_parts.append("✂️ sem fundo")
+        if "generate_scene" in intents: cap_parts.append("🎨 cenário IA")
+        if "upscale" in intents:     cap_parts.append("🔍 upscale 2×")
+        if "creative_edit" in intents: cap_parts.append("✨ edição criativa")
+        if "analyze_image" in intents: cap_parts.append("🔍 análise")
+        captions.append(" · ".join(cap_parts) if cap_parts else "Processado")
 
     result["text"]     = "\n\n".join(text_parts) if text_parts else "✅ Processamento concluído!"
     result["images"]   = processed_images
     result["captions"] = captions
     return result
-
-
 
 # ══════════════════════════════════════════════════════════════
 # FAQ INTELIGENTE — Sugestão automática a partir do histórico

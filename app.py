@@ -672,6 +672,129 @@ def render_auditoria():
 # ══════════════════════════════════════════════════════════════════════════
 # PARTIÇÃO II — CHATBOT CONCIERGE
 # ══════════════════════════════════════════════════════════════════════════
+@st.dialog("Vincular Produto", width="large")
+def show_product_linking_dialog():
+    st.write("Não consegui identificar com certeza qual produto é este. Selecione um abaixo para vincular à imagem:")
+    shop_prods = st.session_state.get("shop_produtos", [])
+    
+    if not shop_prods:
+        st.info("Nenhum produto cadastrado na loja.")
+        if st.button("Enviar sem vincular", key="btn_send_sem_vincular_dlg", width="stretch"):
+            _do_pending_chat_send()
+            st.rerun()
+        return
+
+    # Usamos grid de colunas para exibir os produtos de forma visual
+    cols = st.columns(4)
+    for i, prod in enumerate(shop_prods[:20]):
+        with cols[i % 4]:
+            if prod.get("image"):
+                st.image(prod["image"], use_container_width=True)
+            st.caption(prod["name"][:35] + "..." if len(prod["name"]) > 35 else prod["name"])
+            if st.button("Selecionar", key=f"btn_vinc_prod_{i}"):
+                st.session_state.selected_product = prod
+                _do_pending_chat_send()
+                st.rerun()
+                
+    st.markdown("---")
+    if st.button("❌ Nenhum / Imagem Externa", key="btn_vinc_nenhum_dlg", width="stretch"):
+        _do_pending_chat_send()
+        st.rerun()
+
+def _do_pending_chat_send():
+    msg = st.session_state.get("pending_chat_msg")
+    atts = st.session_state.get("pending_chat_atts", [])
+    attyps = st.session_state.get("pending_chat_attyps", [])
+    prevs = st.session_state.get("pending_chat_prevs", [])
+    ctx = st.session_state.get("pending_chat_ctx", "")
+    seg = st.session_state.get("pending_chat_seg", "")
+    _send_message(msg, atts, attyps, prevs, ctx, seg)
+
+def _handle_chat_input_with_vision(user_input, attachments, att_types, att_previews, full_context, segmento):
+    """
+    Tenta mapear imagens enviadas no chat para produtos da loja.
+    Se conseguir identificar certinho via API Vision, anexa e envia.
+    Caso contrário, chama o Modal do Streamlit para o usuário clicar.
+    """
+    has_image = any(t == "image" for t in att_types)
+    
+    # Se não tem imagem na mensagem atual, vai direto
+    if not has_image:
+        _send_message(user_input, attachments, att_types, att_previews, full_context, segmento)
+        return
+
+    # Se já tem um produto selecionado, por ora assume que é ele e vai direto pra não encher o saco
+    # Se quisermos que TODA nova imagem pergunte, tirar essa linha:
+    if st.session_state.get("selected_product"):
+        _send_message(user_input, attachments, att_types, att_previews, full_context, segmento)
+        return
+
+    shop_prods = st.session_state.get("shop_produtos", [])
+    if not shop_prods:
+        _send_message(user_input, attachments, att_types, att_previews, full_context, segmento)
+        return
+
+    # Guarda o estado para caso precise de dialog
+    st.session_state.pending_chat_msg = user_input
+    st.session_state.pending_chat_atts = attachments
+    st.session_state.pending_chat_attyps = att_types
+    st.session_state.pending_chat_prevs = att_previews
+    st.session_state.pending_chat_ctx = full_context
+    st.session_state.pending_chat_seg = segmento
+
+    with st.status("Identificando seu produto na loja...", expanded=True) as status:
+        import time
+        from PIL import Image
+        import io
+        from backend_core import get_client, MODELOS_VISION
+        
+        # Monta a lista formatada para a IA ler
+        catalog_str = "CATÁLOGO DE PRODUTOS:\n"
+        for i, p in enumerate(shop_prods[:20]):
+            catalog_str += f"[{i}] {p['name']}\n"
+            
+        schema_prompt = f"""Analise a imagem enviada pelo usuário. Qual ID do catálogo abaixo MÁIS se assemelha e representa o produto da imagem?
+Retorne APENAS UM NÚMERO (0, 1, 2...), e NADA MAIS. Se a imagem não for definitivamente de NENHUM deles ou se for genérica, retorne -1.
+
+{catalog_str}"""
+
+        class_id = -1
+        try:
+            # Pega o primeiro anexo de imagem
+            idx_img = att_types.index("image")
+            att_img = attachments[idx_img]
+            if isinstance(att_img, bytes):
+                img_to_check = Image.open(io.BytesIO(att_img)).convert("RGB")
+            else:
+                img_to_check = att_img.convert("RGB")
+
+            for m in MODELOS_VISION:
+                try:
+                    resp = get_client().models.generate_content(
+                        model=m,
+                        contents=[schema_prompt, img_to_check]
+                    )
+                    text_id = resp.text.strip().replace("`", "").replace("[", "").replace("]", "").strip()
+                    if text_id.lstrip("-").isdigit():
+                        class_id = int(text_id)
+                        break
+                except Exception:
+                    time.sleep(1)
+        except Exception:
+            class_id = -1
+
+        if 0 <= class_id < len(shop_prods):
+            status.update(label=f"Produto identificado: {shop_prods[class_id]['name'][:20]}...", state="complete", expanded=False)
+            st.session_state.selected_product = shop_prods[class_id]
+            time.sleep(0.5)
+            _send_message(user_input, attachments, att_types, att_previews, full_context, segmento)
+            st.rerun()
+        else:
+            status.update(label="Precisamos da sua ajuda para vincular o produto.", state="error", expanded=False)
+            time.sleep(0.5)
+            # Aciona o dialog do streamlit (que por si só obriga a interface do usuário fluir para o modal)
+            show_product_linking_dialog()
+
 def render_chatbot():
     st.markdown("""
     <div class="page-header">
@@ -906,7 +1029,7 @@ def render_chatbot():
             attachments  = st.session_state.get("chat_attachments",         [])
             att_types    = st.session_state.get("chat_attachment_types",    [])
             att_previews = st.session_state.get("chat_attachment_previews", [])
-            _send_message(user_input, attachments, att_types, att_previews, full_context, segmento)
+            _handle_chat_input_with_vision(user_input, attachments, att_types, att_previews, full_context, segmento)
 
     # ── FAQ em expander abaixo do layout ─────────────────────
     _render_faq_output(shop_name_ctx)
