@@ -16,7 +16,7 @@ import subprocess
 GITHUB_USUARIO = "AmaDeusAlsoSatan"
 GITHUB_REPO    = "shopee-booster"
 
-VERSAO_ATUAL = "2.0.0"  # Atualizar a cada release
+VERSAO_ATUAL = "3.0.0"  # Atualizar a cada release
 
 API_URL = f"https://api.github.com/repos/{GITHUB_USUARIO}/{GITHUB_REPO}/releases/latest"
 
