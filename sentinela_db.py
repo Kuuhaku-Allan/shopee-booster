@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 
 DB_PATH = "data/sentinela.db"
@@ -140,20 +140,67 @@ def processar_mudancas_e_alertar(keyword: str, resultados: list, telegram):
         salvar_historico(item_id, p.get("shop_id", ""), nome, preco_novo, ranking_atual)
 
 def gerar_ranking_lojas_nicho():
-    """Agrega os dados para criar o Rank das 100 melhores lojas do nicho."""
+    """
+    Power Radar: agregacao avançada para o Rank das 100 melhores lojas do nicho.
+    Inclui: presenças no topo, melhor posição já alcançada, preço médio e
+    tendência de preço (comparação últimas 24h vs anteriores).
+    """
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+
+        # Ranking principal
         cursor.execute('''
-            SELECT shop_id, COUNT(*) as forca_nicho, AVG(preco) as preco_medio
+            SELECT shop_id,
+                   COUNT(*) as presencas,
+                   AVG(preco) as preco_medio,
+                   MIN(ranking) as melhor_posicao,
+                   MAX(ranking) as pior_posicao
             FROM historico_precos
             GROUP BY shop_id
-            ORDER BY forca_nicho DESC
+            ORDER BY presencas DESC, melhor_posicao ASC
             LIMIT 100
         ''')
         ranking = cursor.fetchall()
+
+        # Tendência de preço por loja (últimas 24h vs geral)
+        agora = datetime.now()
+        vinte_quatroh = agora - timedelta(hours=24)
+
+        resultado = []
+        for shop_id, presencas, preco_medio, melhor_pos, pior_pos in ranking:
+            # Preço médio nas últimas 24h
+            cursor.execute('''
+                SELECT AVG(preco) FROM historico_precos
+                WHERE shop_id = ? AND data_verificacao >= ?
+            ''', (str(shop_id), vinte_quatroh.isoformat()))
+            res_rec = cursor.fetchone()
+            preco_recente = res_rec[0] if res_rec[0] is not None else None
+
+            # Tendência
+            if preco_recente is not None and preco_medio > 0:
+                diff_pct = ((preco_recente - preco_medio) / preco_medio) * 100
+                if diff_pct > 2:
+                    tendencia = "SUBINDO"
+                elif diff_pct < -2:
+                    tendencia = "Caindo"
+                else:
+                    tendencia = "ESTÁVEL"
+            else:
+                tendencia = "— dados insuficientes —"
+
+            resultado.append({
+                "shop_id": shop_id,
+                "presencas": presencas,
+                "preco_medio": round(preco_medio, 2),
+                "melhor_posicao": melhor_pos,
+                "pior_posicao": pior_pos,
+                "preco_recente": round(preco_recente, 2) if preco_recente is not None else None,
+                "tendencia": tendencia,
+            })
+
         conn.close()
-        return ranking
+        return resultado
     except Exception:
         return []
 
@@ -168,3 +215,33 @@ def obter_ultimo_preco(item_id):
         return res[0] if res else None
     except Exception:
         return None
+
+def configurar_loja_mestre(url_loja: str):
+    """Salva a URL da loja mestra para identificação da Sentinela."""
+    salvar_config("minha_loja_url", url_loja.strip())
+
+def obter_loja_mestra() -> str | None:
+    """Recupera a URL da loja mestra salva."""
+    return obter_config("minha_loja_url")
+
+def gerar_tendencia_precos_nicho(dias: int = 7):
+    """
+    Retorna a série temporal do preço médio do nicho nos últimos N dias.
+    Usado para exibir o gráfico de tendência no app.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        limite = datetime.now() - timedelta(days=dias)
+        cursor.execute('''
+            SELECT DATE(data_verificacao) as dia, AVG(preco) as preco_medio
+            FROM historico_precos
+            WHERE data_verificacao >= ?
+            GROUP BY DATE(data_verificacao)
+            ORDER BY dia ASC
+        ''', (limite.isoformat(),))
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+    except Exception:
+        return []

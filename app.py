@@ -1449,18 +1449,75 @@ def render_sentinela():
     tab1, tab2, tab3 = st.tabs(["⚙️ Bot Connection", "🎯 Nicho Monitorado", "🏆 Top Lojas"])
 
     with tab1:
+        # ── Loja Mestra ─────────────────────────────────────
+        st.markdown("### 🔗 Minha Loja Principal")
+        loja_atual = st.text_input(
+            "URL da sua Shopee",
+            value=sentinela_db.obter_loja_mestra() or "",
+            placeholder="https://shopee.com.br/nome_da_loja",
+            help="A Sentinela usa esta URL para identificar sua identidade e sugerir keywords automaticamente."
+        )
+        if st.button("💾 Salvar Loja Mestra", type="primary", use_container_width=True):
+            if loja_atual.strip() and "shopee" in loja_atual.lower():
+                sentinela_db.configurar_loja_mestre(loja_atual.strip())
+                st.success("✅ Loja mestra configurada! A Sentinela agora sabe quem é você.")
+            else:
+                st.error("Insira uma URL válida da Shopee.")
+
+        st.markdown("---")
+
+        # ── Sincronizar keywords da Auditoria ───────────────
+        st.markdown("### 🔄 Sincronizar com Auditoria")
+        st.caption("Se você já carregou sua loja na Auditoria, clique abaixo para extrair automaticamente as keywords mais fortes dos seus produtos.")
+
+        if st.button("🔌 Sincronizar Produtos → Keywords", type="primary", use_container_width=True):
+            produtos = st.session_state.get("shop_produtos") or []
+            if produtos:
+                # Extrai palavras-chave dos nomes dos produtos
+                from collections import Counter
+                palavras_inuteis = {
+                    "de", "da", "do", "das", "dos", "com", "e", "ou", "em", "no", "na",
+                    "para", "por", "a", "o", "um", "uma", "que", "ao", "aos", "à", "às",
+                    "kit", "pro", "nova", "novo", "2025", "2026"
+                }
+                contagem = Counter()
+                for prod in produtos:
+                    nome = prod.get("name", "").lower()
+                    # Normaliza caracteres
+                    import unicodedata
+                    nome_norm = unicodedata.normalize("NFD", nome) if isinstance(nome, str) else nome
+                    for palavra in nome_norm.split():
+                        palavra_limpa = unicodedata.normalize("NFD", palavra)
+                        palavra_ascii = "".join(c for c in palavra_limpa if unicodedata.category(c) != "Mn").lower()
+                        if len(palavra_ascii) > 3 and palavra_ascii not in palavras_inuteis:
+                            contagem[palavra_ascii] += 1
+
+                keywords_extraidas = [w for w, _ in contagem.most_common(5)]
+                adicionadas = 0
+                for kw in keywords_extraidas:
+                    if len(kw) > 3:
+                        sentinela_db.adicionar_keyword(kw)
+                        adicionadas += 1
+                st.success(f"✅ {adicionadas} keywords extraídas dos seus produtos: {', '.join(keywords_extraidas)}")
+                st.rerun()
+            else:
+                st.warning("⚠️ Nenhum produto carregado da Auditoria. Carregue sua loja na aba **Auditoria Pro** primeiro.")
+
+        st.markdown("---")
+
+        # ── Telegram ───────────────────────────────────────
         st.markdown("### 🔌 Conectar ao Telegram Server")
-        
+
         col1, col2 = st.columns(2)
         with col1:
             token = st.text_input(
-                "Bot API Token (@BotFather)", 
+                "Bot API Token (@BotFather)",
                 value=sentinela_db.obter_config("telegram_token") or "",
                 type="password"
             )
         with col2:
             chatid = st.text_input(
-                "Chat ID", 
+                "Chat ID",
                 value=sentinela_db.obter_config("telegram_chat_id") or ""
             )
 
@@ -1507,19 +1564,55 @@ def render_sentinela():
 
     with tab3:
         st.markdown("### 🏆 Top 100 Lojas do Nicho")
-        st.caption("Ranking baseado na presença das lojas nos resultados das suas keywords monitoradas. Quanto mais vezes uma loja aparece no topo, mais forte é seu score.")
+        st.caption("Ranking baseado na presença das lojas nos resultados das suas keywords monitoradas. Inclui melhor posição alcançada e tendência de preço nas últimas 24h.")
 
+        # ── Gráfico de tendência do nicho ──────────────────
+        st.markdown("---")
+        st.markdown("### 📈 Tendência de Preço do Nicho (7 dias)")
+        tendencia = sentinela_db.gerar_tendencia_precos_nicho(7)
+
+        if tendencia:
+            df_trend = pd.DataFrame(tendencia, columns=["dia", "preco_medio"])
+            df_trend["dia"] = pd.to_datetime(df_trend["dia"])
+            st.line_chart(df_trend.set_index("dia")["preco_medio"], use_container_width=True)
+
+            c1, c2, c3 = st.columns(3)
+            preco_inicio = df_trend.iloc[0]["preco_medio"]
+            preco_fim = df_trend.iloc[-1]["preco_medio"]
+            variacao = ((preco_fim - preco_inicio) / preco_inicio) * 100
+            c1.metric("Preço no início", f"R$ {preco_inicio:.2f}")
+            c2.metric("Preço agora", f"R$ {preco_fim:.2f}", f"{variacao:+.1f}%")
+            c3.metric("Total de registros", f"{int(df_trend['preco_medio'].count())}")
+        else:
+            st.info("📭 Gráfico de tendência aparecerá após a Sentinela coletar dados por alguns dias.")
+
+        # ── Power Radar Ranking ────────────────────────────
+        st.markdown("---")
         ranking = sentinela_db.gerar_ranking_lojas_nicho()
 
         if not ranking:
             st.warning("Nenhum dado coletado ainda. A Sentinela precisa rodar pelo menos uma vez para gerar o ranking.")
         else:
-            df_rank = pd.DataFrame(ranking, columns=["Shop ID", "Presenças", "Preço Médio"])
             df_display = pd.DataFrame()
-            df_display["🏪 Rank"] = range(1, len(df_rank) + 1)
-            df_display["🆔 Shop ID"] = df_rank["Shop ID"]
-            df_display["🔥 Força (Presenças)"] = df_rank["Presenças"]
-            df_display["💰 Preço Médio"] = df_rank["Preço Médio"].apply(lambda x: f"R$ {x:.2f}")
+            df_display["🏪 Rank"] = list(range(1, len(ranking) + 1))
+            df_display["🆔 Shop ID"] = [r["shop_id"] for r in ranking]
+            df_display["🔥 Presenças"] = [r["presencas"] for r in ranking]
+            df_display["🥇 Melhor Pos."] = [r["melhor_posicao"] for r in ranking]
+            df_display["💰 Preço Médio"] = [f"R$ {r['preco_medio']:.2f}" for r in ranking]
+
+            # Tendência com emoji
+            emojis = {"SUBINDO": "📈", "Caindo": "📉", "ESTÁVEL": "➡️"}
+            df_display["📊 Tendência (24h)"] = [
+                f"{emojis.get(r['tendencia'], '')} {r['tendencia']}" if r['preco_recente'] else "—"
+                for r in ranking
+            ]
+
+            if any(r["preco_recente"] is not None for r in ranking):
+                df_display["💵 Preço Recente (24h)"] = [
+                    f"R$ {r['preco_recente']:.2f}" if r['preco_recente'] else "—"
+                    for r in ranking
+                ]
+
             st.dataframe(df_display, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -340,10 +340,7 @@ asyncio.run(run())
 
 def sentinela_heartbeat():
     """O coração que acorda a cada 4 horas para vigiar o mercado."""
-    from sentinela_db import (
-        init_db, listar_keywords, processar_mudancas_e_alertar,
-        gerar_ranking_lojas_nicho,
-    )
+    from sentinela_db import init_db, listar_keywords, processar_mudancas_e_alertar
     from telegram_service import TelegramSentinela
 
     init_db()
@@ -353,22 +350,24 @@ def sentinela_heartbeat():
     if not telegram.token or not telegram.chat_id:
         return
 
-    sentinela_running = True
+    keywords = listar_keywords()
+    if not keywords:
+        telegram.enviar_alerta(
+            "📡 Sentinela ativa, mas sem nicho definido.\n"
+            "Cadastre keywords na aba **Sentinela → Nicho Monitorado** no app."
+        )
+        return  # Sai do loop se não tem keywords
 
-    while sentinela_running:
-        keywords = listar_keywords()
-
-        if keywords:
-            for kw in keywords:
-                try:
-                    resultados = _fetch_competitors_headless(kw)
-                    if resultados:
-                        processar_mudancas_e_alertar(kw, resultados, telegram)
-                except Exception:
-                    pass  # Silent fail — o importante é não travar o loop
+    while True:
+        for kw in keywords:
+            try:
+                resultados = _fetch_competitors_headless(kw)
+                if resultados:
+                    processar_mudancas_e_alertar(kw, resultados, telegram)
+            except Exception:
+                pass  # Silent fail — o importante é não travar o loop
 
         # Dorme por 4 horas (modo furtivo)
-        # Usa um break check para poder ser interrompido se necessário
         time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
 
 
