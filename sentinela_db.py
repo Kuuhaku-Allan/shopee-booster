@@ -1,13 +1,33 @@
 import sqlite3
 from datetime import datetime, timedelta
 import os
+import sys
 
-DB_PATH = "data/sentinela.db"
+if getattr(sys, "frozen", False):
+    _BASE_DIR = os.path.dirname(sys.executable)
+else:
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(_BASE_DIR, "data", "sentinela.db")
 
 def init_db():
-    if not os.path.exists("data"):
-        os.makedirs("data")
-    
+    # Ensure the directory for the database exists
+    data_dir = os.path.dirname(DB_PATH)
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
+    # Migration: if running from the bundled exe and a legacy DB exists in the project
+    # folder (relative to the source code), copy it to the bundled location.
+    # This ensures that users who upgrade retain their previous data.
+    legacy_db_path = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), "data", "sentinela.db")
+    if getattr(sys, "frozen", False):
+        try:
+            if os.path.exists(legacy_db_path) and (not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0):
+                import shutil
+                shutil.copy2(legacy_db_path, DB_PATH)
+        except Exception:
+            # If migration fails we fall back to creating a fresh DB.
+            pass
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
