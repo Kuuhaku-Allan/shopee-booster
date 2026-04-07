@@ -155,10 +155,11 @@ with st.sidebar:
 
     nav = st.radio(
         "nav",
-        options=["auditoria", "chatbot"],
+        options=["auditoria", "chatbot", "sentinela"],
         format_func=lambda x: (
             "🕵️  Auditoria Pro" if x == "auditoria"
-            else "🤖  Chatbot Concierge"
+            else "🤖  Chatbot Concierge" if x == "chatbot"
+            else "📡  Sentinela"
         ),
         key="nav_partition",
         label_visibility="collapsed",
@@ -1427,9 +1428,89 @@ def _render_faq_output(shop_name: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# PARTIÇÃO III — SENTINELA (3.0.0)
+# ══════════════════════════════════════════════════════════════════════════
+def render_sentinela():
+    st.markdown("""
+    <div class="page-header">
+        <div class="page-header-icon">📡</div>
+        <div>
+            <div class="page-header-title">Sentinela Tracker</div>
+            <div class="page-header-sub">Monitoramento Automático e Alertas de Preços via Telegram</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    import sentinela_db
+    from telegram_service import TelegramSentinela
+
+    sentinela_db.init_db()
+
+    tab1, tab2 = st.tabs(["⚙️ Bot Connection", "🎯 Nicho Monitorado"])
+
+    with tab1:
+        st.markdown("### 🔌 Conectar ao Telegram Server")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            token = st.text_input(
+                "Bot API Token (@BotFather)", 
+                value=sentinela_db.obter_config("telegram_token") or "",
+                type="password"
+            )
+        with col2:
+            chatid = st.text_input(
+                "Chat ID", 
+                value=sentinela_db.obter_config("telegram_chat_id") or ""
+            )
+
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            if st.button("💾 Salvar Credenciais", type="primary", use_container_width=True):
+                sentinela_db.salvar_config("telegram_token", token)
+                sentinela_db.salvar_config("telegram_chat_id", chatid)
+                st.success("✅ Logado e Configurado localmente!")
+        with col_b2:
+            if st.button("🔔 Testar Comunicação", use_container_width=True):
+                ts = TelegramSentinela(token, chatid)
+                if ts.testar_conexao():
+                    st.success("✅ Conexão Efetuada! Verifique o seu celular.")
+                else:
+                    st.error("❌ Falha de Envio: Verifique suas credenciais e não esqueça de clicar /start no bot primeiro!")
+
+        st.markdown("---")
+        st.info("⚠️ O robô roda em background a cada **4 Horas**. Deixe o app minimizado no Tray do Windows.")
+
+    with tab2:
+        st.markdown("### 📈 Configurar Monitoramento de Nicho")
+        
+        add_kw = st.text_input("Adicionar nova Keyword Escaneável (Ex: mochila impermeável notebook)", placeholder="Nome do produto principal...")
+        if st.button("➕ Adicionar Rastreador", type="primary"):
+            if add_kw.strip():
+                sentinela_db.adicionar_keyword(add_kw.strip())
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("##### Keywords em Foco:")
+        lista = sentinela_db.listar_keywords()
+        if not lista:
+            st.warning("Nenhum alvo cadatrado no banco local.")
+        else:
+            for k in lista:
+                col_k1, col_k2 = st.columns([10, 1])
+                with col_k1:
+                    st.markdown(f"**⚡ {k}**")
+                with col_k2:
+                    if st.button("🗑️", key=f"del_{k}"):
+                        sentinela_db.remover_keyword(k)
+                        st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════
 # ROTEAMENTO DE PARTIÇÕES
 # ══════════════════════════════════════════════════════════════════════════
 if st.session_state.nav_partition == "auditoria":
     render_auditoria()
-else:
+elif st.session_state.nav_partition == "chatbot":
     render_chatbot()
+else:
+    render_sentinela()
