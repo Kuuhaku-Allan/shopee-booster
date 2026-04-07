@@ -235,11 +235,26 @@ def iniciar_tray():
     tray_icon.run()
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# ── SENTINELA: Heartbeat em background ──────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
+# ── SENTINELA: Heartbeat em background ────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
 
 SENTINELA_INTERVALO_SEGUNDOS = 4 * 3600  # 4 horas
+
+# Caminho absoluto do log (garante que funcione tanto no dev quanto no .exe)
+if getattr(sys, "frozen", False):
+    _LOG_DIR = os.path.dirname(sys.executable)
+else:
+    _LOG_DIR = os.path.dirname(os.path.abspath(__file__))
+SENTINELA_LOG = os.path.join(_LOG_DIR, "sentinela_log.txt")
+
+def _sentinela_log(msg: str):
+    """Grava uma linha no log da Sentinela com timestamp."""
+    try:
+        with open(SENTINELA_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
 
 def _fetch_competitors_headless(keyword: str) -> list:
     """Busca concorrentes via Playwright em modo 100% headless (sem Streamlit)."""
@@ -339,47 +354,74 @@ asyncio.run(run())
 
 
 def sentinela_heartbeat():
-    """O coração que acorda a cada 4 horas para vigiar o mercado."""
+    """
+    Coração da Sentinela — roda para sempre em background.
+
+    Correções em relação à versão anterior:
+    - NUNCA encerra a thread prematuramente: se não há credenciais ou
+      keywords no momento do arranque, aguarda SENTINELA_INTERVALO_SEGUNDOS
+      e tenta de novo. Assim, configs salvas pelo usuário enquanto o
+      app está aberto são detectadas no próximo ciclo automaticamente.
+    - Recarrega credenciais e keywords a CADA ciclo (não somente na subida).
+    - Usa caminho absoluto para o log.
+    """
     from sentinela_db import init_db, listar_keywords, processar_mudancas_e_alertar
     from telegram_service import TelegramSentinela
 
     init_db()
-    telegram = TelegramSentinela()
+    _sentinela_log("Sentinela thread iniciada.")
 
-    # Se não tiver credenciais, nem tenta
-    if not telegram.token or not telegram.chat_id:
-        return
-
-    keywords = listar_keywords()
-    if not keywords:
-        telegram.enviar_alerta(
-            "Sentinela ativa, mas sem nicho definido.\n"
-            "Cadastre keywords na aba **Sentinela → Nicho Monitorado** no app."
-        )
-        return  # Sai do loop se não tem keywords
-
-    # Notifica que o robô começou
-    telegram.enviar_alerta(
-        f"Sentinela iniciou o ciclo!\n"
-        f"Keywords: {', '.join(keywords[:5])}\n"
-        f"Buscando dados do mercado..."
-    )
+    primeiro_ciclo = True
 
     while True:
-        for kw in keywords:
-            try:
-                resultados = _fetch_competitors_headless(kw)
-                if resultados:
-                    processar_mudancas_e_alertar(kw, resultados, telegram)
-                else:
-                    # Log silencioso em arquivo
-                    with open("sentinela_log.txt", "a", encoding="utf-8") as log:
-                        log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Sem resultados para '{kw}'\n")
-            except Exception as e:
-                with open("sentinela_log.txt", "a", encoding="utf-8") as log:
-                    log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] ERRO: {e}\n")
+        try:
+            # Recarrega credenciais e keywords a cada ciclo
+            telegram = TelegramSentinela()
+            keywords = listar_keywords()
 
-        # Dorme por 4 horas (modo furtivo)
+            if not telegram.token or not telegram.chat_id:
+                _sentinela_log("Sem credenciais Telegram — aguardando próximo ciclo.")
+                time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
+                continue
+
+            if not keywords:
+                _sentinela_log("Sem keywords definidas — aguardando próximo ciclo.")
+                if primeiro_ciclo:
+                    telegram.enviar_alerta(
+                        "Sentinela ativa, mas sem nicho definido.\n"
+                        "Cadastre keywords na aba *Sentinela → Nicho Monitorado* no app."
+                    )
+                time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
+                continue
+
+            if primeiro_ciclo:
+                telegram.enviar_alerta(
+                    f"Sentinela iniciou o ciclo!\n"
+                    f"Keywords: {', '.join(keywords[:5])}\n"
+                    f"Buscando dados do mercado..."
+                )
+
+            _sentinela_log(f"Iniciando ciclo — keywords: {keywords}")
+
+            for kw in keywords:
+                try:
+                    resultados = _fetch_competitors_headless(kw)
+                    if resultados:
+                        processar_mudancas_e_alertar(kw, resultados, telegram)
+                        _sentinela_log(f"OK '{kw}': {len(resultados)} resultados processados.")
+                    else:
+                        _sentinela_log(f"Sem resultados para '{kw}'.")
+                except Exception as e:
+                    _sentinela_log(f"ERRO ao processar '{kw}': {e}")
+
+            _sentinela_log(f"Ciclo concluido. Dormindo {SENTINELA_INTERVALO_SEGUNDOS//3600}h...")
+
+        except Exception as e:
+            _sentinela_log(f"ERRO inesperado no ciclo principal: {e}")
+        finally:
+            primeiro_ciclo = False
+
+        # Dorme por 4 horas antes do próximo ciclo
         time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
 
 
