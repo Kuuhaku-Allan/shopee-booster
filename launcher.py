@@ -15,6 +15,8 @@ import threading
 import webbrowser
 import socket
 import ctypes
+import json
+import subprocess
 
 import pystray
 import webview
@@ -233,6 +235,143 @@ def iniciar_tray():
     tray_icon.run()
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ── SENTINELA: Heartbeat em background ──────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+SENTINELA_INTERVALO_SEGUNDOS = 4 * 3600  # 4 horas
+
+def _fetch_competitors_headless(keyword: str) -> list:
+    """Busca concorrentes via Playwright em modo 100% headless (sem Streamlit)."""
+    kw_encoded = keyword.replace(" ", "+")
+    script = f"""
+import asyncio, json
+from playwright.async_api import async_playwright
+
+async def run():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            locale="pt-BR",
+            viewport={{"width": 1280, "height": 800}},
+            extra_http_headers={{"Accept-Language": "pt-BR,pt;q=0.9"}}
+        )
+        page = await context.new_page()
+        competitors = []
+
+        async def handle_response(response):
+            if response.request.method == "OPTIONS": return
+            url = response.url
+            if ("search_items" in url or "v4/search" in url) and not competitors:
+                try:
+                    data = await response.json()
+                    items = (
+                        data.get("items") or
+                        data.get("data", {{}}).get("items") or
+                        []
+                    )
+                    for item in items[:10]:
+                        b = item.get("item_basic", item)
+                        if b.get("itemid"):
+                            competitors.append({{
+                                "item_id":    b.get("itemid"),
+                                "shop_id":    b.get("shopid"),
+                                "nome":       b.get("name", "")[:65],
+                                "preco":      b.get("price_min", b.get("price", 0)) / 100000,
+                                "avaliações": b.get("cmt_count", 0),
+                                "curtidas":   b.get("liked_count", 0),
+                                "estrelas":   round(b.get("item_rating", {{}}).get("rating_star", 0), 1),
+                            }})
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
+        await page.goto(
+            "https://shopee.com.br/search?keyword={kw_encoded}&sortBy=sales",
+            wait_until="networkidle", timeout=45000
+        )
+        await asyncio.sleep(6)
+        if not competitors:
+            for _ in range(5):
+                await page.mouse.wheel(0, 900)
+                await asyncio.sleep(2)
+            await asyncio.sleep(4)
+        await browser.close()
+        print(json.dumps(competitors))
+
+asyncio.run(run())
+"""
+    # Usa runscript para evitar abrir janela
+    try:
+        if getattr(sys, "frozen", False):
+            import tempfile
+            import io as _io
+            sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace") if hasattr(sys.stdout, "buffer") else sys.stdout
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+                f.write(script)
+                script_path = f.name
+            try:
+                result = subprocess.run(
+                    [sys.executable, "runscript", script_path],
+                    capture_output=True, text=True, timeout=150,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                )
+            finally:
+                try:
+                    os.unlink(script_path)
+                except Exception:
+                    pass
+        else:
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                capture_output=True, text=True, timeout=150
+            )
+
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout.strip())
+        return []
+    except Exception:
+        return []
+
+
+def sentinela_heartbeat():
+    """O coração que acorda a cada 4 horas para vigiar o mercado."""
+    from sentinela_db import (
+        init_db, listar_keywords, processar_mudancas_e_alertar,
+        gerar_ranking_lojas_nicho,
+    )
+    from telegram_service import TelegramSentinela
+
+    init_db()
+    telegram = TelegramSentinela()
+
+    # Se não tiver credenciais, nem tenta
+    if not telegram.token or not telegram.chat_id:
+        return
+
+    sentinela_running = True
+
+    while sentinela_running:
+        keywords = listar_keywords()
+
+        if keywords:
+            for kw in keywords:
+                try:
+                    resultados = _fetch_competitors_headless(kw)
+                    if resultados:
+                        processar_mudancas_e_alertar(kw, resultados, telegram)
+                except Exception:
+                    pass  # Silent fail — o importante é não travar o loop
+
+        # Dorme por 4 horas (modo furtivo)
+        # Usa um break check para poder ser interrompido se necessário
+        time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
+
+
 # ── Entrada principal ─────────────────────────────────────────
 def main():
     # 1. Iniciar Streamlit em background
@@ -240,6 +379,9 @@ def main():
 
     # 2. Verificar atualização silenciosamente
     threading.Thread(target=_checar_e_notificar, daemon=True).start()
+
+    # 2.5. 📡 Iniciar a Sentinela em segundo plano
+    threading.Thread(target=sentinela_heartbeat, daemon=True).start()
 
     # 3. Aguardar Streamlit subir
     if not aguardar_streamlit(timeout=60):

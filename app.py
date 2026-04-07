@@ -1446,7 +1446,7 @@ def render_sentinela():
 
     sentinela_db.init_db()
 
-    tab1, tab2 = st.tabs(["⚙️ Bot Connection", "🎯 Nicho Monitorado"])
+    tab1, tab2, tab3 = st.tabs(["⚙️ Bot Connection", "🎯 Nicho Monitorado", "🏆 Top Lojas"])
 
     with tab1:
         st.markdown("### 🔌 Conectar ao Telegram Server")
@@ -1504,6 +1504,23 @@ def render_sentinela():
                     if st.button("🗑️", key=f"del_{k}"):
                         sentinela_db.remover_keyword(k)
                         st.rerun()
+
+    with tab3:
+        st.markdown("### 🏆 Top 100 Lojas do Nicho")
+        st.caption("Ranking baseado na presença das lojas nos resultados das suas keywords monitoradas. Quanto mais vezes uma loja aparece no topo, mais forte é seu score.")
+
+        ranking = sentinela_db.gerar_ranking_lojas_nicho()
+
+        if not ranking:
+            st.warning("Nenhum dado coletado ainda. A Sentinela precisa rodar pelo menos uma vez para gerar o ranking.")
+        else:
+            df_rank = pd.DataFrame(ranking, columns=["Shop ID", "Presenças", "Preço Médio"])
+            df_display = pd.DataFrame()
+            df_display["🏪 Rank"] = range(1, len(df_rank) + 1)
+            df_display["🆔 Shop ID"] = df_rank["Shop ID"]
+            df_display["🔥 Força (Presenças)"] = df_rank["Presenças"]
+            df_display["💰 Preço Médio"] = df_rank["Preço Médio"].apply(lambda x: f"R$ {x:.2f}")
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════
 # ROTEAMENTO DE PARTIÇÕES
