@@ -1505,6 +1505,47 @@ def render_sentinela():
 
         st.markdown("---")
 
+        # ── Guia de Configuração ──────────────────────────
+        with st.expander("❓ Precisa de ajuda para configurar o Bot?"):
+            st.markdown("""
+## 🛰️ Guia de Configuração: Sentinela no Telegram
+
+### 1️⃣ Criando seu Robô (@BotFather)
+
+1. Abra o Telegram e pesquise por **@BotFather**.
+2. **Atenção:** clique apenas no resultado com o selo azul verificado ✅.
+3. Clique em **Começar** (ou envie `/start`).
+4. Envie o comando `/newbot`.
+5. O BotFather pedirá dois nomes:
+   - **Nome de Exibição:** como o bot aparecerá (Ex: Sentinela da Minha Loja).
+   - **Username:** deve terminar obrigatoriamente com `bot` (Ex: seu_nome_booster_bot).
+
+### 2️⃣ Obtendo seu Token de Acesso (API Token)
+
+- Após criar o bot, o @BotFather enviará o **HTTP API Token** (Ex: `123456:ABC-DEF1234ghIkl-mnopQR`).
+- Copie e cole no campo **"Bot API Token"** abaixo.
+- ⚠️ **Segurança:** nunca compartilhe esse token com ninguém.
+
+### 3️⃣ Descobrindo seu Chat ID Privado
+
+1. No Telegram, pesquise pelo **@userinfobot**.
+2. Clique em **Começar** (Start).
+3. Ele retornará instantaneamente seu **Id** (número de 9 ou 10 dígitos).
+4. Copie e cole no campo **"Chat ID"** abaixo.
+
+### 4️⃣ O Passo Vital: "Acordando" o Robô ⚡
+
+Bots não podem te mandar mensagens se você não falar com eles primeiro.
+
+1. Volte ao @BotFather e **clique no link do bot que você criou** (Ex: t.me/seu_bot_username).
+2. Clique no botão **COMEÇAR** na conversa.
+3. Pronto! Agora o bot pode enviar alertas.
+
+### 🔔 Teste de Conexão
+
+Após preencher os campos, clique em **"Salvar Credenciais"** e depois em **"Testar Comunicação"**. Se receber um foguete (🚀) no Telegram, a Sentinela está ativa!
+""")
+
         # ── Telegram ───────────────────────────────────────
         st.markdown("### 🔌 Conectar ao Telegram Server")
 
