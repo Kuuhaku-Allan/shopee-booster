@@ -58,10 +58,10 @@ def verificar_atualizacao() -> dict:
         versao_nova = data.get("tag_name", "").strip("v")
         notas       = data.get("body", "")
 
-        # Procurar o asset .exe no release
+        # Procurar o asset .zip no release
         url_download = ""
         for asset in data.get("assets", []):
-            if asset.get("name", "").endswith(".exe"):
+            if asset.get("name", "").lower().endswith(".zip"):
                 url_download = asset.get("browser_download_url", "")
                 break
 
@@ -80,17 +80,14 @@ def verificar_atualizacao() -> dict:
 # ── Download + aplicação ──────────────────────────────────────
 def baixar_e_aplicar_atualizacao(url_download: str):
     """
-    Baixa o novo .exe e cria um script .bat que:
-    1. Aguarda este processo encerrar
-    2. Substitui o .exe antigo pelo novo
-    3. Reinicia o app
-    Depois encerra o processo atual.
+    Baixa o .zip da nova versão, extrai e sincroniza a pasta.
     """
-    try:
-        import tkinter as tk
-        from tkinter import ttk
+    import zipfile
+    import tkinter as tk
+    from tkinter import ttk, messagebox
 
-        # Janela de progresso
+    # 1. Download
+    try:
         root = tk.Tk()
         root.title("Atualizando Shopee Booster...")
         root.geometry("400x120")
@@ -103,40 +100,68 @@ def baixar_e_aplicar_atualizacao(url_download: str):
         barra.start()
         root.update()
 
-        # Baixar arquivo
-        tmp_dir   = tempfile.mkdtemp()
-        nome_exe  = url_download.split("/")[-1]
-        caminho_novo = os.path.join(tmp_dir, nome_exe)
+        tmp_dir = tempfile.mkdtemp()
+        nome_zip = url_download.split("/")[-1]
+        caminho_zip = os.path.join(tmp_dir, nome_zip)
 
         with requests.get(url_download, stream=True, timeout=120) as resp:
             resp.raise_for_status()
-            with open(caminho_novo, "wb") as f:
+            with open(caminho_zip, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     f.write(chunk)
                     root.update()
 
         barra.stop()
         root.destroy()
+    except Exception as e:
+        messagebox.showerror("Erro no download", f"Não foi possível baixar:\n{e}")
+        return
 
-        # Caminho do exe atual
-        caminho_atual = sys.executable if getattr(sys, "frozen", False) else ""
+    # 2. Extração
+    try:
+        root = tk.Tk()
+        root.title("Extraindo Shopee Booster...")
+        root.geometry("400x120")
+        root.resizable(False, False)
+        root.eval("tk::PlaceWindow . center")
+        tk.Label(root, text="📦 Extraindo arquivos, aguarde...").pack(pady=10)
+        barra = ttk.Progressbar(root, length=360, mode="indeterminate")
+        barra.pack(padx=20)
+        barra.start()
+        root.update()
 
-        if not caminho_atual or not caminho_atual.endswith(".exe"):
-            # Modo dev: só avisar e abrir pasta
-            import subprocess
-            subprocess.Popen(["explorer", tmp_dir])
+        extract_dir = os.path.join(tmp_dir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
+        with zipfile.ZipFile(caminho_zip, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+
+        barra.stop()
+        root.destroy()
+    except Exception as e:
+        messagebox.showerror("Erro na extração", f"Não foi possível extrair arquivos:\n{e}")
+        return
+
+    # 3. Aplicação
+    try:
+        if getattr(sys, "frozen", False):
+            app_dir = os.path.dirname(sys.executable)
+            caminho_atual_exe = sys.executable
+        else:
+            subprocess.Popen(["explorer", extract_dir])
             return
 
-        # Criar script bat que substitui o exe e reinicia
         bat_path = os.path.join(tmp_dir, "update.bat")
+        # Script BAT para sincronização via robocopy
         bat_conteudo = (
             "@echo off\n"
-            "timeout /t 2 /nobreak > nul\n"
-            f'copy /y "{caminho_novo}" "{caminho_atual}"\n'
-            f'start "" "{caminho_atual}"\n'
+            "echo Aplicando atualizacao... Aguarde 5 segundos.\n"
+            "timeout /t 5 /nobreak > nul\n"
+            f'robocopy "{extract_dir}" "{app_dir}" /E /v /it /is /XD data logs\n'
+            "echo Reiniciando...\n"
+            f'start "" "{caminho_atual_exe}"\n'
             "del \"%~f0\"\n"
         )
-        with open(bat_path, "w") as f:
+        with open(bat_path, "w", encoding="cp1252") as f:
             f.write(bat_conteudo)
 
         subprocess.Popen(
@@ -146,9 +171,4 @@ def baixar_e_aplicar_atualizacao(url_download: str):
         os._exit(0)
 
     except Exception as e:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror("Erro na atualização", f"Não foi possível atualizar:\n{e}")
-        root.destroy()
+        messagebox.showerror("Erro na aplicação", f"Erro ao aplicar atualização:\n{e}")
