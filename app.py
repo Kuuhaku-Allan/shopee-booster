@@ -690,7 +690,7 @@ def show_product_linking_dialog():
     for i, prod in enumerate(shop_prods[:20]):
         with cols[i % 4]:
             if prod.get("image"):
-                st.image(prod["image"], use_container_width=True)
+                st.image(prod["image"], width="stretch")
             st.caption(prod["name"][:35] + "..." if len(prod["name"]) > 35 else prod["name"])
             if st.button("Selecionar", key=f"btn_vinc_prod_{i}"):
                 st.session_state.selected_product = prod
@@ -1457,7 +1457,7 @@ def render_sentinela():
             placeholder="https://shopee.com.br/nome_da_loja",
             help="A Sentinela usa esta URL para identificar sua identidade e sugerir keywords automaticamente."
         )
-        if st.button("💾 Salvar Loja Mestra", type="primary", use_container_width=True):
+        if st.button("💾 Salvar Loja Mestra", type="primary", width="stretch"):
             if loja_atual.strip() and "shopee" in loja_atual.lower():
                 sentinela_db.configurar_loja_mestre(loja_atual.strip())
                 st.success("✅ Loja mestra configurada! A Sentinela agora sabe quem é você.")
@@ -1470,7 +1470,7 @@ def render_sentinela():
         st.markdown("### 🔄 Sincronizar com Auditoria")
         st.caption("Se você já carregou sua loja na Auditoria, clique abaixo para extrair automaticamente as keywords mais fortes dos seus produtos.")
 
-        if st.button("🔌 Sincronizar Produtos → Keywords", type="primary", use_container_width=True):
+        if st.button("🔌 Sincronizar Produtos → Keywords", type="primary", width="stretch"):
             produtos = st.session_state.get("shop_produtos") or []
             if produtos:
                 # Extrai palavras-chave dos nomes dos produtos
@@ -1523,12 +1523,12 @@ def render_sentinela():
 
         col_b1, col_b2 = st.columns(2)
         with col_b1:
-            if st.button("💾 Salvar Credenciais", type="primary", use_container_width=True):
+            if st.button("💾 Salvar Credenciais", type="primary", width="stretch"):
                 sentinela_db.salvar_config("telegram_token", token)
                 sentinela_db.salvar_config("telegram_chat_id", chatid)
                 st.success("✅ Logado e Configurado localmente!")
         with col_b2:
-            if st.button("🔔 Testar Comunicação", use_container_width=True):
+            if st.button("🔔 Testar Comunicação", width="stretch"):
                 ts = TelegramSentinela(token, chatid)
                 if ts.testar_conexao():
                     st.success("✅ Conexão Efetuada! Verifique o seu celular.")
@@ -1574,7 +1574,7 @@ def render_sentinela():
         if tendencia:
             df_trend = pd.DataFrame(tendencia, columns=["dia", "preco_medio"])
             df_trend["dia"] = pd.to_datetime(df_trend["dia"])
-            st.line_chart(df_trend.set_index("dia")["preco_medio"], use_container_width=True)
+            st.line_chart(df_trend.set_index("dia")["preco_medio"], width="stretch")
 
             c1, c2, c3 = st.columns(3)
             preco_inicio = df_trend.iloc[0]["preco_medio"]
@@ -1613,7 +1613,7 @@ def render_sentinela():
                     for r in ranking
                 ]
 
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
+            st.dataframe(df_display, width="stretch", hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════
 # ROTEAMENTO DE PARTIÇÕES

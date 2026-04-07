@@ -353,10 +353,17 @@ def sentinela_heartbeat():
     keywords = listar_keywords()
     if not keywords:
         telegram.enviar_alerta(
-            "📡 Sentinela ativa, mas sem nicho definido.\n"
+            "Sentinela ativa, mas sem nicho definido.\n"
             "Cadastre keywords na aba **Sentinela → Nicho Monitorado** no app."
         )
         return  # Sai do loop se não tem keywords
+
+    # Notifica que o robô começou
+    telegram.enviar_alerta(
+        f"Sentinela iniciou o ciclo!\n"
+        f"Keywords: {', '.join(keywords[:5])}\n"
+        f"Buscando dados do mercado..."
+    )
 
     while True:
         for kw in keywords:
@@ -364,8 +371,13 @@ def sentinela_heartbeat():
                 resultados = _fetch_competitors_headless(kw)
                 if resultados:
                     processar_mudancas_e_alertar(kw, resultados, telegram)
-            except Exception:
-                pass  # Silent fail — o importante é não travar o loop
+                else:
+                    # Log silencioso em arquivo
+                    with open("sentinela_log.txt", "a", encoding="utf-8") as log:
+                        log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Sem resultados para '{kw}'\n")
+            except Exception as e:
+                with open("sentinela_log.txt", "a", encoding="utf-8") as log:
+                    log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] ERRO: {e}\n")
 
         # Dorme por 4 horas (modo furtivo)
         time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
