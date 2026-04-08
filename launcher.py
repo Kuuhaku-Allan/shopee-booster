@@ -16,7 +16,8 @@ import webbrowser
 import socket
 import ctypes
 import json
-import subprocess
+import importlib  # Para importação dinâmica
+import pystray
 
 import pystray
 import webview
@@ -53,6 +54,7 @@ if getattr(sys, "frozen", False):
 streamlit_proc = None
 janela_webview = None
 tray_icon = None
+log_file = None  # Inicialização global para o linter
 
 
 # ── Utilidades ────────────────────────────────────────────────
@@ -461,11 +463,19 @@ if __name__ == "__main__":
     
     # Interceptar a chamada "run" para lançar o streamlit embutido
     if len(sys.argv) > 1 and sys.argv[1] == "run":
-        try:
-            import streamlit.web.cli as stcli
-        except ImportError:
-            import streamlit.cli as stcli
-        sys.exit(stcli.main())
+        # Usamos importlib para silenciar o linter e manter compatibilidade total
+        stcli = None
+        for mod_name in ["streamlit.web.cli", "streamlit.cli"]:
+            try:
+                stcli = importlib.import_module(mod_name)
+                break
+            except ImportError:
+                continue
+        
+        if stcli:
+            sys.exit(stcli.main())
+        else:
+            sys.exit(1)
     
     # 🚀 NOVO: Handler para rodar scripts em background (Playwright)
     # Isso evita que o ShopeeBooster.exe abra uma nova janela ao tentar rodar um script

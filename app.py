@@ -1253,12 +1253,14 @@ def _render_attachment_area():
                 st.session_state.chat_attachment_previews = [p for p in att_previews if p is not None]
 
                 # Preview dos arquivos selecionados
-                if att_previews:
-                    prev_cols = st.columns(min(len([p for p in att_previews if p]), 4))
+                valid_previews = [p for p in att_previews if p is not None]
+                if valid_previews:
+                    num_cols = min(len(valid_previews), 4)
+                    prev_cols = st.columns(num_cols)
                     pi = 0
                     for fi, fp in enumerate(att_previews):
                         if fp is not None:
-                            with prev_cols[pi % len(prev_cols)]:
+                            with prev_cols[pi % num_cols]:
                                 st.image(fp, width=180,
                                          caption=f"{'🎬' if att_types[fi]=='video' else '🖼️'} {uploaded[fi].name[:20]}")
                             pi += 1
