@@ -283,6 +283,10 @@ def get_diagnostics() -> dict:
         "n_configs":      0,
         "ultima_coleta":  None,
         "ultimas_linhas_log": [],
+        "telegram_token": False,
+        "telegram_token_len": 0,
+        "telegram_chat_id": False,
+        "telegram_chat_id_masked": "",
     }
 
     try:
@@ -302,7 +306,25 @@ def get_diagnostics() -> dict:
                 "SELECT MAX(data_verificacao) FROM historico_precos"
             ).fetchone()
             diag["ultima_coleta"] = res[0] if res else None
+
+            # Credenciais Telegram
+            tok_row = conn.execute(
+                "SELECT valor FROM config_sentinela WHERE chave='telegram_token'"
+            ).fetchone()
+            cid_row = conn.execute(
+                "SELECT valor FROM config_sentinela WHERE chave='telegram_chat_id'"
+            ).fetchone()
             conn.close()
+
+            tok_val = (tok_row[0] or "").strip() if tok_row else ""
+            cid_val = (cid_row[0] or "").strip() if cid_row else ""
+
+            diag["telegram_token"]       = bool(tok_val)
+            diag["telegram_token_len"]   = len(tok_val)
+            diag["telegram_chat_id"]     = bool(cid_val)
+            diag["telegram_chat_id_masked"] = (
+                cid_val[:4] + "****" + cid_val[-2:] if len(cid_val) > 6 else cid_val
+            )
     except Exception as e:
         diag["db_error"] = str(e)
 

@@ -18,10 +18,9 @@ import ctypes
 import json
 import importlib  # Para importação dinâmica
 import pystray
-
-import pystray
 import webview
 from PIL import Image, ImageDraw
+import queue
 
 from updater import verificar_atualizacao, VERSAO_ATUAL
 
@@ -57,6 +56,16 @@ streamlit_proc = None
 janela_webview = None
 tray_icon = None
 log_file = None  # Inicialização global para o linter
+
+# ── Sinal para acordar o heartbeat quando credenciais mudam ───
+_sentinela_wake = queue.Queue()
+
+def wake_sentinela():
+    """Acorda a thread do heartbeat para que releia credenciais do DB."""
+    try:
+        _sentinela_wake.put_nowait("wake")
+    except Exception:
+        pass
 
 
 # ── Utilidades ────────────────────────────────────────────────
@@ -390,11 +399,21 @@ asyncio.run(run())
         return []
 
 
+def _sentinela_sleep(segundos: int):
+    """Sleep que pode ser interrompido pelo sinal de wake."""
+    try:
+        _sentinela_wake.get(timeout=segundos)
+        _sentinela_log("[wake] Heartbeat acordado antes do previsto.")
+    except Exception:
+        pass  # Timeout normal
+
+
 def sentinela_heartbeat():
     """
     Coração da Sentinela — loop infinito em daemon thread.
     Recarrega credenciais e keywords a CADA ciclo.
     Nunca termina prematuramente.
+    Quando credenciais faltam, acorda a cada 60s em vez de 4h.
     """
     from sentinela_db import init_db, listar_keywords, processar_mudancas_e_alertar
     from telegram_service import TelegramSentinela
@@ -413,8 +432,12 @@ def sentinela_heartbeat():
             keywords = listar_keywords()
 
             if not telegram.token or not telegram.chat_id:
-                _sentinela_log("Sem credenciais Telegram — aguardando próximo ciclo.")
-                time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
+                _sentinela_log(
+                    f"Sem credenciais Telegram — token={'presente' if telegram.token else 'AUSENTE'}, "
+                    f"chat_id={'presente' if telegram.chat_id else 'AUSENTE'}. "
+                    f"Rechecando em 60s."
+                )
+                _sentinela_sleep(60)
                 continue
 
             if not keywords:
@@ -424,7 +447,7 @@ def sentinela_heartbeat():
                         "Sentinela ativa, mas sem nicho definido.\n"
                         "Cadastre keywords na aba *Sentinela → Nicho Monitorado* no app."
                     )
-                time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
+                _sentinela_sleep(SENTINELA_INTERVALO_SEGUNDOS)
                 continue
 
             if primeiro_ciclo:
@@ -464,7 +487,7 @@ def sentinela_heartbeat():
         finally:
             primeiro_ciclo = False
 
-        time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
+        _sentinela_sleep(SENTINELA_INTERVALO_SEGUNDOS)
 
 
 # ── Entrada principal ─────────────────────────────────────────

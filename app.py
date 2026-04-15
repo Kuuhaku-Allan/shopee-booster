@@ -1552,9 +1552,22 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             if st.button("💾 Salvar Credenciais", type="primary", width="stretch"):
-                sentinela_db.salvar_config("telegram_token",  token)
-                sentinela_db.salvar_config("telegram_chat_id", chatid)
-                st.success("✅ Credenciais salvas!")
+                token_s  = token.strip()
+                chatid_s = chatid.strip()
+                if not token_s:
+                    st.warning("⚠️ O token não pode estar vazio.")
+                elif not chatid_s:
+                    st.warning("⚠️ O Chat ID não pode estar vazio.")
+                else:
+                    sentinela_db.salvar_config("telegram_token",  token_s)
+                    sentinela_db.salvar_config("telegram_chat_id", chatid_s)
+                    st.success("✅ Credenciais salvas!")
+                    # Acorda o heartbeat para ele reler agora
+                    try:
+                        from launcher import wake_sentinela
+                        wake_sentinela()
+                    except Exception:
+                        pass
         with col_b2:
             if st.button("🔔 Testar Comunicação", width="stretch"):
                 ts = TelegramSentinela(token, chatid)
@@ -1741,6 +1754,33 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
             log_existe = "✅ Existe" if diag["ultimas_linhas_log"] else "📭 Vazio/não criado"
             st.caption(log_existe)
 
+        # ── Credenciais Telegram ────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### 🔑 Credenciais Telegram")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            tok_ok = diag["telegram_token"]
+            st.markdown(f"Bot API Token: {'✅ presente' if tok_ok else '❌ AUSENTE'}")
+            if tok_ok:
+                st.caption(f"Comprimento: {diag['telegram_token_len']} caracteres")
+            else:
+                st.caption("Token não definido ou vazio")
+        with cc2:
+            cid_ok = diag["telegram_chat_id"]
+            st.markdown(f"Chat ID: {'✅ presente' if cid_ok else '❌ AUSENTE'}")
+            if cid_ok:
+                st.caption(f"ID: {diag['telegram_chat_id_masked']}")
+            else:
+                st.caption("Chat ID não definido ou vazio")
+
+        if not tok_ok or not cid_ok:
+            st.warning(
+                "⚠️ Credenciais incompletas — o heartbeat está pulando os ciclos. "
+                "Preencha e salve na aba **⚙️ Bot Connection**."
+            )
+        else:
+            st.success("✅ Credenciais válidas — o heartbeat conseguirá enviar alertas.")
+
         # ── Contadores do DB ────────────────────────────────────
         st.markdown("---")
         st.markdown("#### 🗄️ Estado do Banco")
@@ -1753,8 +1793,6 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
         if diag["n_historico"] == 0:
             st.warning(
                 "⚠️ Banco vazio — a Sentinela ainda não salvou nenhum dado nesta instalação. "
-                "Isso confirma o problema de **banco duplicado**: se você já viu dados antes, "
-                "eles estavam em outra pasta (modo desenvolvimento). "
                 "Use **▶️ Rodar Sentinela Agora** na aba Bot Connection para popular este banco."
             )
         else:
