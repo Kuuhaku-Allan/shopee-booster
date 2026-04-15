@@ -1483,28 +1483,75 @@ def render_sentinela():
         if st.button("🔌 Sincronizar Produtos → Keywords", type="primary", width="stretch"):
             produtos = st.session_state.get("shop_produtos") or []
             if produtos:
-                from collections import Counter
                 import unicodedata
+                from collections import Counter
+
+                # Blacklist estendida — adjetivos/genéricos que não devem
+                # virar keywords independentes
                 palavras_inuteis = {
                     "de","da","do","das","dos","com","e","ou","em","no","na",
                     "para","por","a","o","um","uma","que","ao","aos","à","às",
                     "kit","pro","nova","novo","2025","2026",
+                    # adjetivos e qualificadores comuns
+                    "infantil","juvenil","feminina","feminino",
+                    "masculino","masculina","adulto","adulto",
+                    "rosa","preto","preta","branco","branca",
+                    "azul","verde","vermelho","amarelo","grande",
+                    "pequeno","pequena","medio","media",
+                    "reforçada","reforcado","reforcada",
+                    "resistente","impermeavel","lisa",
+                    "original","importado","importada",
+                    "premium","luxo","barato","barata",
+                    "novo","nova","usado","usada",
+                    "promocao","oferta","frete","gratis",
+                    "2024","2025","2026","2027",
                 }
+
+                def _clean(word: str) -> str:
+                    return "".join(
+                        c for c in unicodedata.normalize("NFD", word)
+                        if unicodedata.category(c) != "Mn"
+                    ).lower()
+
+                # 1. Contar substantivos por produto
                 contagem = Counter()
                 for prod in produtos:
-                    nome = prod.get("name","").lower()
-                    nome_norm = unicodedata.normalize("NFD", nome)
-                    for palavra in nome_norm.split():
-                        p = "".join(
-                            c for c in unicodedata.normalize("NFD", palavra)
-                            if unicodedata.category(c) != "Mn"
-                        ).lower()
+                    nome = prod.get("name", "").lower()
+                    palavras = [_clean(w) for w in nome.split()]
+                    for p in palavras:
                         if len(p) > 3 and p not in palavras_inuteis:
                             contagem[p] += 1
-                kws = [w for w, _ in contagem.most_common(5) if len(w) > 3]
+
+                if not contagem:
+                    st.warning("Nenhum substantivo forte encontrado nos produtos.")
+                    st.rerun()
+
+                # 2. O substantivo mais frequente = núcleo do nicho
+                nucleo, freq_nucleo = contagem.most_common(1)[0]
+
+                # 3. Construir keywords: só o núcleo + combinações
+                #    que contenham o nucleo (descarta palavras soltas sem sentido)
+                kws = [nucleo]
+                for prod in produtos:
+                    nome = prod.get("name", "").lower()
+                    palavras = [_clean(w) for w in nome.split()]
+                    # Procura bigramas que contenham o nucleo
+                    for i, p in enumerate(palavras):
+                        if p == nucleo:
+                            # palavra anterior
+                            if i > 0 and len(palavras[i-1]) > 3 and palavras[i-1] not in palavras_inuteis:
+                                kws.append(f"{palavras[i-1]} {nucleo}")
+                            # palavra posterior
+                            if i < len(palavras)-1 and len(palavras[i+1]) > 3 and palavras[i+1] not in palavras_inuteis:
+                                kws.append(f"{nucleo} {palavras[i+1]}")
+
+                # Deduplicar e limitar
+                kws = list(dict.fromkeys(kws))[:8]
+
                 for kw in kws:
                     sentinela_db.adicionar_keyword(kw)
-                st.success(f"✅ {len(kws)} keywords extraídas: {', '.join(kws)}")
+
+                st.success(f"✅ {len(kws)} keywords extraídas (núcleo: **{nucleo}**, apareceu {freq_nucleo}x): {', '.join(kws)}")
                 st.rerun()
             else:
                 st.warning("⚠️ Nenhum produto carregado. Vá para Auditoria Pro primeiro.")
@@ -1655,7 +1702,14 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
 
         st.markdown("---")
         st.markdown("##### Keywords em Foco:")
+
         lista = sentinela_db.listar_keywords()
+        if lista:
+            if st.button("🗑️ Limpar todas as keywords", key="btn_clear_all_kw"):
+                for k in lista:
+                    sentinela_db.remover_keyword(k)
+                st.rerun()
+
         if not lista:
             st.warning("Nenhuma keyword cadastrada.")
         else:
@@ -1686,7 +1740,12 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
         if tendencia:
             df_trend = pd.DataFrame(tendencia, columns=["dia", "preco_medio"])
             df_trend["dia"] = pd.to_datetime(df_trend["dia"])
-            st.line_chart(df_trend.set_index("dia")["preco_medio"], width="stretch")
+
+            try:
+                st.line_chart(df_trend.set_index("dia")["preco_medio"], width="stretch")
+            except Exception:
+                st.warning("Não foi possível renderizar o gráfico nesta build. Exibindo tabela de tendência.")
+                st.dataframe(df_trend, width="stretch", hide_index=True)
 
             c1, c2, c3 = st.columns(3)
             preco_inicio = df_trend.iloc[0]["preco_medio"]
