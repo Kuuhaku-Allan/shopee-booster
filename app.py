@@ -1448,153 +1448,203 @@ def render_sentinela():
 
     sentinela_db.init_db()
 
-    tab1, tab2, tab3 = st.tabs(["⚙️ Bot Connection", "🎯 Nicho Monitorado", "🏆 Top Lojas"])
+    # ── 4 abas: adicionamos "🔧 Status" ──────────────────────
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "⚙️ Bot Connection",
+        "🎯 Nicho Monitorado",
+        "🏆 Top Lojas",
+        "🔧 Status & Diagnóstico",
+    ])
 
+    # ══════════════════════════════════════════════════════════
+    # TAB 1 — Bot Connection
+    # ══════════════════════════════════════════════════════════
     with tab1:
-        # ── Loja Mestra ─────────────────────────────────────
+        # ── Loja Mestra ───────────────────────────────────────
         st.markdown("### 🔗 Minha Loja Principal")
         loja_atual = st.text_input(
             "URL da sua Shopee",
             value=sentinela_db.obter_loja_mestra() or "",
             placeholder="https://shopee.com.br/nome_da_loja",
-            help="A Sentinela usa esta URL para identificar sua identidade e sugerir keywords automaticamente."
         )
         if st.button("💾 Salvar Loja Mestra", type="primary", width="stretch"):
             if loja_atual.strip() and "shopee" in loja_atual.lower():
                 sentinela_db.configurar_loja_mestre(loja_atual.strip())
-                st.success("✅ Loja mestra configurada! A Sentinela agora sabe quem é você.")
+                st.success("✅ Loja mestra configurada!")
             else:
                 st.error("Insira uma URL válida da Shopee.")
 
         st.markdown("---")
 
-        # ── Sincronizar keywords da Auditoria ───────────────
+        # ── Sincronizar keywords da Auditoria ─────────────────
         st.markdown("### 🔄 Sincronizar com Auditoria")
-        st.caption("Se você já carregou sua loja na Auditoria, clique abaixo para extrair automaticamente as keywords mais fortes dos seus produtos.")
+        st.caption("Extrai automaticamente as keywords dos produtos carregados na Auditoria.")
 
         if st.button("🔌 Sincronizar Produtos → Keywords", type="primary", width="stretch"):
             produtos = st.session_state.get("shop_produtos") or []
             if produtos:
-                # Extrai palavras-chave dos nomes dos produtos
                 from collections import Counter
+                import unicodedata
                 palavras_inuteis = {
-                    "de", "da", "do", "das", "dos", "com", "e", "ou", "em", "no", "na",
-                    "para", "por", "a", "o", "um", "uma", "que", "ao", "aos", "à", "às",
-                    "kit", "pro", "nova", "novo", "2025", "2026"
+                    "de","da","do","das","dos","com","e","ou","em","no","na",
+                    "para","por","a","o","um","uma","que","ao","aos","à","às",
+                    "kit","pro","nova","novo","2025","2026",
                 }
                 contagem = Counter()
                 for prod in produtos:
-                    nome = prod.get("name", "").lower()
-                    # Normaliza caracteres
-                    import unicodedata
-                    nome_norm = unicodedata.normalize("NFD", nome) if isinstance(nome, str) else nome
+                    nome = prod.get("name","").lower()
+                    nome_norm = unicodedata.normalize("NFD", nome)
                     for palavra in nome_norm.split():
-                        palavra_limpa = unicodedata.normalize("NFD", palavra)
-                        palavra_ascii = "".join(c for c in palavra_limpa if unicodedata.category(c) != "Mn").lower()
-                        if len(palavra_ascii) > 3 and palavra_ascii not in palavras_inuteis:
-                            contagem[palavra_ascii] += 1
-
-                keywords_extraidas = [w for w, _ in contagem.most_common(5)]
-                adicionadas = 0
-                for kw in keywords_extraidas:
-                    if len(kw) > 3:
-                        sentinela_db.adicionar_keyword(kw)
-                        adicionadas += 1
-                st.success(f"✅ {adicionadas} keywords extraídas dos seus produtos: {', '.join(keywords_extraidas)}")
+                        p = "".join(
+                            c for c in unicodedata.normalize("NFD", palavra)
+                            if unicodedata.category(c) != "Mn"
+                        ).lower()
+                        if len(p) > 3 and p not in palavras_inuteis:
+                            contagem[p] += 1
+                kws = [w for w, _ in contagem.most_common(5) if len(w) > 3]
+                for kw in kws:
+                    sentinela_db.adicionar_keyword(kw)
+                st.success(f"✅ {len(kws)} keywords extraídas: {', '.join(kws)}")
                 st.rerun()
             else:
-                st.warning("⚠️ Nenhum produto carregado da Auditoria. Carregue sua loja na aba **Auditoria Pro** primeiro.")
+                st.warning("⚠️ Nenhum produto carregado. Vá para Auditoria Pro primeiro.")
 
         st.markdown("---")
 
-        # ── Guia de Configuração ──────────────────────────
-        with st.expander("❓ Precisa de ajuda para configurar o Bot?"):
+        # ── Guia de Configuração ──────────────────────────────
+        with st.expander("❓ Como configurar o Bot Telegram"):
             st.markdown("""
-## 🛰️ Guia de Configuração: Sentinela no Telegram
+## 🛰️ Guia de Configuração — Telegram
 
-### 1️⃣ Criando seu Robô (@BotFather)
+### 1️⃣ Crie o bot (@BotFather)
+1. Abra o Telegram e busque **@BotFather** (selo verificado ✅).
+2. Envie `/newbot` e siga as instruções.
+3. Copie o **HTTP API Token** gerado.
 
-1. Abra o Telegram e pesquise por **@BotFather**.
-2. **Atenção:** clique apenas no resultado com o selo azul verificado ✅.
-3. Clique em **Começar** (ou envie `/start`).
-4. Envie o comando `/newbot`.
-5. O BotFather pedirá dois nomes:
-   - **Nome de Exibição:** como o bot aparecerá (Ex: Sentinela da Minha Loja).
-   - **Username:** deve terminar obrigatoriamente com `bot` (Ex: seu_nome_booster_bot).
+### 2️⃣ Descubra seu Chat ID
+1. Busque **@userinfobot** no Telegram.
+2. Envie qualquer mensagem — ele responde com seu `Id`.
 
-### 2️⃣ Obtendo seu Token de Acesso (API Token)
+### 3️⃣ "Acorde" o bot
+1. Acesse `t.me/seu_bot_username` e clique em **COMEÇAR**.
+   Sem isso, o bot não consegue te mandar mensagens.
 
-- Após criar o bot, o @BotFather enviará o **HTTP API Token** (Ex: `123456:ABC-DEF1234ghIkl-mnopQR`).
-- Copie e cole no campo **"Bot API Token"** abaixo.
-- ⚠️ **Segurança:** nunca compartilhe esse token com ninguém.
-
-### 3️⃣ Descobrindo seu Chat ID Privado
-
-1. No Telegram, pesquise pelo **@userinfobot**.
-2. Clique em **Começar** (Start).
-3. Ele retornará instantaneamente seu **Id** (número de 9 ou 10 dígitos).
-4. Copie e cole no campo **"Chat ID"** abaixo.
-
-### 4️⃣ O Passo Vital: "Acordando" o Robô ⚡
-
-Bots não podem te mandar mensagens se você não falar com eles primeiro.
-
-1. Volte ao @BotFather e **clique no link do bot que você criou** (Ex: t.me/seu_bot_username).
-2. Clique no botão **COMEÇAR** na conversa.
-3. Pronto! Agora o bot pode enviar alertas.
-
-### 🔔 Teste de Conexão
-
-Após preencher os campos, clique em **"Salvar Credenciais"** e depois em **"Testar Comunicação"**. Se receber um foguete (🚀) no Telegram, a Sentinela está ativa!
+### 4️⃣ Teste
+Preencha os campos abaixo, clique em **Salvar** e depois **Testar**.
+Se receber um 🚀 no Telegram, a Sentinela está ativa!
 """)
 
-        # ── Telegram ───────────────────────────────────────
-        st.markdown("### 🔌 Conectar ao Telegram Server")
-
+        # ── Credenciais Telegram ──────────────────────────────
+        st.markdown("### 🔌 Conectar ao Telegram")
         col1, col2 = st.columns(2)
         with col1:
             token = st.text_input(
                 "Bot API Token (@BotFather)",
                 value=sentinela_db.obter_config("telegram_token") or "",
-                type="password"
+                type="password",
             )
         with col2:
             chatid = st.text_input(
                 "Chat ID",
-                value=sentinela_db.obter_config("telegram_chat_id") or ""
+                value=sentinela_db.obter_config("telegram_chat_id") or "",
             )
 
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             if st.button("💾 Salvar Credenciais", type="primary", width="stretch"):
-                sentinela_db.salvar_config("telegram_token", token)
+                sentinela_db.salvar_config("telegram_token",  token)
                 sentinela_db.salvar_config("telegram_chat_id", chatid)
-                st.success("✅ Logado e Configurado localmente!")
+                st.success("✅ Credenciais salvas!")
         with col_b2:
             if st.button("🔔 Testar Comunicação", width="stretch"):
                 ts = TelegramSentinela(token, chatid)
                 if ts.testar_conexao():
-                    st.success("✅ Conexão Efetuada! Verifique o seu celular.")
+                    st.success("✅ Mensagem enviada! Verifique o Telegram.")
                 else:
-                    st.error("❌ Falha de Envio: Verifique suas credenciais e não esqueça de clicar /start no bot primeiro!")
+                    st.error("❌ Falha. Verifique token, Chat ID e se clicou /start no bot.")
 
         st.markdown("---")
-        st.info("⚠️ O robô roda em background a cada **4 Horas**. Deixe o app minimizado no Tray do Windows.")
 
+        # ── ▶️ Rodar Sentinela Agora ───────────────────────────
+        st.markdown("### ▶️ Executar Ciclo Agora")
+        st.caption(
+            "Roda um ciclo completo imediatamente — sem esperar as 4h. "
+            "Útil para testar se tudo está funcionando."
+        )
+
+        if st.button("🚀 Rodar Sentinela Agora", type="primary", width="stretch",
+                     key="btn_rodar_sentinela_agora"):
+            keywords = sentinela_db.listar_keywords()
+            if not keywords:
+                st.warning("⚠️ Nenhuma keyword cadastrada. Adicione na aba **Nicho Monitorado** primeiro.")
+            else:
+                token_val  = sentinela_db.obter_config("telegram_token")
+                chatid_val = sentinela_db.obter_config("telegram_chat_id")
+                if not token_val or not chatid_val:
+                    st.warning("⚠️ Configure e salve as credenciais do Telegram antes.")
+                else:
+                    telegram = TelegramSentinela(token_val, chatid_val)
+                    from backend_core import fetch_competitors_intercept
+
+                    resultados_total = 0
+                    erros = []
+
+                    for kw in keywords:
+                        with st.spinner(f"🔍 Buscando concorrentes para '{kw}'... (30-60s)"):
+                            try:
+                                resultados = fetch_competitors_intercept(kw)
+                                if resultados:
+                                    sentinela_db.processar_mudancas_e_alertar(kw, resultados, telegram)
+                                    resultados_total += len(resultados)
+                                    st.success(f"✅ '{kw}' → {len(resultados)} concorrentes processados.")
+                                else:
+                                    erros.append(f"'{kw}': nenhum resultado retornado.")
+                                    st.warning(f"⚠️ '{kw}': nenhum resultado encontrado.")
+                            except Exception as e:
+                                erros.append(f"'{kw}': {e}")
+                                st.error(f"❌ '{kw}': {e}")
+
+                    if resultados_total > 0:
+                        st.success(
+                            f"🎉 Ciclo concluído! {resultados_total} entradas salvas no banco. "
+                            f"Veja a aba **Top Lojas** para o ranking atualizado."
+                        )
+                        telegram.enviar_alerta(
+                            f"✅ Ciclo manual concluído!\n"
+                            f"{resultados_total} entradas coletadas para {len(keywords)} keyword(s)."
+                        )
+                    elif erros:
+                        st.error(
+                            "O ciclo terminou sem dados. Verifique a aba **🔧 Status** "
+                            "para ver o log detalhado."
+                        )
+
+        st.markdown("---")
+        st.info("⚠️ O ciclo automático roda a cada **4 horas** em background. Deixe o app minimizado no Tray.")
+
+    # ══════════════════════════════════════════════════════════
+    # TAB 2 — Nicho Monitorado
+    # ══════════════════════════════════════════════════════════
     with tab2:
         st.markdown("### 📈 Configurar Monitoramento de Nicho")
-        
-        add_kw = st.text_input("Adicionar nova Keyword Escaneável (Ex: mochila impermeável notebook)", placeholder="Nome do produto principal...")
-        if st.button("➕ Adicionar Rastreador", type="primary"):
+
+        add_kw = st.text_input(
+            "Nova Keyword",
+            placeholder="Ex: mochila impermeável notebook",
+            key="input_add_kw",
+        )
+        if st.button("➕ Adicionar Rastreador", type="primary", key="btn_add_kw"):
             if add_kw.strip():
                 sentinela_db.adicionar_keyword(add_kw.strip())
                 st.rerun()
+            else:
+                st.warning("Digite uma keyword.")
 
         st.markdown("---")
         st.markdown("##### Keywords em Foco:")
         lista = sentinela_db.listar_keywords()
         if not lista:
-            st.warning("Nenhum alvo cadatrado no banco local.")
+            st.warning("Nenhuma keyword cadastrada.")
         else:
             for k in lista:
                 col_k1, col_k2 = st.columns([10, 1])
@@ -1605,11 +1655,17 @@ Após preencher os campos, clique em **"Salvar Credenciais"** e depois em **"Tes
                         sentinela_db.remover_keyword(k)
                         st.rerun()
 
+    # ══════════════════════════════════════════════════════════
+    # TAB 3 — Top Lojas
+    # ══════════════════════════════════════════════════════════
     with tab3:
         st.markdown("### 🏆 Top 100 Lojas do Nicho")
-        st.caption("Ranking baseado na presença das lojas nos resultados das suas keywords monitoradas. Inclui melhor posição alcançada e tendência de preço nas últimas 24h.")
+        st.caption(
+            "Ranking baseado na presença das lojas nos resultados das suas keywords. "
+            "Execute um ciclo na aba **⚙️ Bot Connection** para popular os dados."
+        )
 
-        # ── Gráfico de tendência do nicho ──────────────────
+        # Gráfico de tendência
         st.markdown("---")
         st.markdown("### 📈 Tendência de Preço do Nicho (7 dias)")
         tendencia = sentinela_db.gerar_tendencia_precos_nicho(7)
@@ -1621,42 +1677,124 @@ Após preencher os campos, clique em **"Salvar Credenciais"** e depois em **"Tes
 
             c1, c2, c3 = st.columns(3)
             preco_inicio = df_trend.iloc[0]["preco_medio"]
-            preco_fim = df_trend.iloc[-1]["preco_medio"]
-            variacao = ((preco_fim - preco_inicio) / preco_inicio) * 100
+            preco_fim    = df_trend.iloc[-1]["preco_medio"]
+            variacao     = ((preco_fim - preco_inicio) / preco_inicio) * 100 if preco_inicio else 0
             c1.metric("Preço no início", f"R$ {preco_inicio:.2f}")
             c2.metric("Preço agora", f"R$ {preco_fim:.2f}", f"{variacao:+.1f}%")
-            c3.metric("Total de registros", f"{int(df_trend['preco_medio'].count())}")
+            c3.metric("Dias com dados", len(df_trend))
         else:
-            st.info("📭 Gráfico de tendência aparecerá após a Sentinela coletar dados por alguns dias.")
+            st.info("📭 Sem dados ainda. Execute um ciclo para começar a coleta.")
 
-        # ── Power Radar Ranking ────────────────────────────
+        # Ranking
         st.markdown("---")
         ranking = sentinela_db.gerar_ranking_lojas_nicho()
 
         if not ranking:
-            st.warning("Nenhum dado coletado ainda. A Sentinela precisa rodar pelo menos uma vez para gerar o ranking.")
+            st.warning(
+                "Nenhum dado coletado ainda. "
+                "Vá para **⚙️ Bot Connection → ▶️ Rodar Sentinela Agora** para popular o banco."
+            )
         else:
-            df_display = pd.DataFrame()
-            df_display["🏪 Rank"] = list(range(1, len(ranking) + 1))
-            df_display["🆔 Shop ID"] = [r["shop_id"] for r in ranking]
-            df_display["🔥 Presenças"] = [r["presencas"] for r in ranking]
-            df_display["🥇 Melhor Pos."] = [r["melhor_posicao"] for r in ranking]
-            df_display["💰 Preço Médio"] = [f"R$ {r['preco_medio']:.2f}" for r in ranking]
-
-            # Tendência com emoji
             emojis = {"SUBINDO": "📈", "Caindo": "📉", "ESTÁVEL": "➡️"}
-            df_display["📊 Tendência (24h)"] = [
-                f"{emojis.get(r['tendencia'], '')} {r['tendencia']}" if r['preco_recente'] else "—"
-                for r in ranking
-            ]
-
-            if any(r["preco_recente"] is not None for r in ranking):
-                df_display["💵 Preço Recente (24h)"] = [
-                    f"R$ {r['preco_recente']:.2f}" if r['preco_recente'] else "—"
+            df_display = pd.DataFrame({
+                "🏪 Rank":     range(1, len(ranking) + 1),
+                "🆔 Shop ID":  [r["shop_id"]        for r in ranking],
+                "🔥 Presenças": [r["presencas"]       for r in ranking],
+                "🥇 Melhor Pos.": [r["melhor_posicao"] for r in ranking],
+                "💰 Preço Médio": [f"R$ {r['preco_medio']:.2f}" for r in ranking],
+                "📊 Tendência": [
+                    f"{emojis.get(r['tendencia'],'')} {r['tendencia']}"
+                    if r["preco_recente"] else "—"
                     for r in ranking
-                ]
-
+                ],
+            })
             st.dataframe(df_display, width="stretch", hide_index=True)
+
+    # ══════════════════════════════════════════════════════════
+    # TAB 4 — Status & Diagnóstico  ← NOVO
+    # ══════════════════════════════════════════════════════════
+    with tab4:
+        st.markdown("### 🔧 Diagnóstico do Sistema")
+        st.caption(
+            "Use esta aba para verificar se a Sentinela está lendo o banco correto "
+            "e para inspecionar o log da última execução."
+        )
+
+        if st.button("🔄 Atualizar diagnóstico", key="btn_refresh_diag"):
+            st.rerun()
+
+        diag = sentinela_db.get_diagnostics()
+
+        # ── Paths ──────────────────────────────────────────────
+        st.markdown("#### 📂 Caminhos")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**Runtime Dir**")
+            st.code(diag["runtime_dir"], language=None)
+            st.markdown("**Banco de Dados (DB_PATH)**")
+            db_label = "✅ Existe" if diag["db_existe"] else "❌ Não encontrado"
+            st.code(diag["db_path"], language=None)
+            st.caption(f"{db_label} | {diag['db_tamanho_kb']} KB")
+        with col_b:
+            st.markdown("**Log da Sentinela**")
+            st.code(diag["log_path"], language=None)
+            log_existe = "✅ Existe" if diag["ultimas_linhas_log"] else "📭 Vazio/não criado"
+            st.caption(log_existe)
+
+        # ── Contadores do DB ────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### 🗄️ Estado do Banco")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Keywords ativas",  diag["n_keywords"])
+        c2.metric("Registros histórico", diag["n_historico"])
+        c3.metric("Configs salvas",    diag["n_configs"])
+        c4.metric("Última coleta",     diag["ultima_coleta"] or "Nunca")
+
+        if diag["n_historico"] == 0:
+            st.warning(
+                "⚠️ Banco vazio — a Sentinela ainda não salvou nenhum dado nesta instalação. "
+                "Isso confirma o problema de **banco duplicado**: se você já viu dados antes, "
+                "eles estavam em outra pasta (modo desenvolvimento). "
+                "Use **▶️ Rodar Sentinela Agora** na aba Bot Connection para popular este banco."
+            )
+        else:
+            st.success(f"✅ {diag['n_historico']} registros encontrados neste banco.")
+
+        # ── Log ─────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### 📋 Últimas linhas do sentinela_log.txt")
+
+        if diag.get("log_error"):
+            st.error(f"Erro ao ler log: {diag['log_error']}")
+        elif not diag["ultimas_linhas_log"]:
+            st.info(
+                "Log ainda não foi criado. Isso significa que o heartbeat automático "
+                "ainda não rodou, ou que o app foi aberto diretamente pelo terminal "
+                "(sem passar pelo launcher.py). "
+                "Use **▶️ Rodar Sentinela Agora** para gerar a primeira entrada."
+            )
+        else:
+            linhas = diag["ultimas_linhas_log"]
+            # Colorização simples
+            linhas_fmt = []
+            for l in linhas:
+                if "ERRO" in l or "FALHA" in l or "EXCEÇÃO" in l or "TIMEOUT" in l:
+                    linhas_fmt.append(f"🔴 {l}")
+                elif "OK " in l or "concluído" in l or "concorrentes" in l:
+                    linhas_fmt.append(f"🟢 {l}")
+                elif "Sem " in l or "aguardando" in l:
+                    linhas_fmt.append(f"🟡 {l}")
+                else:
+                    linhas_fmt.append(f"   {l}")
+
+            st.code("\n".join(linhas_fmt), language=None)
+
+        # ── Ação: abrir log no Explorer ─────────────────────────
+        import sys as _sys
+        if getattr(_sys, "frozen", False):
+            if st.button("📁 Abrir pasta do banco no Explorer", key="btn_open_folder"):
+                import subprocess as _sp
+                _sp.Popen(["explorer", diag["runtime_dir"]])
 
 # ══════════════════════════════════════════════════════════════════════════
 # ROTEAMENTO DE PARTIÇÕES

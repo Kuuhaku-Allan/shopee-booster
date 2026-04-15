@@ -26,10 +26,9 @@ from PIL import Image, ImageDraw
 from updater import verificar_atualizacao, VERSAO_ATUAL
 
 # 🔥 MEDIDA DE SEGURANÇA: Forçar apenas CPU para evitar travamentos silenciosos da IA
-# No Windows/PyInstaller, o onnxruntime trava tentando buscar drivers de GPU (CUDA/DirectML)
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-os.environ["ORT_LOGGING_LEVEL"] = "3" # Suprime logs fúteis
-os.environ["ONNXRUNTIME_PROVIDERS"] = "CPUExecutionProvider" # Força o motor local já no launcher
+os.environ["ORT_LOGGING_LEVEL"] = "3"
+os.environ["ONNXRUNTIME_PROVIDERS"] = "CPUExecutionProvider"
 
 # ── Configurações ─────────────────────────────────────────────
 PORTA = 8501
@@ -38,17 +37,20 @@ TITULO_JANELA = f"Shopee Booster v{VERSAO_ATUAL}"
 
 # Caminho do app.py — funciona tanto em dev quanto no .exe
 if getattr(sys, "frozen", False):
-    # Rodando como .exe (PyInstaller)
     BASE_DIR = sys._MEIPASS
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 APP_PY = os.path.join(BASE_DIR, "app.py")
 
-# Aponta o Playwright para os browsers embutidos no .exe
+# ══ RUNTIME_DIR unificado — importado do sentinela_db ════════
+# Isso garante que launcher.py e sentinela_db.py concordem sobre
+# onde ficam banco, logs e dados persistentes.
+from sentinela_db import RUNTIME_DIR, SENTINELA_LOG_PATH
+
+# Browsers do Playwright — pasta persistente ao lado do .exe
 if getattr(sys, "frozen", False):
-    pw_browsers = os.path.join(BASE_DIR, "pw-browsers")
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = pw_browsers
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(RUNTIME_DIR, "pw-browsers")
 
 # ── Estado global ─────────────────────────────────────────────
 streamlit_proc = None
@@ -106,7 +108,8 @@ def iniciar_streamlit():
             "--global.developmentMode", "false",
         ]
     global log_file
-    log_file = open("streamlit_log.txt", "w", encoding="utf-8")
+    streamlit_log_path = os.path.join(RUNTIME_DIR, "streamlit_log.txt")
+    log_file = open(streamlit_log_path, "w", encoding="utf-8")
     
     streamlit_proc = subprocess.Popen(
         cmd,
@@ -243,26 +246,26 @@ def iniciar_tray():
 
 SENTINELA_INTERVALO_SEGUNDOS = 4 * 3600  # 4 horas
 
-# Caminho absoluto do log (garante que funcione tanto no dev quanto no .exe)
-if getattr(sys, "frozen", False):
-    _LOG_DIR = os.path.dirname(sys.executable)
-else:
-    _LOG_DIR = os.path.dirname(os.path.abspath(__file__))
-SENTINELA_LOG = os.path.join(_LOG_DIR, "sentinela_log.txt")
+# Usa SENTINELA_LOG_PATH importado do sentinela_db (já calculado com RUNTIME_DIR)
 
 def _sentinela_log(msg: str):
     """Grava uma linha no log da Sentinela com timestamp."""
     try:
-        with open(SENTINELA_LOG, "a", encoding="utf-8") as f:
+        with open(SENTINELA_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
     except Exception:
         pass
 
 def _fetch_competitors_headless(keyword: str) -> list:
-    """Busca concorrentes via Playwright em modo 100% headless (sem Streamlit)."""
+    """
+    Busca concorrentes via Playwright em subprocess isolado (sem UI).
+    Registra TODA saída de erro no sentinela_log.txt — nunca engole
+    exceções silenciosamente.
+    """
     kw_encoded = keyword.replace(" ", "+")
+
     script = f"""
-import asyncio, json
+import asyncio, json, sys
 from playwright.async_api import async_playwright
 
 async def run():
@@ -322,13 +325,20 @@ async def run():
 
 asyncio.run(run())
 """
-    # Usa runscript para evitar abrir janela
+
+    _sentinela_log(
+        f"[headless] Iniciando busca '{keyword}' | "
+        f"exe={sys.executable[:60]} | "
+        f"PLAYWRIGHT_BROWSERS_PATH={os.environ.get('PLAYWRIGHT_BROWSERS_PATH','<não definido>')}"
+    )
+
     try:
+        import tempfile
+
         if getattr(sys, "frozen", False):
-            import tempfile
-            import io as _io
-            sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace") if hasattr(sys.stdout, "buffer") else sys.stdout
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            ) as f:
                 f.write(script)
                 script_path = f.name
             try:
@@ -345,39 +355,60 @@ asyncio.run(run())
         else:
             result = subprocess.run(
                 [sys.executable, "-c", script],
-                capture_output=True, text=True, timeout=150
+                capture_output=True, text=True, timeout=150,
             )
 
+        # ── Log completo independente do resultado ────────────
+        _sentinela_log(
+            f"[headless] returncode={result.returncode} | "
+            f"stdout_len={len(result.stdout.strip())} | "
+            f"stderr={result.stderr.strip()[:500] if result.stderr.strip() else '<vazio>'}"
+        )
+
         if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout.strip())
+            dados = json.loads(result.stdout.strip())
+            _sentinela_log(f"[headless] '{keyword}' → {len(dados)} concorrentes.")
+            return dados
+
+        # returncode != 0 ou stdout vazio — log detalhado
+        _sentinela_log(
+            f"[headless] FALHA '{keyword}': returncode={result.returncode} | "
+            f"stdout='{result.stdout.strip()[:200]}' | "
+            f"stderr='{result.stderr.strip()[:500]}'"
+        )
         return []
-    except Exception:
+
+    except subprocess.TimeoutExpired:
+        _sentinela_log(f"[headless] TIMEOUT para '{keyword}' (>150s).")
+        return []
+    except Exception as e:
+        import traceback
+        _sentinela_log(
+            f"[headless] EXCEÇÃO para '{keyword}': {e}\n"
+            + traceback.format_exc()[:600]
+        )
         return []
 
 
 def sentinela_heartbeat():
     """
-    Coração da Sentinela — roda para sempre em background.
-
-    Correções em relação à versão anterior:
-    - NUNCA encerra a thread prematuramente: se não há credenciais ou
-      keywords no momento do arranque, aguarda SENTINELA_INTERVALO_SEGUNDOS
-      e tenta de novo. Assim, configs salvas pelo usuário enquanto o
-      app está aberto são detectadas no próximo ciclo automaticamente.
-    - Recarrega credenciais e keywords a CADA ciclo (não somente na subida).
-    - Usa caminho absoluto para o log.
+    Coração da Sentinela — loop infinito em daemon thread.
+    Recarrega credenciais e keywords a CADA ciclo.
+    Nunca termina prematuramente.
     """
     from sentinela_db import init_db, listar_keywords, processar_mudancas_e_alertar
     from telegram_service import TelegramSentinela
 
     init_db()
-    _sentinela_log("Sentinela thread iniciada.")
+    _sentinela_log(
+        f"Sentinela thread iniciada. "
+        f"RUNTIME_DIR={RUNTIME_DIR} | DB={__import__('sentinela_db').DB_PATH}"
+    )
 
     primeiro_ciclo = True
 
     while True:
         try:
-            # Recarrega credenciais e keywords a cada ciclo
             telegram = TelegramSentinela()
             keywords = listar_keywords()
 
@@ -403,7 +434,7 @@ def sentinela_heartbeat():
                     f"Buscando dados do mercado..."
                 )
 
-            _sentinela_log(f"Iniciando ciclo — keywords: {keywords}")
+            _sentinela_log(f"Iniciando ciclo — {len(keywords)} keywords: {keywords}")
 
             for kw in keywords:
                 try:
@@ -412,18 +443,27 @@ def sentinela_heartbeat():
                         processar_mudancas_e_alertar(kw, resultados, telegram)
                         _sentinela_log(f"OK '{kw}': {len(resultados)} resultados processados.")
                     else:
-                        _sentinela_log(f"Sem resultados para '{kw}'.")
+                        _sentinela_log(f"Sem resultados para '{kw}' — veja log acima.")
                 except Exception as e:
-                    _sentinela_log(f"ERRO ao processar '{kw}': {e}")
+                    import traceback
+                    _sentinela_log(
+                        f"ERRO ao processar '{kw}': {e}\n"
+                        + traceback.format_exc()[:400]
+                    )
 
-            _sentinela_log(f"Ciclo concluido. Dormindo {SENTINELA_INTERVALO_SEGUNDOS//3600}h...")
+            _sentinela_log(
+                f"Ciclo concluído. Próximo em {SENTINELA_INTERVALO_SEGUNDOS // 3600}h."
+            )
 
         except Exception as e:
-            _sentinela_log(f"ERRO inesperado no ciclo principal: {e}")
+            import traceback
+            _sentinela_log(
+                f"ERRO inesperado no ciclo principal: {e}\n"
+                + traceback.format_exc()[:400]
+            )
         finally:
             primeiro_ciclo = False
 
-        # Dorme por 4 horas antes do próximo ciclo
         time.sleep(SENTINELA_INTERVALO_SEGUNDOS)
 
 
