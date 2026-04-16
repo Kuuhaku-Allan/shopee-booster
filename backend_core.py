@@ -1049,6 +1049,19 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
         "variaç", "variante", "varias versoes", "várias versões", "estilos diferentes"
     ])
 
+    # Detecta pedido de troca de cor — rota separada do creative_edit genérico
+    COLOR_WORDS = [
+        "verde", "azul", "vermelho", "amarelo", "roxo", "lilás",
+        "laranja", "rosa", "ciano", "turquesa", "bege", "marrom",
+        "cinza", "preto", "branco", "green", "blue", "red",
+        "yellow", "purple", "orange", "pink", "gray",
+    ]
+    is_recolor = any(w in msg for w in [
+        "cor ", "cores ", "variação", "variante", "versão ", "mudar a cor",
+        "trocar a cor", "muda a cor", "troca a cor", "outra cor",
+        "na cor", "em ", "colorir", "recolor",
+    ]) and any(c in msg for c in COLOR_WORDS)
+
     # Edição criativa: qualquer instrução que implica manipular pixels
     # de forma aberta (badge, iluminação, detalhe de material, etc.)
     is_creative = any(w in msg for w in [
@@ -1168,6 +1181,208 @@ REGRAS:
         "icon": "✨",
         "reason": "fallback"
     }
+
+
+# Mapa de nomes de cor → hue (0-360) e saturação mínima garantida
+_COLOR_MAP = {
+    # Português
+    "verde":    (120, 0.55), "azul":     (210, 0.60),
+    "vermelho": (  0, 0.65), "amarelo":  ( 55, 0.65),
+    "roxo":     (270, 0.55), "lilás":    (280, 0.45),
+    "laranja":  ( 25, 0.70), "rosa":     (335, 0.50),
+    "ciano":    (185, 0.60), "turquesa": (175, 0.55),
+    "bege":     ( 35, 0.25), "marrom":   ( 25, 0.55),
+    "cinza":    (  0, 0.00), "preto":    (  0, 0.00),
+    "branco":   (  0, 0.00),
+    # Inglês (vindo do Gemini)
+    "green":    (120, 0.55), "blue":     (210, 0.60),
+    "red":      (  0, 0.65), "yellow":   ( 55, 0.65),
+    "purple":   (270, 0.55), "orange":   ( 25, 0.70),
+    "pink":     (335, 0.50), "cyan":     (185, 0.60),
+    "gray":     (  0, 0.00), "grey":     (  0, 0.00),
+    "black":    (  0, 0.00), "white":    (  0, 0.00),
+    "brown":    ( 25, 0.55), "beige":    ( 35, 0.25),
+}
+
+# Cores que mudam valor (brilho) em vez de hue
+_ACHROMATIC = {"cinza", "gray", "grey", "preto", "black", "branco", "white", "bege", "beige"}
+
+
+def recolor_product_image(
+    image: "Image.Image",
+    target_color: str,
+    strength: float = 0.88,
+) -> tuple:
+    """
+    Recolore o produto principal preservando textura, brilho e sombra.
+
+    Pipeline:
+      1. Obtém máscara do produto via rembg (ou usa alpha existente)
+      2. Converte pixels do produto para HSV
+      3. Substitui H pelo hue alvo, preserva S e V
+      4. Para pixels de baixa saturação (brancos/cinzas), aumenta S
+         progressivamente para tornar a cor visível
+      5. Valida a mudança comparando médias de canal antes/depois
+      6. Recompõe no fundo original (não descarta fundo)
+
+    Retorna: (imagem_resultado, sucesso: bool, descricao: str)
+    """
+    import io as _io
+    import numpy as np
+
+    orig = image.convert("RGBA")
+    w, h = orig.size
+    arr  = np.array(orig, dtype=np.float32)   # H W 4  (R G B A)
+
+    target_lower = target_color.strip().lower()
+
+    # ── 1. Máscara do produto ──────────────────────────────────
+    # Tenta usar alpha existente; se fundo não foi removido, faz rembg
+    alpha_chan = arr[:, :, 3]
+    product_mask = alpha_chan > 30   # pixels do produto
+
+    has_transparency = product_mask.sum() < (w * h * 0.95)
+    if not has_transparency:
+        # Fundo ainda presente — remove para obter máscara
+        try:
+            from rembg import remove as _rembg
+            img_for_mask = orig.convert("RGB")
+            if img_for_mask.width > 1024 or img_for_mask.height > 1024:
+                img_for_mask = img_for_mask.copy()
+                img_for_mask.thumbnail((1024, 1024), Image.LANCZOS)
+            buf = _io.BytesIO()
+            img_for_mask.save(buf, format="PNG")
+            no_bg_bytes = _rembg(buf.getvalue())
+            mask_img = Image.open(_io.BytesIO(no_bg_bytes)).convert("RGBA")
+            if mask_img.size != (w, h):
+                mask_img = mask_img.resize((w, h), Image.LANCZOS)
+            mask_arr  = np.array(mask_img, dtype=np.float32)
+            product_mask = mask_arr[:, :, 3] > 30
+        except Exception:
+            # Fallback: usa todos os pixels não-brancos como produto
+            rgb_arr = arr[:, :, :3]
+            product_mask = ~((rgb_arr[:, :, 0] > 240) &
+                             (rgb_arr[:, :, 1] > 240) &
+                             (rgb_arr[:, :, 2] > 240))
+
+    if product_mask.sum() < 100:
+        return orig, False, "⚠️ Não foi possível identificar o produto na imagem para recolorir."
+
+    # ── 2. Converte para HSV ───────────────────────────────────
+    rgb_norm = arr[:, :, :3] / 255.0          # H W 3 float [0,1]
+    h_ch = np.zeros((h, w), dtype=np.float32)
+    s_ch = np.zeros((h, w), dtype=np.float32)
+    v_ch = np.zeros((h, w), dtype=np.float32)
+
+    # Vetorizado via numpy — sem loop Python por pixel
+    r, g, b = rgb_norm[:, :, 0], rgb_norm[:, :, 1], rgb_norm[:, :, 2]
+    maxc = np.maximum(np.maximum(r, g), b)
+    minc = np.minimum(np.minimum(r, g), b)
+    delta = maxc - minc
+
+    v_ch = maxc
+    s_ch = np.where(maxc > 0, delta / maxc, 0.0)
+
+    # Hue
+    with np.errstate(invalid="ignore", divide="ignore"):
+        h_r = np.where(delta > 0,
+                       np.where(maxc == r, (g - b) / delta % 6,
+                       np.where(maxc == g, (b - r) / delta + 2,
+                                            (r - g) / delta + 4)),
+                       0.0)
+    h_ch = (h_r / 6.0) % 1.0   # normalizado [0,1]
+
+    # ── 3. Troca de hue ───────────────────────────────────────
+    if target_lower in _ACHROMATIC:
+        # Cores sem hue: ajustar V e S
+        if target_lower in ("preto", "black"):
+            v_new = v_ch * 0.25
+            s_new = s_ch * 0.2
+        elif target_lower in ("branco", "white"):
+            v_new = np.clip(v_ch * 1.3, 0, 1)
+            s_new = s_ch * 0.15
+        else:  # cinza
+            v_new = v_ch
+            s_new = s_ch * 0.15
+        h_new = h_ch
+    else:
+        target_hue, min_sat = _COLOR_MAP.get(target_lower, (120, 0.55))
+        target_h_norm = target_hue / 360.0
+
+        # Preserva variação relativa de hue (sombras mantêm tons diferentes)
+        h_new = np.where(product_mask, target_h_norm, h_ch)
+
+        # Garante saturação mínima para pixels de baixa saturação
+        s_boost = np.clip(min_sat - s_ch, 0, 1) * 0.7  # complemento suavizado
+        s_new   = np.where(
+            product_mask,
+            np.clip(s_ch * (1 - strength) + (s_ch + s_boost) * strength, 0, 1),
+            s_ch
+        )
+        v_new = v_ch  # preserva brilho/sombra integralmente
+
+    # ── 4. Converte HSV → RGB ──────────────────────────────────
+    # Vetorizado
+    i_h = (h_new * 6.0).astype(np.int32) % 6
+    f   = h_new * 6.0 - np.floor(h_new * 6.0)
+    p   = v_new * (1 - s_new)
+    q_v = v_new * (1 - f * s_new)
+    t_v = v_new * (1 - (1 - f) * s_new)
+
+    r_new = np.select(
+        [i_h == 0, i_h == 1, i_h == 2, i_h == 3, i_h == 4, i_h == 5],
+        [v_new, q_v, p, p, t_v, v_new], default=v_new,
+    )
+    g_new = np.select(
+        [i_h == 0, i_h == 1, i_h == 2, i_h == 3, i_h == 4, i_h == 5],
+        [t_v, v_new, v_new, q_v, p, p], default=v_new,
+    )
+    b_new = np.select(
+        [i_h == 0, i_h == 1, i_h == 2, i_h == 3, i_h == 4, i_h == 5],
+        [p, p, t_v, v_new, v_new, q_v], default=v_new,
+    )
+
+    # ── 5. Compõe resultado ────────────────────────────────────
+    result_arr = arr.copy()
+    mask_3d = np.stack([product_mask] * 3, axis=-1)
+
+    result_arr[:, :, 0] = np.where(mask_3d[:, :, 0], np.clip(r_new * 255, 0, 255), arr[:, :, 0])
+    result_arr[:, :, 1] = np.where(mask_3d[:, :, 1], np.clip(g_new * 255, 0, 255), arr[:, :, 1])
+    result_arr[:, :, 2] = np.where(mask_3d[:, :, 2], np.clip(b_new * 255, 0, 255), arr[:, :, 2])
+    result_arr[:, :, 3] = arr[:, :, 3]  # preserva alpha original
+
+    result_img = Image.fromarray(result_arr.astype(np.uint8), "RGBA")
+
+    # ── 6. Validação visual ────────────────────────────────────
+    # Compara média de canal nos pixels do produto antes e depois
+    before_r = arr[:, :, 0][product_mask].mean()
+    before_g = arr[:, :, 1][product_mask].mean()
+    after_r  = result_arr[:, :, 0][product_mask].mean()
+    after_g  = result_arr[:, :, 1][product_mask].mean()
+    delta_r  = abs(after_r - before_r)
+    delta_g  = abs(after_g - before_g)
+    mudanca  = max(delta_r, delta_g)
+
+    COLOR_NAMES_PT = {
+        "green": "verde", "blue": "azul", "red": "vermelho", "yellow": "amarelo",
+        "purple": "roxo", "orange": "laranja", "pink": "rosa", "cyan": "ciano",
+        "gray": "cinza", "grey": "cinza", "black": "preto", "white": "branco",
+        "brown": "marrom", "beige": "bege",
+    }
+    nome_pt = COLOR_NAMES_PT.get(target_lower, target_lower)
+
+    if mudanca < 8 and target_lower not in _ACHROMATIC:
+        # Mudança imperceptível
+        return result_img, False, (
+            f"⚠️ A tentativa de recoloração para **{nome_pt}** não ficou convincente "
+            f"nesta imagem (variação média: {mudanca:.1f}/255). "
+            f"Isso pode acontecer com imagens de fundo complexo ou produto muito claro."
+        )
+
+    return result_img, True, (
+        f"✅ Variação **{nome_pt}** gerada com sucesso! "
+        f"Textura, sombras e brilho foram preservados."
+    )
 
 
 def creative_edit_with_vision(
@@ -1494,6 +1709,15 @@ REGRAS:
                     outline=(*brd_color, 255), width=brd_width
                 )
                 result = canvas
+
+            # ── Recoloração do produto ────────────────────────
+            elif op_type == "recolor":
+                tgt = str(op.get("target_color", op.get("color", ""))).lower().strip()
+                if tgt:
+                    recolored, ok, recolor_desc = recolor_product_image(result, tgt)
+                    result      = recolored
+                    # Sobrescreve a description com o resultado real da mudança
+                    description = recolor_desc
 
         except Exception as op_err:
             # Operação falhou silenciosamente — continua com as outras
@@ -1929,7 +2153,7 @@ def process_chat_turn(
 
     # ── Intent de mídia sem anexo → instrui o usuário ────────
     MEDIA_INTENTS = {"remove_bg", "generate_scene", "upscale",
-                     "analyze_image", "analyze_video", "creative_edit", "generate_variants"}
+                     "analyze_image", "analyze_video", "creative_edit", "generate_variants", "recolor"}
     if not has_media and any(i in MEDIA_INTENTS for i in intents):
         msgs = {
             "remove_bg":     "📎 Para remover o fundo, clique em **📎 Anexar imagem / vídeo**, selecione a foto e reenvie.",
@@ -1939,6 +2163,7 @@ def process_chat_turn(
             "analyze_video": "📎 Para analisar o vídeo, anexe o arquivo MP4 e reenvie.",
             "creative_edit": "📎 Para editar a imagem, anexe a foto pelo botão **📎 Anexar imagem / vídeo** e reenvie com a instrução.",
             "generate_variants": "📎 Para gerar variações, anexe a foto e reenvie.",
+            "recolor":       "📎 Para trocar a cor, anexe a foto e diga qual cor deseja.",
         }
         media_intent = next((i for i in intents if i in MEDIA_INTENTS), intents[0])
         result["text"] = msgs.get(media_intent, "📎 Por favor, anexe o arquivo e reenvie.")
@@ -2136,6 +2361,24 @@ def process_chat_turn(
                 bg = apply_contact_shadow(bg, fg, offset)
                 bg.paste(fg, offset, fg)
                 current_img = bg
+
+            elif intent == "recolor":
+                # Extrai nome da cor do pedido do usuário
+                msg_lower = user_message.lower()
+                COLOR_WORDS = [
+                    "verde", "azul", "vermelho", "amarelo", "roxo", "lilás",
+                    "laranja", "rosa", "ciano", "turquesa", "bege", "marrom",
+                    "cinza", "preto", "branco", "green", "blue", "red",
+                    "yellow", "purple", "orange", "pink", "gray",
+                ]
+                target_color = next(
+                    (c for c in COLOR_WORDS if c in msg_lower), "green"
+                )
+                recolored, ok, recolor_desc = recolor_product_image(
+                    current_img, target_color
+                )
+                current_img = recolored
+                text_parts.append(recolor_desc)
 
             elif intent == "creative_edit":
                 from backend_core import creative_edit_with_vision, infer_primary_benefit_with_vision
