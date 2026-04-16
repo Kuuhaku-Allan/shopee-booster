@@ -1032,7 +1032,12 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
     is_optimize = any(w in msg for w in [
         "otimiz", "título", "descrição", "tag", "listing", "seo", "keyword"
     ])
-    is_video = any(w in msg for w in ["vídeo", "video", "retenção", "hook", "gancho"])
+    is_video = any(w in msg for w in [
+        "vídeo", "video", "retenção", "hook", "gancho", "analisar vídeo",
+        "analise esse video", "analise o video", "ver o video", "vê o vídeo",
+        "mp4", "clipe", "filmagem", "gravação", "gravaç",
+        "consultoria", "consultor", "me diz o que", "o que acha do video",
+    ])
     is_analyze = has_media and any(w in msg for w in [
         "boa", "ruim", "melhorar", "feedback", "avaliar", "analisar",
         "o que acha", "está bom", "tá bom", "tá boa", "está boa",
@@ -1464,6 +1469,177 @@ Pontue de 1-10 e dê sugestões concretas de melhoria.
 
 
 # ══════════════════════════════════════════════════════════════
+# ANÁLISE DE VÍDEO (Gemini Files API)
+# ══════════════════════════════════════════════════════════════
+
+def analyze_video_with_gemini(
+    video_bytes: bytes,
+    user_message: str,
+    full_context: str,
+    segmento: str,
+) -> str:
+    """
+    Faz upload do vídeo para a Gemini Files API e devolve uma
+    consultoria completa — gancho, iluminação, CTA, boas práticas,
+    pontuação e recomendações para o nicho.
+
+    Inclui logging técnico para debug e observabilidade.
+    """
+    import time as _time
+    import tempfile as _tempfile
+    import os as _os
+    import logging as _logging
+
+    _log = _logging.getLogger("shopee.video")
+    t_start = _time.time()
+
+    video_size_mb = len(video_bytes) / (1024 * 1024)
+    _log.info(f"[VIDEO] Início da análise | tamanho={video_size_mb:.1f} MB")
+
+    CONSULTING_PROMPT = f"""Você é um consultor especialista em vídeos de produto para marketplace Shopee Brasil.
+Segmento: {segmento}
+
+{full_context[:600]}
+
+Analise este vídeo de produto COM PROFUNDIDADE e devolva um relatório estruturado:
+
+## 🎯 PONTUAÇÃO GERAL: [X]/10
+
+## ✅ O QUE ESTÁ BOM
+[pontos fortes — gancho, iluminação, edição, ritmo, apresentação do produto]
+
+## ❌ O QUE PRECISA MELHORAR
+[problemas concretos com exemplos do próprio vídeo]
+
+## 🚀 RECOMENDAÇÕES PRIORITÁRIAS
+[3–5 ações específicas, em ordem de impacto nas vendas]
+
+## 📊 ANÁLISE TÉCNICA
+- Gancho (primeiros 3s): [nota /10 + comentário]
+- Iluminação geral: [nota /10 + comentário]
+- Clareza do produto em cena: [nota /10 + comentário]
+- Prova de benefício mostrada: [sim/não + detalhe]
+- CTA (chamada à ação): [presente/ausente + qualidade]
+- Adequação ao nicho "{segmento}": [nota /10 + comentário]
+
+## 📚 BOAS PRÁTICAS PARA ESTE NICHO NO SHOPEE BRASIL
+[3 dicas específicas e acionáveis para {segmento}]
+{f'{chr(10)}Pergunta adicional do usuário: {user_message}' if user_message and len(user_message) > 5 else ''}
+"""
+
+    tmp_path = None
+    file_ref = None
+    _client = get_client()
+
+    try:
+        # 1. Salva em arquivo temporário para a API de upload
+        with _tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp.write(video_bytes)
+            tmp_path = tmp.name
+
+        # 2. Upload para Gemini Files API
+        t_upload = _time.time()
+        file_ref = _client.files.upload(
+            file=tmp_path,
+            config={"mime_type": "video/mp4", "display_name": "produto_video.mp4"},
+        )
+        t_upload_done = _time.time()
+        _log.info(f"[VIDEO] Upload concluído | tempo={t_upload_done - t_upload:.1f}s")
+
+        # 3. Aguarda processamento (máx. 90s)
+        t_proc = _time.time()
+        espera = 0
+        while espera < 90:
+            # o SDK pode retornar state como enum, int ou string — normalizamos tudo
+            raw_state = file_ref.state
+            state_str = getattr(raw_state, "name", str(raw_state)).upper()
+            if state_str != "PROCESSING":
+                break
+            _time.sleep(3)
+            file_ref = _client.files.get(name=file_ref.name)
+            espera += 3
+
+        # Reavalia o estado final após o loop
+        raw_state = file_ref.state
+        state_str = getattr(raw_state, "name", str(raw_state)).upper()
+        t_proc_done = _time.time()
+        _log.info(
+            f"[VIDEO] Processamento API | estado_raw={raw_state!r} | estado_str={state_str} | "
+            f"file_name={file_ref.name} | tempo={t_proc_done - t_proc:.1f}s"
+        )
+
+        if state_str != "ACTIVE":
+            return (
+                f"⏳ O processamento do vídeo falhou na API (estado: `{state_str}`).\n"
+                f"Arquivo: `{file_ref.name}` | Tamanho: {video_size_mb:.1f} MB\n\n"
+                "Tente um arquivo menor (≤ 50 MB, duração < 60s)."
+            )
+
+        # 4. Gera a análise — captura o último erro real para diagnóstico
+        t_gen = _time.time()
+        ultimo_erro = None
+
+        for m in MODELOS_VISION:
+            try:
+                _log.info(
+                    f"[VIDEO] Tentando generate_content | modelo={m} | "
+                    f"file={file_ref.name} | state={state_str} | tamanho={video_size_mb:.1f}MB"
+                )
+                response = _client.models.generate_content(
+                    model=m,
+                    contents=[CONSULTING_PROMPT, file_ref],
+                )
+                t_total = _time.time() - t_start
+                _log.info(
+                    f"[VIDEO] Análise concluída | modelo={m} | "
+                    f"tempo_total={t_total:.1f}s | tamanho={video_size_mb:.1f}MB"
+                )
+                return response.text
+            except Exception as e:
+                ultimo_erro = e
+                _log.warning(
+                    f"[VIDEO] Modelo {m} falhou | tipo={type(e).__name__} | erro={e}"
+                )
+                _time.sleep(2)
+
+        # Todos os modelos falharam — expõe o erro real
+        t_total = _time.time() - t_start
+        err_tipo = type(ultimo_erro).__name__ if ultimo_erro else "desconhecido"
+        err_msg  = str(ultimo_erro) if ultimo_erro else "sem detalhes"
+        _log.error(f"[VIDEO] Todos os modelos falharam | ultimo_erro={err_tipo}: {err_msg}")
+        return (
+            f"⏳ Falha ao processar o vídeo no modelo multimodal.\n\n"
+            f"**Erro técnico:** `{err_tipo}` — {err_msg}\n\n"
+            f"*Tamanho: {video_size_mb:.1f} MB | Arquivo API: `{file_ref.name}` | "
+            f"Tempo total: {t_total:.0f}s*"
+        )
+
+    except Exception as e:
+        import traceback as _tb
+        t_total = _time.time() - t_start
+        _log.error(
+            f"[VIDEO] Erro fatal | tipo={type(e).__name__} | "
+            f"tempo={t_total:.1f}s | erro={e}"
+        )
+        return (
+            f"❌ Erro na análise de vídeo: {type(e).__name__} — {e}\n\n"
+            f"Detalhes técnicos:\n```\n{_tb.format_exc()[:400]}\n```"
+        )
+    finally:
+        # Limpeza obrigatória — arquivo temporário e crédito de storage
+        try:
+            if tmp_path and _os.path.exists(tmp_path):
+                _os.unlink(tmp_path)
+        except Exception:
+            pass
+        try:
+            if file_ref:
+                _client.files.delete(name=file_ref.name)
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════
 # PROCESSAMENTO COMPLETO DE MÍDIA NO CHAT
 # ══════════════════════════════════════════════════════════════
 
@@ -1555,11 +1731,33 @@ def process_chat_turn(
         atype = attachment_types[i] if i < len(attachment_types) else "image"
 
         if atype == "video":
-            result["text"] = (
-                "🎬 Recebi o vídeo! A análise completa de vídeo está chegando em breve. "
-                "Por enquanto: mostre o produto em uso nos primeiros 3 segundos para "
-                "maximizar a retenção."
+            # ── Análise real via Gemini Files API ─────────────────
+            video_bytes = attachment if isinstance(attachment, bytes) else None
+            if video_bytes is None:
+                result["text"] = (
+                    "❌ Não consegui ler o arquivo de vídeo. "
+                    "Certifique-se de enviar um MP4 válido."
+                )
+                result["intent"] = "analyze_video"
+                return result
+
+            # Limita a 80 MB para não exceder quota da Files API
+            MAX_VIDEO_BYTES = 80 * 1024 * 1024
+            if len(video_bytes) > MAX_VIDEO_BYTES:
+                size_mb = len(video_bytes) // (1024 * 1024)
+                result["text"] = (
+                    f"⚠️ Vídeo muito grande ({size_mb} MB). "
+                    "O limite é 80 MB. Comprima o vídeo ou corte trechos "
+                    "desnecessários antes de enviar."
+                )
+                result["intent"] = "analyze_video"
+                return result
+
+            from backend_core import analyze_video_with_gemini
+            analise = analyze_video_with_gemini(
+                video_bytes, user_message, full_context, segmento
             )
+            result["text"]   = analise
             result["intent"] = "analyze_video"
             return result
 
@@ -1581,15 +1779,51 @@ def process_chat_turn(
                 text_parts.append(f"🔍 Qualidade aumentada para **{current_img.width}×{current_img.height}px** (2×).")
 
             elif intent == "remove_bg":
+                import logging as _logging
+                _rembg_log = _logging.getLogger("shopee.rembg")
+                t_rembg = _time.time()
                 try:
                     from rembg import remove as rembg_remove
+                    # ── Resize preventivo para evitar OOM (bad allocation) ──
+                    # Imagens > 1280px no maior lado estouram memória do ONNX.
+                    # Redimensionamos, processamos e restauramos o tamanho original.
+                    orig_size = current_img.size
+                    img_for_rembg = current_img.convert("RGB")
+                    MAX_SIDE = 1280
+                    needs_resize = img_for_rembg.width > MAX_SIDE or img_for_rembg.height > MAX_SIDE
+                    if needs_resize:
+                        img_for_rembg = img_for_rembg.copy()
+                        img_for_rembg.thumbnail((MAX_SIDE, MAX_SIDE), Image.LANCZOS)
+                        _rembg_log.info(
+                            f"[REMBG] Resize preventivo: {orig_size} → {img_for_rembg.size}"
+                        )
+
                     buf = _io.BytesIO()
-                    current_img.convert("RGB").save(buf, format="PNG")
+                    img_for_rembg.save(buf, format="PNG")
                     no_bg = rembg_remove(buf.getvalue())
-                    current_img = Image.open(_io.BytesIO(no_bg)).convert("RGBA")
+                    removed = Image.open(_io.BytesIO(no_bg)).convert("RGBA")
+
+                    # Restaura tamanho original se foi encolhida
+                    if removed.size != orig_size:
+                        removed = removed.resize(orig_size, Image.LANCZOS)
+
+                    current_img = removed
+                    t_elapsed = _time.time() - t_rembg
+                    _rembg_log.info(f"[REMBG] Sucesso | tempo={t_elapsed:.1f}s | tamanho_original={orig_size}")
                     text_parts.append("✂️ Fundo removido com sucesso.")
                 except Exception as e:
-                    text_parts.append(f"❌ Erro ao remover fundo: {e}")
+                    t_elapsed = _time.time() - t_rembg
+                    _rembg_log.warning(
+                        f"[REMBG] Falha | tipo={type(e).__name__} | "
+                        f"tempo={t_elapsed:.1f}s | erro={e}"
+                    )
+                    # ── Fallback explícito: não interrompe o pipeline ────────
+                    text_parts.append(
+                        f"⚠️ **Remoção de fundo falhou** ({type(e).__name__}). "
+                        "Os próximos passos continuarão usando a imagem original. "
+                        "Se o cenário foi solicitado, ele será gerado com o fundo atual."
+                    )
+                    # current_img permanece inalterada → pipeline continua
 
             elif intent == "generate_scene":
                 from backend_core import generate_ai_scenario, generate_gradient_background, apply_contact_shadow

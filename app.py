@@ -648,27 +648,6 @@ def render_auditoria():
             else:
                 st.warning("Galeria não carregou. Verifique os logs de debug acima.")
 
-        # ── Sub-seção: Vídeo (Módulo Beta) ────────────────────
-        st.markdown("---")
-        st.markdown("""
-        <div style="display:flex; align-items:center; gap:10px; margin-bottom:1rem;">
-            <span class="section-label" style="margin:0;">Análise de Vídeo</span>
-            <span class="badge badge-beta">BETA</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-        video_file = st.file_uploader(
-            "Upload do vídeo do produto (MP4)",
-            type=["mp4"],
-            key="video_uploader"
-        )
-
-        if video_file:
-            if st.button("🎬 Analisar Retenção do Vídeo", key="btn_analisar_video"):
-                with st.spinner("IA analisando hook e iluminação..."):
-                    st.info("🔧 **Módulo em desenvolvimento.** Em breve: análise automática de hook, ritmo de edição e qualidade de iluminação via Gemini Vision.")
-                    st.warning("⚠️ Insight preliminar: mostre o produto em uso nos primeiros 3 segundos para maximizar a retenção.")
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # PARTIÇÃO II — CHATBOT CONCIERGE
@@ -1265,7 +1244,15 @@ def _render_attachment_area():
                                          caption=f"{'🎬' if att_types[fi]=='video' else '🖼️'} {uploaded[fi].name[:20]}")
                             pi += 1
 
-                st.success(f"✅ {len(uploaded)} arquivo(s) prontos para envio — escreva sua mensagem acima.")
+                # Dica contextual baseada no tipo de arquivo
+                has_video_att = any(t == "video" for t in att_types)
+                has_image_att = any(t == "image" for t in att_types)
+                tipo_hint = ""
+                if has_video_att:
+                    tipo_hint = " | 🎬 Escreva 'analise este vídeo' ou faça sua pergunta"
+                elif has_image_att:
+                    tipo_hint = " | 🖼️ Ex: 'remova o fundo e gere um cenário clean'"
+                st.success(f"✅ {len(uploaded)} arquivo(s) prontos para envio.{tipo_hint}")
 
 
 def _send_message(
@@ -1276,7 +1263,12 @@ def _send_message(
     full_context: str,
     segmento:     str,
 ):
-    """Processa e registra um turno de chat."""
+    """
+    Processa e registra um turno de chat.
+
+    V4.2: spinner inteligente que mostra quais etapas serão executadas.
+    A falha em uma etapa NÃO cancela as demais.
+    """
     # Converte bytes → PIL para processamento
     pil_images = []
     for i, att in enumerate(attachments):
@@ -1285,7 +1277,30 @@ def _send_message(
         else:
             pil_images.append(att)  # bytes de vídeo ficam como bytes
 
-    with st.spinner("Processando..."):
+    # ── Detecta etapas para mostrar status inteligente ─────────
+    has_video   = any(t == "video" for t in att_types)
+    has_media   = len(attachments) > 0
+    msg_lower   = user_message.lower()
+    has_rembg   = "remov" in msg_lower or "fundo" in msg_lower
+    has_scene   = any(w in msg_lower for w in ["cenário", "cena", "fundo ia", "packshot"])
+    has_upscale = any(w in msg_lower for w in ["qualidade", "upscale", "resolução"])
+    multi_step  = sum([has_rembg, has_scene, has_upscale]) > 1
+
+    # ── Status visual dinâmico ─────────────────────────────────
+    if has_video:
+        label_spinner = "🎬 Analisando vídeo... (pode levar até 90s)"
+    elif multi_step:
+        passos = []
+        if has_upscale: passos.append("upscale")
+        if has_rembg:   passos.append("rembg")
+        if has_scene:   passos.append("cenário IA")
+        label_spinner = f"⚙️ Executando: {' → '.join(passos)}..."
+    elif has_media:
+        label_spinner = "🖼️ Processando imagem..."
+    else:
+        label_spinner = "💬 Gerando resposta..."
+
+    with st.spinner(label_spinner):
         result = process_chat_turn(
             user_message     = user_message,
             attachments      = pil_images,
@@ -1293,27 +1308,26 @@ def _send_message(
             chat_history     = st.session_state.chat_history,
             full_context     = full_context,
             segmento         = segmento,
-            # Contexto estruturado da Auditoria — permite otimização direta pelo chat
+            # Contexto estruturado da Auditoria
             selected_product     = st.session_state.get("selected_product"),
             df_competitors       = st.session_state.get("df_competitors"),
             optimization_reviews = st.session_state.get("optimization_reviews"),
         )
 
     # Registra no histórico
-    turn_entry = {
+    st.session_state.chat_history.append({
         "user":               user_message,
         "assistant":          result["text"],
         "attachment_previews": list(att_previews),
         "result_images":      list(result["images"]),
         "result_captions":    list(result["captions"]),
-    }
-    st.session_state.chat_history.append(turn_entry)
+    })
 
     # Empurra imagens para o painel de preview
     if result["images"]:
-        st.session_state.chat_preview_images  = (
+        st.session_state.chat_preview_images = (
             st.session_state.get("chat_preview_images", []) + result["images"]
-        )[-8:]  # Mantém apenas as 8 últimas para não pesar a sessão
+        )[-8:]
         st.session_state.chat_preview_captions = (
             st.session_state.get("chat_preview_captions", []) + result["captions"]
         )[-8:]
