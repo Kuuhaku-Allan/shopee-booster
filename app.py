@@ -133,6 +133,8 @@ _DEFAULTS = {
     "chat_active_edit_label":  "",     # legenda da imagem em edição
     "chat_last_post_actions":  [],     # ações pós-resposta do último turno
     "chat_edit_history":       [],     # Histórico de edições para desfazer
+    "chat_canvas_layers":      [],     # [{ "name": str, "img": PIL, "visible": bool, "type": str }]
+    "chat_canvas_roi":         {"x": 25, "y": 25, "w": 50, "h": 50}, # ROI em %
 }
 
 for k, v in _DEFAULTS.items():
@@ -673,8 +675,10 @@ def show_product_linking_dialog():
     cols = st.columns(4)
     for i, prod in enumerate(shop_prods[:20]):
         with cols[i % 4]:
-            if prod.get("image"):
-                st.image(prod["image"], width="stretch")
+            img_id = prod.get("image", "")
+            if img_id:
+                img_url = img_id if img_id.startswith("http") else f"https://down-br.img.susercontent.com/file/{img_id}"
+                st.image(img_url, width="stretch")
             st.caption(prod["name"][:35] + "..." if len(prod["name"]) > 35 else prod["name"])
             if st.button("Selecionar", key=f"btn_vinc_prod_{i}"):
                 st.session_state.selected_product = prod
@@ -866,6 +870,100 @@ def _render_copy_button(text: str, turn_idx: int):
         )
 
 
+def _render_canvas_area(full_context: str, segmento: str):
+    """Renderiza a área do Canvas (Direção Criativa) na direita."""
+    from backend_core import composite_layers, apply_region_edit_with_vision
+    import io as _io
+    import time as _time
+    
+    with st.container(border=True):
+        st.markdown('<p class="section-label">🎨 Direção Criativa MVP</p>', unsafe_allow_html=True)
+        
+        layers = st.session_state.get("chat_canvas_layers", [])
+        
+        if not layers:
+            # Fallback: se houver imagem ativa mas nenhuma camada, inicializa
+            active_img = st.session_state.get("chat_active_edit_image")
+            if active_img:
+                layers = [{"name": "Original", "img": active_img, "visible": True, "type": "base"}]
+                st.session_state.chat_canvas_layers = layers
+            else:
+                st.markdown(
+                    "<div style='text-align:center;padding:4rem 0;opacity:0.35;font-size:14px'>"
+                    "🖌️ Anexe ou processe uma imagem<br>para abrir o Canvas</div>",
+                    unsafe_allow_html=True
+                )
+                return
+
+        # ── Área do Canvas (Composite) ───────────────────────
+        composite = composite_layers(layers)
+        if composite:
+            st.image(composite, use_container_width=True)
+            st.caption(f"Composição final ({composite.width}×{composite.height}px)")
+        
+        # ── Gerenciador de Camadas ────────────────────────────
+        st.markdown("---")
+        st.markdown('<p class="section-label" style="font-size:10px">📂 Camadas</p>', unsafe_allow_html=True)
+        for i, layer in enumerate(reversed(layers)):
+            idx = len(layers) - 1 - i
+            with st.container():
+                col_vis, col_name, col_del = st.columns([1, 4, 1])
+                with col_vis:
+                    vis = st.checkbox("", value=layer["visible"], key=f"vis_{idx}_{len(layers)}")
+                    if vis != layer["visible"]:
+                        st.session_state.chat_canvas_layers[idx]["visible"] = vis
+                        st.rerun()
+                with col_name:
+                    st.markdown(f"<span style='font-size:12px'>{layer['name']}</span>", unsafe_allow_html=True)
+                with col_del:
+                    if layer["type"] != "base":
+                        if st.button("🗑️", key=f"del_lay_{idx}", help="Remover"):
+                            st.session_state.chat_canvas_layers.pop(idx)
+                            st.rerun()
+        
+        # ── Ferramentas Regionais (ROI) ──────────────────────
+        st.markdown("---")
+        with st.expander("🎯 Ferramentas Regionais", expanded=True):
+            st.markdown('<p class="section-label" style="font-size:10px">Região de Interesse (ROI %)</p>', unsafe_allow_html=True)
+            roi = st.session_state.chat_canvas_roi
+            c1, c2 = st.columns(2)
+            roi["x"] = c1.slider("Esquerda", 0, 100, roi["x"], key="roi_x")
+            roi["y"] = c2.slider("Topo", 0, 100, roi["y"], key="roi_y")
+            roi["w"] = c1.slider("Largura", 1, 100, roi["w"], key="roi_w")
+            roi["h"] = c2.slider("Altura", 1, 100, roi["h"], key="roi_h")
+            st.session_state.chat_canvas_roi = roi
+            
+            instrucao = st.text_input("O que fazer nesta área?", placeholder="Ex: mude a cor, adicione selo...", key="roi_inst")
+            if st.button("✨ Aplicar na Região", type="primary", width="stretch", key="btn_apply_roi"):
+                if instrucao and composite:
+                    with st.spinner("IA processando região..."):
+                        new_layer_img, desc = apply_region_edit_with_vision(
+                            composite, roi, instrucao, full_context, segmento
+                        )
+                        st.session_state.chat_canvas_layers.append({
+                            "name": f"Edição: {instrucao[:15]}",
+                            "img": new_layer_img,
+                            "visible": True,
+                            "type": "edit"
+                        })
+                        st.success(f"✅ {desc}")
+                        _time.sleep(1)
+                        st.rerun()
+        
+        # ── Exportação ──────────────────────────────────────
+        st.markdown("---")
+        if composite:
+            buf = _io.BytesIO()
+            composite.convert("RGB").save(buf, format="JPEG", quality=95)
+            salvar_ou_baixar(
+                "Exportar Composição",
+                data=buf.getvalue(),
+                file_name="composicao_final.jpg",
+                mime="image/jpeg",
+                key="btn_export_canvas"
+            )
+
+
 def render_chatbot():
     st.markdown("""
     <div class="page-header">
@@ -949,96 +1047,13 @@ def render_chatbot():
         return
 
     # ══════════════════════════════════════════════════════════
-    # CHAT ATIVO — Layout: painel esquerdo (chat) + direito (preview)
+    # CHAT ATIVO — Layout: painel esquerdo (chat) + direito (canvas)
     # ══════════════════════════════════════════════════════════
-    col_chat, col_preview = st.columns([2, 1])
+    col_chat, col_canvas = st.columns([1, 1])
 
-    # ── PAINEL DIREITO: Preview de imagens processadas ────────
-    with col_preview:
-        with st.container(border=True):
-            col_title, col_reset = st.columns([3, 1])
-            with col_title:
-                st.markdown(
-                    '<p class="section-label" style="margin:0">🖼️ Preview</p>',
-                    unsafe_allow_html=True,
-                )
-            with col_reset:
-                if st.button("✕", key="btn_clear_preview", help="Limpar preview"):
-                    st.session_state.chat_preview_images  = []
-                    st.session_state.chat_preview_captions = []
-                    st.rerun()
-
-            preview_imgs = st.session_state.get("chat_preview_images", [])
-            if preview_imgs:
-                for i, pimg in enumerate(reversed(preview_imgs[-4:])):  # até 4 últimas
-                    cap = ""
-                    caps = st.session_state.get("chat_preview_captions", [])
-                    if caps:
-                        idx_rev = len(preview_imgs) - 1 - i
-                        cap = caps[idx_rev] if idx_rev < len(caps) else ""
-
-                    st.image(pimg, caption=cap, width='stretch')
-
-                    # Botão de download para cada imagem
-                    buf_dl = io.BytesIO()
-                    if hasattr(pimg, "mode"):
-                        save_img = pimg.convert("RGB") if pimg.mode == "RGBA" else pimg
-                        save_img.save(buf_dl, format="JPEG", quality=95)
-                    salvar_ou_baixar(
-                        "Baixar",
-                        data=buf_dl.getvalue(),
-                        file_name=f"resultado_{i+1}.jpg",
-                        mime="image/jpeg",
-                        key=f"dl_preview_{i}_{len(preview_imgs)}",
-                    )
-
-                    if i < len(preview_imgs) - 1:
-                        st.markdown("---")
-            else:
-                st.markdown(
-                    "<div style='text-align:center;padding:2rem 0;opacity:0.35;font-size:13px'>"
-                    "📷<br>Imagens processadas<br>aparecerão aqui</div>",
-                    unsafe_allow_html=True,
-                )
-
-            # ── Contexto ativo compacto ────────────────────
-            if has_prod:
-                st.markdown("---")
-                prod = st.session_state.selected_product
-                img_url = (prod["image"] if prod["image"].startswith("http")
-                           else f"https://down-br.img.susercontent.com/file/{prod['image']}")
-                st.image(img_url, caption=f"⚡ {prod['name'][:28]}", width='stretch')
-
-            # ── Imagem ativa de edição ────────────────────────
-            active_img   = st.session_state.get("chat_active_edit_image")
-            active_label = st.session_state.get("chat_active_edit_label", "imagem")
-            if active_img is not None:
-                st.markdown("---")
-                st.markdown(
-                    '<p class="section-label" style="margin:0 0 4px 0">'
-                    '✏️ Em edição</p>',
-                    unsafe_allow_html=True,
-                )
-                st.image(active_img, caption=active_label[:30], width="stretch")
-                col_ed1, col_ed2 = st.columns(2)
-                with col_ed1:
-                    if st.button("🔄 Usar esta", key="btn_use_active_edit",
-                                 width="stretch", help="Adiciona ao próximo envio"):
-                        import io as _io
-                        buf = _io.BytesIO()
-                        active_img.convert("RGB").save(buf, format="JPEG", quality=92)
-                        img_bytes = buf.getvalue()
-                        st.session_state.chat_attachments         = [img_bytes]
-                        st.session_state.chat_attachment_types    = ["image"]
-                        st.session_state.chat_attachment_previews = [active_img.convert("RGB")]
-                        st.session_state.show_attach_panel        = True
-                        st.rerun()
-                with col_ed2:
-                    if st.button("✕ Limpar", key="btn_clear_active_edit",
-                                 width="stretch"):
-                        st.session_state.chat_active_edit_image = None
-                        st.session_state.chat_active_edit_label = ""
-                        st.rerun()
+    # ── PAINEL DIREITO: Canvas de Direção Criativa ────────────
+    with col_canvas:
+        _render_canvas_area(full_context, segmento)
 
     # ── PAINEL ESQUERDO: Chat ─────────────────────────────────
     with col_chat:
@@ -1550,6 +1565,34 @@ def _send_message(
         st.session_state.chat_preview_captions = (
             st.session_state.get("chat_preview_captions", []) + result["captions"]
         )[-8:]
+
+    # ── Atualiza Camadas do Canvas ────────────────────────────
+    if result["images"]:
+        # Se for a primeira imagem, define como Base
+        if not st.session_state.chat_canvas_layers:
+            st.session_state.chat_canvas_layers = [{
+                "name": "Original",
+                "img": result["images"][0],
+                "visible": True,
+                "type": "base"
+            }]
+            # Se houver mais de uma (ex: variantes), adiciona como camadas extras
+            for idx_var, var_img in enumerate(result["images"][1:]):
+                st.session_state.chat_canvas_layers.append({
+                    "name": f"Variante {idx_var+1}",
+                    "img": var_img,
+                    "visible": False,
+                    "type": "edit"
+                })
+        else:
+            # Já existe base, adiciona as novas como camadas (ex: badge ou cenário)
+            for idx_res, res_img in enumerate(result["images"]):
+                st.session_state.chat_canvas_layers.append({
+                    "name": f"Turno {len(st.session_state.chat_history)}: {result.get('captions', [''])[idx_res]}",
+                    "img": res_img,
+                    "visible": True,
+                    "type": "edit"
+                })
 
     # ── Salva última imagem processada como "em edição" ───────
     if result.get("images"):

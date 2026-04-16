@@ -615,6 +615,37 @@ section.main > div {
     text-align: center !important;
 }
 
+/* ═══════════════════ CANVAS & LAYERS ═════════════════════ */
+.canvas-container {
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 10px;
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 400px;
+}
+
+.layer-item {
+    padding: 8px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+}
+
+.roi-preview {
+    position: absolute;
+    border: 2px solid #FF4B4B;
+    background: rgba(255, 75, 75, 0.1);
+    pointer-events: none;
+}
+
 /* ═══════════════════ TIPOGRAFIA GLOBAL ═══════════════════ */
 h1, h2, h3, h4, h5, h6,
 .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {

@@ -1100,6 +1100,30 @@ def detect_chat_intent(user_message: str, has_media: bool) -> str:
 # ADICIONAR creative_edit_with_vision() — nova função
 # ══════════════════════════════════════════════════════════════
 
+def composite_layers(layers: list) -> Image.Image | None:
+    """
+    Mescla uma lista de camadas (dicts com 'img' e 'visible') em uma única imagem.
+    Layers: [{ "name": str, "img": PIL, "visible": bool, "type": str }]
+    """
+    from PIL import Image
+    
+    visible_layers = [L for l in layers if (L := l).get("visible", True)]
+    if not visible_layers:
+        return None
+        
+    # Usa o tamanho da primeira camada como base
+    base_img = visible_layers[0]["img"].convert("RGBA")
+    composite = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
+    
+    for layer in visible_layers:
+        l_img = layer["img"].convert("RGBA")
+        if l_img.size != composite.size:
+            l_img = l_img.resize(composite.size, Image.LANCZOS)
+        composite = Image.alpha_composite(composite, l_img)
+        
+    return composite
+
+
 def infer_primary_benefit_with_vision(
     image: "Image.Image",
     product_context: str,
@@ -1477,6 +1501,43 @@ REGRAS:
 # ══════════════════════════════════════════════════════════════
 # ANÁLISE DE IMAGEM (Gemini Vision)
 # ══════════════════════════════════════════════════════════════
+
+def apply_region_edit_with_vision(
+    image: "Image.Image",
+    roi: dict, # {"x": %, "y": %, "w": %, "h": %}
+    instruction: str,
+    product_context: str,
+    segmento: str,
+) -> tuple:
+    """
+    Recorta a região selecionada (ROI), processa com Gemini Vision
+    e retorna uma nova camada de imagem com a edição aplicada naquela região.
+    """
+    from PIL import Image
+    import io as _io
+    
+    # 1. Calcula coordenadas reais do crop
+    w, h = image.size
+    x0 = int(roi["x"] * w / 100)
+    y0 = int(roi["y"] * h / 100)
+    w0 = int(roi["w"] * w / 100)
+    h0 = int(roi["h"] * h / 100)
+    
+    crop_box = (x0, y0, x0 + w0, y0 + h0)
+    region_img = image.crop(crop_box)
+    
+    # 2. Processa a região (ex: "mude a cor", "adicione brilho")
+    # Reutiliza o creative_edit_with_vision focado na região
+    edited_region, desc = creative_edit_with_vision(
+        region_img, instruction, product_context, segmento
+    )
+    
+    # 3. Cria uma camada transparente do tamanho total e cola a região editada
+    layer_img = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    layer_img.paste(edited_region.convert("RGBA"), (x0, y0))
+    
+    return layer_img, desc
+
 
 def analyze_product_image_vision(
     image: "Image.Image",
