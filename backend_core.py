@@ -1125,14 +1125,25 @@ def composite_layers(layers: list) -> Image.Image | None:
     if not visible_layers:
         return None
         
-    # Usa o tamanho da primeira camada como base
+    # Usa o tamanho da primeira camada como base (referência de aspect ratio)
     base_img = visible_layers[0]["img"].convert("RGBA")
-    composite = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
+    w_base, h_base = base_img.size
+    composite = Image.new("RGBA", (w_base, h_base), (0, 0, 0, 0))
     
     for layer in visible_layers:
         l_img = layer["img"].convert("RGBA")
-        if l_img.size != composite.size:
-            l_img = l_img.resize(composite.size, Image.LANCZOS)
+        
+        # Se o tamanho for diferente, redimensiona mantendo proporção (Contain)
+        if l_img.size != (w_base, h_base):
+            # Calcula proporção para não achatar
+            l_img.thumbnail((w_base, h_base), Image.LANCZOS)
+            
+            # Centraliza a imagem redimensionada no canvas da base
+            new_layer = Image.new("RGBA", (w_base, h_base), (0, 0, 0, 0))
+            offset = ((w_base - l_img.width) // 2, (h_base - l_img.height) // 2)
+            new_layer.paste(l_img, offset)
+            l_img = new_layer
+            
         composite = Image.alpha_composite(composite, l_img)
         
     return composite

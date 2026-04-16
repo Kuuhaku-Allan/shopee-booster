@@ -1609,26 +1609,32 @@ def _send_message(
 
     # ── Atualiza Camadas do Canvas ────────────────────────────
     if result["images"]:
-        # Se for a primeira imagem, define como Base
-        if not st.session_state.get("chat_canvas_layers"):
+        # Lista de intents que representam uma nova "imagem completa/final"
+        # Essas operações devem substituir a base do canvas para evitar achatamento e desalinhamento
+        GLOBAL_INTENTS = {"generate_scene", "recolor", "remove_bg", "generate_variants", "upscale"}
+        current_intent = result.get("intent")
+        
+        # Se for a primeira imagem OU uma operação global/final
+        if not st.session_state.get("chat_canvas_layers") or current_intent in GLOBAL_INTENTS:
+            # Substitui tudo pela nova base (preserva proporção visual)
             st.session_state.chat_canvas_layers = [{
-                "name": "Original",
+                "name": f"Base: {result.get('captions', [''])[0]}",
                 "img": result["images"][0],
                 "visible": True,
                 "type": "base"
             }]
-            # Se houver mais de uma (ex: variantes), adiciona como camadas extras
-            for idx_var, var_img in enumerate(result["images"][1:]):
-                st.session_state.chat_canvas_layers.append({
-                    "name": f"Variante {idx_var+1}",
-                    "img": var_img,
-                    "visible": False,
-                    "type": "edit"
-                })
+            # Se houver variantes, adiciona como desativadas
+            if len(result["images"]) > 1:
+                for idx_var, var_img in enumerate(result["images"][1:]):
+                    st.session_state.chat_canvas_layers.append({
+                        "name": f"Variante {idx_var+1}",
+                        "img": var_img,
+                        "visible": False,
+                        "type": "edit"
+                    })
         else:
-            # Já existe base, adiciona as novas como camadas (ex: badge ou cenário)
+            # Operação aditiva (badge, texto, ROI local)
             for idx_res, res_img in enumerate(result["images"]):
-                # Evita duplicar se a imagem for exatamente igual à última base (opcional)
                 st.session_state.chat_canvas_layers.append({
                     "name": f"Chat T{len(st.session_state.chat_history)}: {result.get('captions', [''])[idx_res]}",
                     "img": res_img,
