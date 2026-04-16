@@ -129,6 +129,9 @@ _DEFAULTS = {
     "chat_preview_images":     [],
     "chat_preview_captions":   [],
     "faq_ia_geral":            None,
+    "chat_active_edit_image":  None,   # PIL.Image em edição persistente
+    "chat_active_edit_label":  "",     # legenda da imagem em edição
+    "chat_last_post_actions":  [],     # ações pós-resposta do último turno
 }
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
@@ -1004,6 +1007,37 @@ def render_chatbot():
                            else f"https://down-br.img.susercontent.com/file/{prod['image']}")
                 st.image(img_url, caption=f"⚡ {prod['name'][:28]}", width='stretch')
 
+            # ── Imagem ativa de edição ────────────────────────
+            active_img   = st.session_state.get("chat_active_edit_image")
+            active_label = st.session_state.get("chat_active_edit_label", "imagem")
+            if active_img is not None:
+                st.markdown("---")
+                st.markdown(
+                    '<p class="section-label" style="margin:0 0 4px 0">'
+                    '✏️ Em edição</p>',
+                    unsafe_allow_html=True,
+                )
+                st.image(active_img, caption=active_label[:30], width="stretch")
+                col_ed1, col_ed2 = st.columns(2)
+                with col_ed1:
+                    if st.button("🔄 Usar esta", key="btn_use_active_edit",
+                                 width="stretch", help="Adiciona ao próximo envio"):
+                        import io as _io
+                        buf = _io.BytesIO()
+                        active_img.convert("RGB").save(buf, format="JPEG", quality=92)
+                        img_bytes = buf.getvalue()
+                        st.session_state.chat_attachments         = [img_bytes]
+                        st.session_state.chat_attachment_types    = ["image"]
+                        st.session_state.chat_attachment_previews = [active_img.convert("RGB")]
+                        st.session_state.show_attach_panel        = True
+                        st.rerun()
+                with col_ed2:
+                    if st.button("✕ Limpar", key="btn_clear_active_edit",
+                                 width="stretch"):
+                        st.session_state.chat_active_edit_image = None
+                        st.session_state.chat_active_edit_label = ""
+                        st.rerun()
+
     # ── PAINEL ESQUERDO: Chat ─────────────────────────────────
     with col_chat:
         # Cabeçalho do chat
@@ -1085,8 +1119,18 @@ def render_chatbot():
                     if st.button(sug, key=f"sug_{idx_s}", width='stretch'):
                         _send_message(sug, [], [], [], full_context, segmento)
 
+        # ── Ações pós-resposta (último turno) ─────────────────
+        # Renderiza embaixo do histórico, antes do input
+        if st.session_state.chat_history:
+            last_turn = st.session_state.chat_history[-1]
+            last_idx  = len(st.session_state.chat_history) - 1
+            if last_turn.get("post_actions"):
+                _render_post_response_actions(
+                    last_turn, last_idx, full_context, segmento
+                )
+
         # ── Área de anexo (toggle "+") ────────────────────────
-        _render_attachment_area()
+        _render_attachment_area(full_context=full_context, segmento=segmento)
 
         # ── Campo de texto + enviar ───────────────────────────
         user_input = st.chat_input("Mensagem, pergunta ou comando de imagem...")
@@ -1212,15 +1256,147 @@ def render_chatbot():
 # FUNÇÕES AUXILIARES DO CHATBOT
 # ══════════════════════════════════════════════════════════════
 
-def _render_attachment_area():
-    """Renderiza o painel de anexo com botão + e uploader toggleável."""
+def _render_quick_actions(att_types: list, full_context: str, segmento: str):
+    """
+    Mostra chips de ação rápida contextuais quando há anexo pendente.
+    Imagem → ações de edição. Vídeo → ações de análise consultiva.
+    Cada chip dispara _send_message com um prompt pré-definido.
+    """
+    has_image = any(t == "image" for t in att_types)
+    has_video = any(t == "video" for t in att_types)
+
+    if not has_image and not has_video:
+        return
+
+    st.markdown(
+        '<p class="section-label" style="margin:0.5rem 0 0.3rem 0">'
+        '⚡ Ações rápidas</p>',
+        unsafe_allow_html=True,
+    )
+
+    if has_image:
+        acoes = [
+            ("🧼", "Fundo limpo",        "remova o fundo desta imagem e coloque fundo branco limpo"),
+            ("🎨", "Cenário clean",       "remova o fundo e gere um cenário clean para este produto"),
+            ("🌈", "Gerar 3 variações",   "gere 3 variações desta imagem com estilos diferentes"),
+            ("🏷️", "Adicionar benefício", "adicione um badge com o benefício principal deste produto"),
+            ("📱", "Capa principal",      "optimize esta imagem para ser a capa principal do anúncio"),
+            ("🔍", "Analisar imagem",     "analise esta imagem de produto e me dê feedback detalhado"),
+        ]
+    else:  # vídeo
+        acoes = [
+            ("📊", "Analisar retenção", "analise este vídeo e avalie a retenção e o gancho"),
+            ("🎬", "Avaliar gancho",    "avaliie o gancho dos primeiros 3 segundos e dê recomendações"),
+            ("📋", "Checklist",         "analise o vídeo e gere um checklist de melhorias prioritárias"),
+            ("✏️", "Roteiro melhorado", "analise o vídeo e crie um roteiro melhorado para este produto"),
+        ]
+
+    atts      = st.session_state.get("chat_attachments", [])
+    att_types_s = st.session_state.get("chat_attachment_types", [])
+    att_prev  = st.session_state.get("chat_attachment_previews", [])
+
+    cols = st.columns(len(acoes))
+    for idx, (icon, label, prompt) in enumerate(acoes):
+        with cols[idx]:
+            if st.button(
+                f"{icon} {label}",
+                key=f"qa_{idx}_{len(atts)}",
+                width="stretch",
+                use_container_width=True,
+            ):
+                _handle_chat_input_with_vision(
+                    prompt, atts, att_types_s, att_prev, full_context, segmento
+                )
+
+
+def _render_post_response_actions(
+    turn: dict,
+    turn_idx: int,
+    full_context: str,
+    segmento: str,
+):
+    """
+    Renderiza ações de follow-up embaixo de cada resposta do assistente.
+    Depende de 'post_actions' registrado no histórico.
+    """
+    actions = turn.get("post_actions", [])
+    if not actions:
+        return
+
+    # Mostra imagens do turno se houver variantes
+    result_imgs = turn.get("result_images", [])
+    if result_imgs and len(result_imgs) > 1:
+        st.markdown(
+            f'<p class="section-label" style="font-size:10px;margin-bottom:4px">'
+            f'🖼️ {len(result_imgs)} variantes geradas</p>',
+            unsafe_allow_html=True,
+        )
+        # Botão de baixar todas
+        salvar_ou_baixar(
+            f"Baixar todas ({len(result_imgs)})",
+            data=_pack_images_zip(result_imgs),
+            file_name=f"variantes_{turn_idx+1}.zip",
+            mime="application/zip",
+            key=f"dl_all_variants_{turn_idx}",
+        )
+
+    st.markdown(
+        '<p class="section-label" style="font-size:10px;margin:4px 0 2px 0">'
+        '↩ Próximos passos</p>',
+        unsafe_allow_html=True,
+    )
+    n_cols = min(len(actions), 4)
+    cols = st.columns(n_cols)
+    for i, act in enumerate(actions[:n_cols]):
+        with cols[i]:
+            if st.button(
+                f"{act['icon']} {act['label']}",
+                key=f"post_{turn_idx}_{i}",
+                width="stretch",
+                use_container_width=True,
+            ):
+                # Se o turno gerou imagens, reutiliza a última como contexto
+                last_imgs = turn.get("result_images", [])
+                if last_imgs:
+                    # Serializa PIL → bytes para _send_message
+                    import io as _io
+                    buf = _io.BytesIO()
+                    last_imgs[-1].convert("RGB").save(buf, format="JPEG", quality=92)
+                    img_bytes = buf.getvalue()
+                    _send_message(
+                        act["prompt"],
+                        [img_bytes], ["image"], [],
+                        full_context, segmento,
+                    )
+                else:
+                    _send_message(
+                        act["prompt"],
+                        [], [], [],
+                        full_context, segmento,
+                    )
+
+
+def _pack_images_zip(images: list) -> bytes:
+    """Empacota lista de PIL.Image em ZIP em memória."""
+    import zipfile
+    import io as _io
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, img in enumerate(images):
+            img_buf = _io.BytesIO()
+            img.convert("RGB").save(img_buf, format="JPEG", quality=92)
+            zf.writestr(f"variante_{i+1}.jpg", img_buf.getvalue())
+    return buf.getvalue()
+
+
+def _render_attachment_area(full_context: str = "", segmento: str = ""):
+    """Renderiza painel de anexo + ações rápidas contextuais."""
     is_open = st.session_state.get("show_attach_panel", False)
     label   = "📎 Fechar anexos" if is_open else "📎 Anexar imagem / vídeo"
 
-    if st.button(label, key="btn_toggle_attach", width='stretch'):
+    if st.button(label, key="btn_toggle_attach", width="stretch"):
         st.session_state.show_attach_panel = not is_open
         if not st.session_state.show_attach_panel:
-            # Fecha o painel E limpa os anexos pendentes
             st.session_state.chat_attachments         = []
             st.session_state.chat_attachment_types    = []
             st.session_state.chat_attachment_previews = []
@@ -1229,7 +1405,7 @@ def _render_attachment_area():
     if st.session_state.get("show_attach_panel"):
         with st.container(border=True):
             st.markdown(
-                '<p class="section-label" style="margin:0 0 0.5rem 0">Arquivos anexados</p>',
+                '<p class="section-label" style="margin:0 0 0.5rem 0">Arquivos</p>',
                 unsafe_allow_html=True,
             )
             uploaded = st.file_uploader(
@@ -1249,8 +1425,14 @@ def _render_attachment_area():
                     raw = f.read()
                     attachments.append(raw)
                     if ftype == "image":
+                        from PIL import Image
                         pimg = Image.open(io.BytesIO(raw)).convert("RGB")
                         att_previews.append(pimg)
+
+                        # ── Sessão ativa de edição ────────────────────
+                        # Ao anexar imagem, salva como imagem ativa de edição
+                        st.session_state.chat_active_edit_image = pimg.copy()
+                        st.session_state.chat_active_edit_label = f.name
                     else:
                         att_previews.append(None)
 
@@ -1258,28 +1440,29 @@ def _render_attachment_area():
                 st.session_state.chat_attachment_types    = att_types
                 st.session_state.chat_attachment_previews = [p for p in att_previews if p is not None]
 
-                # Preview dos arquivos selecionados
-                valid_previews = [p for p in att_previews if p is not None]
-                if valid_previews:
-                    num_cols = min(len(valid_previews), 4)
-                    prev_cols = st.columns(num_cols)
+                # Preview compacto
+                valid_prev = [p for p in att_previews if p is not None]
+                if valid_prev:
+                    prev_cols = st.columns(min(len(valid_prev), 4))
                     pi = 0
                     for fi, fp in enumerate(att_previews):
                         if fp is not None:
-                            with prev_cols[pi % num_cols]:
-                                st.image(fp, width=180,
-                                         caption=f"{'🎬' if att_types[fi]=='video' else '🖼️'} {uploaded[fi].name[:20]}")
+                            with prev_cols[pi % 4]:
+                                st.image(fp, width=160,
+                                         caption=f"🖼️ {uploaded[fi].name[:18]}")
                             pi += 1
 
-                # Dica contextual baseada no tipo de arquivo
                 has_video_att = any(t == "video" for t in att_types)
-                has_image_att = any(t == "image" for t in att_types)
-                tipo_hint = ""
-                if has_video_att:
-                    tipo_hint = " | 🎬 Escreva 'analise este vídeo' ou faça sua pergunta"
-                elif has_image_att:
-                    tipo_hint = " | 🖼️ Ex: 'remova o fundo e gere um cenário clean'"
-                st.success(f"✅ {len(uploaded)} arquivo(s) prontos para envio.{tipo_hint}")
+                tipo_hint = (" | 🎬 Vídeo pronto — use ação rápida abaixo"
+                             if has_video_att else
+                             " | 🖼️ Imagem pronta — use ação rápida abaixo")
+                st.success(f"✅ {len(uploaded)} arquivo(s) carregado(s).{tipo_hint}")
+
+            # ── Ações rápidas aparecem DENTRO do painel quando há anexo ──
+            att_types_now = st.session_state.get("chat_attachment_types", [])
+            if att_types_now and full_context:
+                st.markdown("---")
+                _render_quick_actions(att_types_now, full_context, segmento)
 
 
 def _send_message(
@@ -1358,6 +1541,15 @@ def _send_message(
         st.session_state.chat_preview_captions = (
             st.session_state.get("chat_preview_captions", []) + result["captions"]
         )[-8:]
+
+    # ── Salva última imagem processada como "em edição" ───────
+    if result.get("images"):
+        st.session_state.chat_active_edit_image = result["images"][-1]
+        st.session_state.chat_active_edit_label = "última processada"
+
+    # ── Salva post_actions no turno do histórico ───────────────
+    if st.session_state.chat_history and result.get("post_actions"):
+        st.session_state.chat_history[-1]["post_actions"] = result["post_actions"]
 
     # Limpa anexos após envio
     st.session_state.chat_attachments         = []

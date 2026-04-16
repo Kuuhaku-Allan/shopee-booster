@@ -1045,6 +1045,10 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
         "nota", "pontu", "qualidade da imagem"
     ])
 
+    is_variants = any(w in msg for w in [
+        "variaç", "variante", "varias versoes", "várias versões", "estilos diferentes"
+    ])
+
     # Edição criativa: qualquer instrução que implica manipular pixels
     # de forma aberta (badge, iluminação, detalhe de material, etc.)
     is_creative = any(w in msg for w in [
@@ -1655,6 +1659,133 @@ Analise este vídeo de produto COM PROFUNDIDADE e devolva um relatório estrutur
 # PROCESSAMENTO COMPLETO DE MÍDIA NO CHAT
 # ══════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════
+# BLOCO A — generate_color_variants()
+# ══════════════════════════════════════════════════════════════
+
+def generate_color_variants(
+    image: "Image.Image",
+    segmento: str,
+    n_variants: int = 3,
+) -> list:
+    """
+    Gera N variantes da mesma imagem com fundos/estilos diferentes.
+    Cada variante = produto com fundo removido + background diferente.
+
+    Retorna lista de dicts:
+      [{"image": PIL.Image, "label": str}, ...]
+    """
+    import io as _io
+    import time as _time
+    from PIL import Image
+
+    ESTILOS = [
+        {
+            "label": "🧼 Clean White",
+            "prompt": "minimalist pure white studio background soft shadows product photography",
+            "segmento_override": None,
+        },
+        {
+            "label": "🎨 Gradiente Pastel",
+            "prompt": "soft pastel gradient background product photography minimal",
+            "segmento_override": None,
+        },
+        {
+            "label": "🏙️ Lifestyle",
+            "prompt": "modern lifestyle background home environment natural light soft",
+            "segmento_override": None,
+        },
+        {
+            "label": "🌟 Premium Dark",
+            "prompt": "dark premium studio background luxury product photography dramatic lighting",
+            "segmento_override": None,
+        },
+    ]
+
+    # Remove fundo uma vez, reutiliza para todas as variantes
+    img_no_bg = None
+    try:
+        from rembg import remove as rembg_remove
+        orig_size = image.size
+        img_work  = image.convert("RGB")
+        if img_work.width > 1024 or img_work.height > 1024:
+            img_work = img_work.copy()
+            img_work.thumbnail((1024, 1024), Image.LANCZOS)
+
+        buf = _io.BytesIO()
+        img_work.save(buf, format="PNG")
+        no_bg_bytes = rembg_remove(buf.getvalue())
+        removed = Image.open(_io.BytesIO(no_bg_bytes)).convert("RGBA")
+
+        if removed.size != orig_size:
+            removed = removed.resize(orig_size, Image.LANCZOS)
+        img_no_bg = removed
+    except Exception:
+        img_no_bg = image.convert("RGBA")
+
+    results = []
+    for estilo in ESTILOS[:n_variants]:
+        try:
+            seg_use = estilo["segmento_override"] or segmento
+            bg = generate_ai_scenario(estilo["prompt"], seg_use)
+            if not bg:
+                bg = generate_gradient_background(seg_use)
+
+            bg = bg.resize((1024, 1024)).convert("RGBA")
+            fg = img_no_bg.copy()
+            fg.thumbnail((800, 800))
+            offset = (
+                (bg.width  - fg.width)  // 2,
+                int((bg.height - fg.height) * 0.6),
+            )
+            bg = apply_contact_shadow(bg, fg, offset)
+            bg.paste(fg, offset, fg)
+            results.append({"image": bg, "label": estilo["label"]})
+            _time.sleep(0.5)  # pequena pausa entre chamadas de API
+        except Exception as e:
+            results.append({"image": img_no_bg, "label": f"{estilo['label']} (fallback)"})
+
+    return results
+
+
+# ══════════════════════════════════════════════════════════════
+# BLOCO B — generate_post_actions()
+# ══════════════════════════════════════════════════════════════
+
+def generate_post_actions(intent: str, has_image_result: bool) -> list:
+    """
+    Retorna lista de ações de follow-up baseadas no intent executado.
+    Cada item: {"label": str, "prompt": str, "icon": str}
+    """
+    IMAGE_ACTIONS = [
+        {"icon": "🌈", "label": "Gerar variações",     "prompt": "gere 3 variações desta imagem com estilos diferentes"},
+        {"icon": "🧼", "label": "Fundo branco",         "prompt": "remova o fundo e coloque fundo branco limpo"},
+        {"icon": "🎨", "label": "Outro cenário",        "prompt": "gere um cenário diferente para este produto"},
+        {"icon": "🏷️", "label": "Adicionar benefício",  "prompt": "adicione um badge de benefício principal nesta imagem"},
+        {"icon": "📱", "label": "Versão mobile",        "prompt": "optimize esta imagem para capa principal do anúncio mobile"},
+    ]
+    VIDEO_ACTIONS = [
+        {"icon": "📋", "label": "Transformar em checklist", "prompt": "transforme esta análise em um checklist de regravação prático"},
+        {"icon": "🎬", "label": "Gerar roteiro novo",        "prompt": "crie um roteiro melhorado de 30 segundos baseado neste produto e nicho"},
+        {"icon": "📅", "label": "Plano de melhoria",         "prompt": "crie um plano de ação de 7 dias para melhorar os vídeos deste produto"},
+        {"icon": "✅", "label": "Boas práticas do nicho",    "prompt": "quais são as melhores práticas de vídeo para este nicho no Shopee Brasil?"},
+    ]
+    ANALYSIS_ACTIONS = [
+        {"icon": "📊", "label": "Resumir em 3 pontos",   "prompt": "resuma os principais pontos desta análise em 3 bullets acionáveis"},
+        {"icon": "🚀", "label": "Gerar versão otimizada", "prompt": "com base nesta análise, gere o listing completo otimizado"},
+        {"icon": "🏆", "label": "Comparar com top lojas", "prompt": "compare este produto com as melhores práticas dos concorrentes"},
+    ]
+
+    if intent == "analyze_video":
+        return VIDEO_ACTIONS
+    elif intent in ("remove_bg", "generate_scene", "creative_edit", "upscale", "generate_variants") or has_image_result:
+        return IMAGE_ACTIONS
+    elif intent in ("analyze_image", "optimize_listing"):
+        return ANALYSIS_ACTIONS
+    else:
+        return []
+
+
 def process_chat_turn(
     user_message: str,
     attachments: list,
@@ -1679,7 +1810,7 @@ def process_chat_turn(
 
     # ── Intent de mídia sem anexo → instrui o usuário ────────
     MEDIA_INTENTS = {"remove_bg", "generate_scene", "upscale",
-                     "analyze_image", "analyze_video", "creative_edit"}
+                     "analyze_image", "analyze_video", "creative_edit", "generate_variants"}
     if not has_media and any(i in MEDIA_INTENTS for i in intents):
         msgs = {
             "remove_bg":     "📎 Para remover o fundo, clique em **📎 Anexar imagem / vídeo**, selecione a foto e reenvie.",
@@ -1688,6 +1819,7 @@ def process_chat_turn(
             "analyze_image": "📎 Para analisar a imagem, anexe a foto e reenvie sua pergunta.",
             "analyze_video": "📎 Para analisar o vídeo, anexe o arquivo MP4 e reenvie.",
             "creative_edit": "📎 Para editar a imagem, anexe a foto pelo botão **📎 Anexar imagem / vídeo** e reenvie com a instrução.",
+            "generate_variants": "📎 Para gerar variações, anexe a foto e reenvie.",
         }
         media_intent = next((i for i in intents if i in MEDIA_INTENTS), intents[0])
         result["text"] = msgs.get(media_intent, "📎 Por favor, anexe o arquivo e reenvie.")
@@ -1709,6 +1841,7 @@ def process_chat_turn(
                 "preço, imagem e dados de concorrentes para gerar um listing preciso.\n\n"
                 "Se quiser, posso analisar o mercado em geral — é só descrever o produto!"
             )
+        result["post_actions"] = generate_post_actions("optimize_listing", False)
         return result
 
     # ── Chat geral sem mídia ─────────────────────────────────
@@ -1730,7 +1863,8 @@ def process_chat_turn(
                 break
             except Exception:
                 _time.sleep(2)
-        result["text"] = text or "⏳ Erro de API. Tente novamente."
+        result["text"]         = text or "⏳ Erro de API. Tente novamente."
+        result["post_actions"] = generate_post_actions("general", False)
         return result
 
     # ── Processamento de mídia com encadeamento multi-intent ─
@@ -1751,6 +1885,7 @@ def process_chat_turn(
                     "Certifique-se de enviar um MP4 válido."
                 )
                 result["intent"] = "analyze_video"
+                result["post_actions"] = generate_post_actions("analyze_video", False)
                 return result
 
             # Limita a 80 MB para não exceder quota da Files API
@@ -1763,6 +1898,7 @@ def process_chat_turn(
                     "desnecessários antes de enviar."
                 )
                 result["intent"] = "analyze_video"
+                result["post_actions"] = generate_post_actions("analyze_video", False)
                 return result
 
             from backend_core import analyze_video_with_gemini
@@ -1771,6 +1907,7 @@ def process_chat_turn(
             )
             result["text"]   = analise
             result["intent"] = "analyze_video"
+            result["post_actions"] = generate_post_actions("analyze_video", False)
             return result
 
         # Converte para PIL
@@ -1899,19 +2036,34 @@ def process_chat_turn(
                 )
                 text_parts.append(feedback)
 
-        processed_images.append(current_img)
-        cap_parts = []
-        if "remove_bg" in intents:   cap_parts.append("✂️ sem fundo")
-        if "generate_scene" in intents: cap_parts.append("🎨 cenário IA")
-        if "upscale" in intents:     cap_parts.append("🔍 upscale 2×")
-        if "creative_edit" in intents: cap_parts.append("✨ edição criativa")
-        if "analyze_image" in intents: cap_parts.append("🔍 análise")
-        captions.append(" · ".join(cap_parts) if cap_parts else "Processado")
+            elif intent == "generate_variants":
+                # Gera variantes e adiciona ao resultado final
+                text_parts.append("🌈 Gerando 3 variações de estilo...")
+                variants = generate_color_variants(current_img, segmento, n_variants=3)
+                for var in variants:
+                    processed_images.append(var["image"])
+                    captions.append(var["label"])
+                # A imagem principal do loop continua sendo current_img
+
+        if "generate_variants" not in intents:
+            processed_images.append(current_img)
+            cap_parts = []
+            if "remove_bg" in intents:   cap_parts.append("✂️ sem fundo")
+            if "generate_scene" in intents: cap_parts.append("🎨 cenário IA")
+            if "upscale" in intents:     cap_parts.append("🔍 upscale 2×")
+            if "creative_edit" in intents: cap_parts.append("✨ edição criativa")
+            if "analyze_image" in intents: cap_parts.append("🔍 análise")
+            captions.append(" · ".join(cap_parts) if cap_parts else "Processado")
 
     result["text"]     = "\n\n".join(text_parts) if text_parts else "✅ Processamento concluído!"
     result["images"]   = processed_images
     result["captions"] = captions
+    result["post_actions"] = generate_post_actions(
+        intent           = result["intent"],
+        has_image_result = bool(processed_images),
+    )
     return result
+
 
 # ══════════════════════════════════════════════════════════════
 # FAQ INTELIGENTE — Sugestão automática a partir do histórico
