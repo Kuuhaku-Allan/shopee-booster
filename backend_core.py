@@ -1055,7 +1055,8 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
         "badge", "etiqueta", "selos", "texto", "escrit", "escreve",
         "coloc", "adiciona", "bot", "colocar", "botar", "add",
         "iluminaç", "luz", "brilh", "sombra", "contrast", "saturação",
-        "cor", "trocal", "mudal", "filtro", "efeito",
+        "cor", "trocar", "mudar", "mude a", "verde", "azul", "preto", "rosa",
+        "filtro", "efeito",
         "recort", "detal", "ampli", "zoom", "mostra",
         "prova", "resistente", "imperme", "material", "tecido",
         "profissional", "montag", "composição",
@@ -1224,8 +1225,12 @@ Responda APENAS com JSON válido (sem markdown), com as operações a executar:
     // {{"type": "vignette", "intensity": 0.4}}  → 0.1=suave, 0.7=forte
     
     // Borda clean ao redor do produto (borda fina colorida):
-    // {{"type": "border", "color": "#E0E0E0", "width": 8}}
-  ],
+    // {{"type": "border", "color": "#E0E0E0", "width": 8}},
+
+    // Troca de cor (específico para regiões ou produto inteiro):
+    // {{"type": "recolor", "target_color": "green", "hue_shift": 120}}
+    ],
+
   "description": "Explicação em português do que foi feito"
 }}
 
@@ -1910,6 +1915,14 @@ def process_chat_turn(
     from PIL import Image
 
     has_media = len(attachments) > 0
+    active_img_fallback = kwargs.get("active_image")
+    
+    # Se não houver anexo, mas houver imagem ativa no editor, usa como anexo implícito
+    if not has_media and active_img_fallback:
+        attachments = [active_img_fallback]
+        attachment_types = ["image"]
+        has_media = True
+
     intents   = detect_chat_intents(user_message, has_media)
 
     result = {"text": "", "images": [], "intent": intents[0], "captions": []}

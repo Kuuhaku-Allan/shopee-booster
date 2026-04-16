@@ -875,9 +875,10 @@ def _render_canvas_area(full_context: str, segmento: str):
     from backend_core import composite_layers, apply_region_edit_with_vision
     import io as _io
     import time as _time
+    from PIL import Image, ImageDraw
     
     with st.container(border=True):
-        st.markdown('<p class="section-label">🎨 Direção Criativa MVP</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-label">🎨 Direção Criativa</p>', unsafe_allow_html=True)
         
         layers = st.session_state.get("chat_canvas_layers", [])
         
@@ -898,9 +899,48 @@ def _render_canvas_area(full_context: str, segmento: str):
         # ── Área do Canvas (Composite) ───────────────────────
         composite = composite_layers(layers)
         if composite:
-            st.image(composite, use_container_width=True)
-            st.caption(f"Composição final ({composite.width}×{composite.height}px)")
-        
+            # ── ROI Visualization ────────────────────────────
+            roi = st.session_state.chat_canvas_roi
+            preview_img = composite.copy().convert("RGBA")
+            draw = ImageDraw.Draw(preview_img)
+            w, h = preview_img.size
+            x0 = int(roi["x"] * w / 100)
+            y0 = int(roi["y"] * h / 100)
+            w0 = int(roi["w"] * w / 100)
+            h0 = int(roi["h"] * h / 100)
+            
+            # Desenha retângulo vermelho semitransparente
+            draw.rectangle([x0, y0, x0+w0, y0+h0], outline=(255, 75, 75, 255), width=4)
+            overlay = Image.new("RGBA", preview_img.size, (0, 0, 0, 0))
+            draw_ov = ImageDraw.Draw(overlay)
+            draw_ov.rectangle([x0, y0, x0+w0, y0+h0], fill=(255, 75, 75, 40))
+            preview_img = Image.alpha_composite(preview_img, overlay)
+            
+            st.image(preview_img, use_container_width=True, caption="Preview com Área de Seleção (ROI)")
+            
+            c1, c2 = st.columns(2)
+            if c1.button("📥 Usar no Chat", use_container_width=True, help="Envia esta composição como anexo para o próximo prompt"):
+                buf = _io.BytesIO()
+                composite.convert("RGB").save(buf, format="JPEG", quality=92)
+                st.session_state.chat_active_edit_image = composite
+                st.session_state.chat_attachments = [buf.getvalue()]
+                st.session_state.chat_attachment_types = ["image"]
+                st.session_state.chat_attachment_previews = [composite.convert("RGB")]
+                st.session_state.show_attach_panel = True
+                st.success("✅ Composição pronta no chat!")
+                _time.sleep(0.5)
+                st.rerun()
+            
+            if c2.button("📌 Fixar como Base", use_container_width=True, help="Transforma a composição atual na nova camada 'Original'"):
+                st.session_state.chat_canvas_layers = [{
+                    "name": "Base Mesclada",
+                    "img": composite,
+                    "visible": True,
+                    "type": "base"
+                }]
+                st.session_state.chat_active_edit_image = composite
+                st.rerun()
+
         # ── Gerenciador de Camadas ────────────────────────────
         st.markdown("---")
         st.markdown('<p class="section-label" style="font-size:10px">📂 Camadas</p>', unsafe_allow_html=True)
@@ -923,25 +963,25 @@ def _render_canvas_area(full_context: str, segmento: str):
         
         # ── Ferramentas Regionais (ROI) ──────────────────────
         st.markdown("---")
-        with st.expander("🎯 Ferramentas Regionais", expanded=True):
-            st.markdown('<p class="section-label" style="font-size:10px">Região de Interesse (ROI %)</p>', unsafe_allow_html=True)
+        with st.expander("🎯 Seleção de Área (ROI)", expanded=True):
+            st.markdown('<p class="section-label" style="font-size:10px">Ajuste os sliders para mover o retângulo vermelho</p>', unsafe_allow_html=True)
             roi = st.session_state.chat_canvas_roi
             c1, c2 = st.columns(2)
-            roi["x"] = c1.slider("Esquerda", 0, 100, roi["x"], key="roi_x")
-            roi["y"] = c2.slider("Topo", 0, 100, roi["y"], key="roi_y")
-            roi["w"] = c1.slider("Largura", 1, 100, roi["w"], key="roi_w")
-            roi["h"] = c2.slider("Altura", 1, 100, roi["h"], key="roi_h")
+            roi["x"] = c1.slider("Horizontal (%)", 0, 100, roi["x"], key="roi_x")
+            roi["y"] = c2.slider("Vertical (%)", 0, 100, roi["y"], key="roi_y")
+            roi["w"] = c1.slider("Largura (%)", 1, 100, roi["w"], key="roi_w")
+            roi["h"] = c2.slider("Altura (%)", 1, 100, roi["h"], key="roi_h")
             st.session_state.chat_canvas_roi = roi
             
-            instrucao = st.text_input("O que fazer nesta área?", placeholder="Ex: mude a cor, adicione selo...", key="roi_inst")
-            if st.button("✨ Aplicar na Região", type="primary", width="stretch", key="btn_apply_roi"):
+            instrucao = st.text_input("Comando para esta área:", placeholder="Ex: mude a cor, adicione brilho...", key="roi_inst")
+            if st.button("✨ Aplicar na Região Selecionada", type="primary", use_container_width=True, key="btn_apply_roi"):
                 if instrucao and composite:
                     with st.spinner("IA processando região..."):
                         new_layer_img, desc = apply_region_edit_with_vision(
                             composite, roi, instrucao, full_context, segmento
                         )
                         st.session_state.chat_canvas_layers.append({
-                            "name": f"Edição: {instrucao[:15]}",
+                            "name": f"Região: {instrucao[:15]}",
                             "img": new_layer_img,
                             "visible": True,
                             "type": "edit"
@@ -956,7 +996,7 @@ def _render_canvas_area(full_context: str, segmento: str):
             buf = _io.BytesIO()
             composite.convert("RGB").save(buf, format="JPEG", quality=95)
             salvar_ou_baixar(
-                "Exportar Composição",
+                "Exportar Imagem Final",
                 data=buf.getvalue(),
                 file_name="composicao_final.jpg",
                 mime="image/jpeg",
@@ -1546,6 +1586,7 @@ def _send_message(
             selected_product     = st.session_state.get("selected_product"),
             df_competitors       = st.session_state.get("df_competitors"),
             optimization_reviews = st.session_state.get("optimization_reviews"),
+            active_image         = st.session_state.get("chat_active_edit_image"),
         )
 
     # Registra no histórico
@@ -1569,7 +1610,7 @@ def _send_message(
     # ── Atualiza Camadas do Canvas ────────────────────────────
     if result["images"]:
         # Se for a primeira imagem, define como Base
-        if not st.session_state.chat_canvas_layers:
+        if not st.session_state.get("chat_canvas_layers"):
             st.session_state.chat_canvas_layers = [{
                 "name": "Original",
                 "img": result["images"][0],
@@ -1587,8 +1628,9 @@ def _send_message(
         else:
             # Já existe base, adiciona as novas como camadas (ex: badge ou cenário)
             for idx_res, res_img in enumerate(result["images"]):
+                # Evita duplicar se a imagem for exatamente igual à última base (opcional)
                 st.session_state.chat_canvas_layers.append({
-                    "name": f"Turno {len(st.session_state.chat_history)}: {result.get('captions', [''])[idx_res]}",
+                    "name": f"Chat T{len(st.session_state.chat_history)}: {result.get('captions', [''])[idx_res]}",
                     "img": res_img,
                     "visible": True,
                     "type": "edit"
