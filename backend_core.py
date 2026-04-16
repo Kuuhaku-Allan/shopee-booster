@@ -1575,32 +1575,44 @@ Analise este vídeo de produto COM PROFUNDIDADE e devolva um relatório estrutur
                 "Tente um arquivo menor (≤ 50 MB, duração < 60s)."
             )
 
-        # 4. Gera a análise — captura o último erro real para diagnóstico
+        # 4. Gera a análise — retry automático para 503/529, erro real exposto para outros
         t_gen = _time.time()
         ultimo_erro = None
+        MAX_RETRIES = 3  # retentativas para erros de sobrecarga (503/529)
 
         for m in MODELOS_VISION:
-            try:
-                _log.info(
-                    f"[VIDEO] Tentando generate_content | modelo={m} | "
-                    f"file={file_ref.name} | state={state_str} | tamanho={video_size_mb:.1f}MB"
-                )
-                response = _client.models.generate_content(
-                    model=m,
-                    contents=[CONSULTING_PROMPT, file_ref],
-                )
-                t_total = _time.time() - t_start
-                _log.info(
-                    f"[VIDEO] Análise concluída | modelo={m} | "
-                    f"tempo_total={t_total:.1f}s | tamanho={video_size_mb:.1f}MB"
-                )
-                return response.text
-            except Exception as e:
-                ultimo_erro = e
-                _log.warning(
-                    f"[VIDEO] Modelo {m} falhou | tipo={type(e).__name__} | erro={e}"
-                )
-                _time.sleep(2)
+            for tentativa in range(MAX_RETRIES):
+                try:
+                    _log.info(
+                        f"[VIDEO] Tentando generate_content | modelo={m} | tentativa={tentativa+1}/{MAX_RETRIES} | "
+                        f"file={file_ref.name} | state={state_str} | tamanho={video_size_mb:.1f}MB"
+                    )
+                    response = _client.models.generate_content(
+                        model=m,
+                        contents=[CONSULTING_PROMPT, file_ref],
+                    )
+                    t_total = _time.time() - t_start
+                    _log.info(
+                        f"[VIDEO] Análise concluída | modelo={m} | "
+                        f"tempo_total={t_total:.1f}s | tamanho={video_size_mb:.1f}MB"
+                    )
+                    return response.text
+                except Exception as e:
+                    err_str = str(e)
+                    # 503/529 = sobrecarga temporária → vale a pena retentar
+                    is_overload = "503" in err_str or "529" in err_str or "UNAVAILABLE" in err_str
+                    ultimo_erro = e
+                    if is_overload and tentativa < MAX_RETRIES - 1:
+                        wait_s = 5 * (tentativa + 1)  # 5s → 10s → 15s
+                        _log.warning(
+                            f"[VIDEO] Modelo {m} sobrecarga (tentativa {tentativa+1}) — aguardando {wait_s}s | erro={e}"
+                        )
+                        _time.sleep(wait_s)
+                    else:
+                        _log.warning(
+                            f"[VIDEO] Modelo {m} falhou definitivamente | tipo={type(e).__name__} | erro={e}"
+                        )
+                        break  # passa para o próximo modelo
 
         # Todos os modelos falharam — expõe o erro real
         t_total = _time.time() - t_start

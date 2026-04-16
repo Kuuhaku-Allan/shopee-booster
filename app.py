@@ -836,6 +836,31 @@ def _activate_chatbot():
     st.session_state.chat_preview_captions    = []
     st.rerun()
 
+# ── Helper: copiar/baixar mensagens do assistente ───────────────────
+def _render_copy_button(text: str, turn_idx: int):
+    """
+    Exibe um expander colapsado com st.code(language=None) — o Streamlit já
+    injeta nativamente um botão de copiar (ícone no canto superior direito)
+    em todo bloco de código, sem depender de JS ou iframe.
+
+    Botão de download .txt fica visível diretamente para respostas longas.
+    """
+    # st.code tem botão nativo de copiar — sem JS, sem iframe, 100% confiável
+    with st.expander("📋 Copiar resposta", expanded=False):
+        st.code(text, language=None, wrap_lines=True)
+
+    # Botão de download para respostas longas (> 300 chars)
+    if len(text) > 300:
+        salvar_ou_baixar(
+            "⬇️ Baixar .txt",
+            data=text,
+            file_name=f"resposta_chatbot_{turn_idx+1}.txt",
+            mime="text/plain",
+            key=f"dl_turn_{turn_idx}",
+
+        )
+
+
 def render_chatbot():
     st.markdown("""
     <div class="page-header">
@@ -1008,7 +1033,7 @@ def render_chatbot():
                     unsafe_allow_html=True,
                 )
             else:
-                for turn in st.session_state.chat_history:
+                for i, turn in enumerate(st.session_state.chat_history):
                     with st.chat_message("user"):
                         # Mostra prévia de anexos se houver
                         if turn.get("attachment_previews"):
@@ -1028,6 +1053,8 @@ def render_chatbot():
                                     if turn.get("result_captions") and ri < len(turn["result_captions"]):
                                         rcap = turn["result_captions"][ri]
                                     st.image(rimg, caption=rcap, width=350)
+                        # Botões de copiar / baixar para toda resposta do assistente
+                        _render_copy_button(turn["assistant"], i)
 
         # ── Sugestões iniciais ────────────────────────────────
         if not st.session_state.chat_history:
