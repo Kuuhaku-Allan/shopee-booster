@@ -132,7 +132,9 @@ _DEFAULTS = {
     "chat_active_edit_image":  None,   # PIL.Image em edição persistente
     "chat_active_edit_label":  "",     # legenda da imagem em edição
     "chat_last_post_actions":  [],     # ações pós-resposta do último turno
+    "chat_edit_history":       [],     # Histórico de edições para desfazer
 }
+
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -1260,7 +1262,6 @@ def _render_quick_actions(att_types: list, full_context: str, segmento: str):
     """
     Mostra chips de ação rápida contextuais quando há anexo pendente.
     Imagem → ações de edição. Vídeo → ações de análise consultiva.
-    Cada chip dispara _send_message com um prompt pré-definido.
     """
     has_image = any(t == "image" for t in att_types)
     has_video = any(t == "video" for t in att_types)
@@ -1269,44 +1270,52 @@ def _render_quick_actions(att_types: list, full_context: str, segmento: str):
         return
 
     st.markdown(
-        '<p class="section-label" style="margin:0.5rem 0 0.3rem 0">'
-        '⚡ Ações rápidas</p>',
+        '<p class="section-label" style="margin:1rem 0 0.5rem 0">'
+        '⚡ Ações Rápidas</p>',
         unsafe_allow_html=True,
     )
 
     if has_image:
+        # Labels mais curtos para caber no chip
         acoes = [
-            ("🧼", "Fundo limpo",        "remova o fundo desta imagem e coloque fundo branco limpo"),
-            ("🎨", "Cenário clean",       "remova o fundo e gere um cenário clean para este produto"),
-            ("🌈", "Gerar 3 variações",   "gere 3 variações desta imagem com estilos diferentes"),
-            ("🏷️", "Adicionar benefício", "adicione um badge com o benefício principal deste produto"),
-            ("📱", "Capa principal",      "optimize esta imagem para ser a capa principal do anúncio"),
-            ("🔍", "Analisar imagem",     "analise esta imagem de produto e me dê feedback detalhado"),
+            ("🧼", "Fundo",      "remova o fundo desta imagem e coloque fundo branco limpo"),
+            ("🎨", "Cenário",    "remova o fundo e gere um cenário clean para este produto"),
+            ("🌈", "Variantes",  "gere 3 variações desta imagem com estilos diferentes"),
+            ("🏷️", "Benefício",  "ADICIONAR_BENEFICIO_AUTO"), # Flag para lógica especial
+            ("📱", "Capa",       "optimize esta imagem para ser a capa principal do anúncio"),
+            ("🔍", "Análise",    "analise esta imagem de produto e me dê feedback detalhado"),
         ]
     else:  # vídeo
         acoes = [
-            ("📊", "Analisar retenção", "analise este vídeo e avalie a retenção e o gancho"),
-            ("🎬", "Avaliar gancho",    "avaliie o gancho dos primeiros 3 segundos e dê recomendações"),
-            ("📋", "Checklist",         "analise o vídeo e gere um checklist de melhorias prioritárias"),
-            ("✏️", "Roteiro melhorado", "analise o vídeo e crie um roteiro melhorado para este produto"),
+            ("📊", "Retenção",   "analise este vídeo e avalie a retenção e o gancho"),
+            ("🎬", "Gancho",      "avaliie o gancho dos primeiros 3 segundos e dê recomendações"),
+            ("📋", "Checklist",   "analise o vídeo e gere um checklist de melhorias prioritárias"),
+            ("✏️", "Roteiro",    "analise o vídeo e crie um roteiro melhorado para este produto"),
         ]
 
     atts      = st.session_state.get("chat_attachments", [])
     att_types_s = st.session_state.get("chat_attachment_types", [])
     att_prev  = st.session_state.get("chat_attachment_previews", [])
 
-    cols = st.columns(len(acoes))
-    for idx, (icon, label, prompt) in enumerate(acoes):
-        with cols[idx]:
-            if st.button(
-                f"{icon} {label}",
-                key=f"qa_{idx}_{len(atts)}",
-                width="stretch",
-                use_container_width=True,
-            ):
-                _handle_chat_input_with_vision(
-                    prompt, atts, att_types_s, att_prev, full_context, segmento
-                )
+    # Grid de 3 colunas para evitar esmagamento
+    n_cols = 3
+    for i in range(0, len(acoes), n_cols):
+        cols = st.columns(n_cols)
+        for j in range(n_cols):
+            idx = i + j
+            if idx < len(acoes):
+                icon, label, prompt = acoes[idx]
+                with cols[j]:
+                    st.markdown('<div class="action-card-btn">', unsafe_allow_html=True)
+                    if st.button(
+                        f"{icon}\n{label}",
+                        key=f"qa_{idx}_{len(atts)}",
+                        use_container_width=True,
+                    ):
+                        _handle_chat_input_with_vision(
+                            prompt, atts, att_types_s, att_prev, full_context, segmento
+                        )
+                    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def _render_post_response_actions(

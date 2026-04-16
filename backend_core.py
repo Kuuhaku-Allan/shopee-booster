@@ -1100,6 +1100,51 @@ def detect_chat_intent(user_message: str, has_media: bool) -> str:
 # ADICIONAR creative_edit_with_vision() — nova função
 # ══════════════════════════════════════════════════════════════
 
+def infer_primary_benefit_with_vision(
+    image: "Image.Image",
+    product_context: str,
+    segmento: str,
+) -> dict:
+    """
+    Analisa a imagem e o contexto para inferir o benefício comercial mais forte.
+    Retorna {"benefit": str, "icon": str, "reason": str}
+    """
+    from backend_core import get_client, MODELOS_VISION
+    import time as _time
+
+    prompt = f"""Analise esta imagem de produto e o contexto abaixo.
+CONTEXTO: {product_context}
+NICHO: {segmento}
+
+Identifique o principal benefício comercial/emocional deste produto.
+REGRAS:
+1. Se a imagem for clara, seja específico (ex: 'Alça Acolchoada', 'Couro Legítimo').
+2. Se a imagem for ambígua ou o produto for genérico, use benefícios seguros como 'Qualidade Garantida', 'Praticidade no Dia a Dia' ou 'Design Moderno'.
+3. Retorne APENAS um JSON no formato:
+{{"benefit": "texto curto", "icon": "emoji", "confidence": 0.0 a 1.0, "reason": "explicação"}}
+"""
+    # ... (resto da função infer_primary_benefit_with_vision)
+
+    # Thumbnail para economizar tokens e evitar latência
+    img_v = image.copy()
+    img_v.thumbnail((1024, 1024))
+
+    for m in MODELOS_VISION:
+        try:
+            resp = get_client().models.generate_content(model=m, contents=[prompt, img_v])
+            text = resp.text.strip().replace("```json", "").replace("```", "").strip()
+            import json as _json
+            return _json.loads(text)
+        except Exception:
+            _time.sleep(1)
+
+    return {
+        "benefit": "Qualidade Premium",
+        "icon": "✨",
+        "reason": "fallback"
+    }
+
+
 def creative_edit_with_vision(
     image: "Image.Image",
     instruction: str,
@@ -2019,9 +2064,20 @@ def process_chat_turn(
                 current_img = bg
 
             elif intent == "creative_edit":
-                from backend_core import creative_edit_with_vision
+                from backend_core import creative_edit_with_vision, infer_primary_benefit_with_vision
+                
+                # ── Lógica especial para Benefício Automático ─────────
+                effective_instruction = user_message
+                if user_message == "ADICIONAR_BENEFICIO_AUTO":
+                    text_parts.append("🔍 Analisando produto para identificar benefício principal...")
+                    inference = infer_primary_benefit_with_vision(current_img, full_context, segmento)
+                    benefit = inference.get("benefit", "Qualidade Garantida")
+                    icon    = inference.get("icon", "✨")
+                    effective_instruction = f"adicione um badge com o benefício principal: {icon} {benefit}"
+                    text_parts.append(f"💡 Benefício identificado: **{benefit}**")
+
                 edited, desc = creative_edit_with_vision(
-                    current_img, user_message, full_context, segmento
+                    current_img, effective_instruction, full_context, segmento
                 )
                 current_img = edited
                 text_parts.append(f"✨ {desc}")

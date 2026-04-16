@@ -585,6 +585,36 @@ section.main > div {
     font-family: 'Inter', sans-serif !important;
 }
 
+/* ═══════════════════ QUICK ACTION CHIPS ═══════════════════ */
+/* Estilização para botões dentro de colunas de ações rápidas */
+.stButton > button {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: 13.5px !important;
+    border-radius: var(--radius-sm) !important;
+    transition: var(--transition) !important;
+    border: 1px solid var(--border-color) !important;
+    background: var(--bg-card) !important;
+    color: var(--text-primary) !important;
+    padding: 0.45rem 1rem !important;
+}
+
+/* Estilo específico para botões que devem parecer cards de ação */
+.action-card-btn > div > [data-testid="stButton"] > button {
+    height: 80px !important;
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    padding: 10px !important;
+    border-radius: var(--radius-md) !important;
+    line-height: 1.1 !important;
+    font-size: 11px !important;
+    text-align: center !important;
+}
+
 /* ═══════════════════ TIPOGRAFIA GLOBAL ═══════════════════ */
 h1, h2, h3, h4, h5, h6,
 .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
