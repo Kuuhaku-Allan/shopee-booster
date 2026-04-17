@@ -16,16 +16,39 @@ import streamlit.elements.image as st_image
 # ── Monkeypatch para st_canvas (Correção de compatibilidade Streamlit 1.55) ──
 if not hasattr(st_image, "image_to_url"):
     try:
-        # Tenta local 1 (1.40+)
-        from streamlit.runtime.image_util import image_to_url as _image_to_url  # type: ignore
-        st_image.image_to_url = _image_to_url
+        from streamlit.elements.lib.image_utils import image_to_url as _image_to_url
+        from types import SimpleNamespace
+        
+        def image_to_url_wrapper(data, width_or_config, *args, **kwargs):
+            # args na ordem do st_canvas (formato antigo):
+            # (use_container_width, clamp, channels, output_format, image_id)
+            
+            if isinstance(width_or_config, int):
+                # Extrai os valores passados pelo st_canvas
+                use_container_width = args[0] if len(args) > 0 else True
+                clamp               = args[1] if len(args) > 1 else False
+                channels            = args[2] if len(args) > 2 else "RGB"
+                output_format       = args[3] if len(args) > 3 else "PNG"
+                image_id            = args[4] if len(args) > 4 else ""
+                
+                # Monta o objeto de configuração que o Streamlit 1.55 espera
+                layout_config = SimpleNamespace(
+                    width=width_or_config,
+                    use_container_width=use_container_width
+                )
+                
+                # Chama a função real com a NOVA ORDEM de argumentos do Streamlit 1.55:
+                # (image, layout_config, clamp, channels, output_format, image_id)
+                return _image_to_url(data, layout_config, clamp, channels, output_format, image_id, **kwargs)
+            
+            return _image_to_url(data, width_or_config, *args, **kwargs)
+            
+        st_image.image_to_url = image_to_url_wrapper
     except ImportError:
         try:
-            # Tenta local 2 (1.50+)
-            from streamlit.runtime.stats import image_to_url as _image_to_url  # type: ignore
+            from streamlit.runtime.image_util import image_to_url as _image_to_url # type: ignore
             st_image.image_to_url = _image_to_url
         except ImportError:
-            # Fallback final (se nada funcionar, o componente vai falhar graciosamente em vez de crashar)
             st_image.image_to_url = lambda *args, **kwargs: ""
 
 from streamlit_drawable_canvas import st_canvas
@@ -974,17 +997,23 @@ def _render_canvas_area(full_context: str, segmento: str):
             elif st.session_state.canvas_tool == "circle": drawing_mode = "circle"
             elif st.session_state.canvas_tool == "freeline": drawing_mode = "freedraw"
 
+        # Converte para RGBA para garantir compatibilidade com a URL do Streamlit
+        canvas_bg = composite.convert("RGBA")
+
         canvas_result = st_canvas(
             fill_color="rgba(255, 75, 75, 0.3)",
             stroke_width=3,
             stroke_color="#FF4B4B",
-            background_image=composite,
+            background_image=canvas_bg,
             update_streamlit=True,
             height=display_height,
             width=display_width,
             drawing_mode=drawing_mode,
             key="canvas_roi",
         )
+
+        # Diagnóstico discreto (se precisar remover depois, só avisar)
+        st.caption(f"📏 Resolução real: {w}x{h} | 🖥️ Canvas: {display_width}x{display_height}")
 
         # ── Processamento da Seleção ────────────────────────
         if canvas_result.json_data is not None:
