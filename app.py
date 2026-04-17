@@ -999,6 +999,10 @@ def _render_canvas_area(full_context: str, segmento: str):
 
         # Converte para RGBA para garantir compatibilidade com a URL do Streamlit
         canvas_bg = composite.convert("RGBA")
+        
+        # Gera uma chave única baseada no conteúdo da imagem para forçar o refresh do componente
+        import hashlib
+        img_hash = hashlib.md5(canvas_bg.tobytes()).hexdigest()[:8]
 
         canvas_result = st_canvas(
             fill_color="rgba(255, 75, 75, 0.3)",
@@ -1009,7 +1013,7 @@ def _render_canvas_area(full_context: str, segmento: str):
             height=display_height,
             width=display_width,
             drawing_mode=drawing_mode,
-            key="canvas_roi",
+            key=f"canvas_roi_{img_hash}",
         )
 
         # Diagnóstico discreto (se precisar remover depois, só avisar)
@@ -1743,20 +1747,22 @@ def _send_message(
     # ── Atualiza Camadas do Canvas ────────────────────────────
     if result["images"]:
         # Lista de intents que representam uma nova "imagem completa/final"
-        # Essas operações devem substituir a base do canvas para evitar achatamento e desalinhamento
+        # Essas operações devem substituir a base do canvas para evitar o bug da imagem antiga por baixo
         GLOBAL_INTENTS = {"generate_scene", "recolor", "remove_bg", "generate_variants", "upscale"}
         current_intent = result.get("intent")
+        final_img = result["images"][0]
+        caption = result.get("captions", [""])[0] or "Resultado"
         
-        # Se for a primeira imagem OU uma operação global/final
+        # Se for a primeira imagem OU uma operação global/final, RESETAMOS as camadas para ter uma nova base
         if not st.session_state.get("chat_canvas_layers") or current_intent in GLOBAL_INTENTS:
-            # Substitui tudo pela nova base (preserva proporção visual)
             st.session_state.chat_canvas_layers = [{
-                "name": f"Base: {result.get('captions', [''])[0]}",
-                "img": result["images"][0],
+                "name": f"Base: {caption}",
+                "img": final_img,
                 "visible": True,
                 "type": "base"
             }]
-            # Se houver variantes, adiciona como desativadas
+            
+            # Se houver variantes extras (como no motor de 3 imagens), adiciona como camadas ocultas
             if len(result["images"]) > 1:
                 for idx_var, var_img in enumerate(result["images"][1:]):
                     st.session_state.chat_canvas_layers.append({
@@ -1766,19 +1772,19 @@ def _send_message(
                         "type": "edit"
                     })
         else:
-            # Operação aditiva (badge, texto, ROI local)
+            # Operação aditiva/local (badge, texto, ROI local) -> Adiciona como camada
             for idx_res, res_img in enumerate(result["images"]):
                 st.session_state.chat_canvas_layers.append({
-                    "name": f"Chat T{len(st.session_state.chat_history)}: {result.get('captions', [''])[idx_res]}",
+                    "name": f"Chat: {caption} ({idx_res+1})",
                     "img": res_img,
                     "visible": True,
                     "type": "edit"
                 })
 
-    # ── Salva última imagem processada como "em edição" ───────
+    # ── Sincroniza imagem ativa em edição ─────────────────────
     if result.get("images"):
         st.session_state.chat_active_edit_image = result["images"][-1]
-        st.session_state.chat_active_edit_label = "última processada"
+        st.session_state.chat_active_edit_label = caption
 
     # ── Salva post_actions no turno do histórico ───────────────
     if st.session_state.chat_history and result.get("post_actions"):
