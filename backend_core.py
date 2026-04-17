@@ -1796,16 +1796,18 @@ REGRAS:
 
 def apply_region_edit_with_vision(
     image: "Image.Image",
-    roi: dict, # {"x": %, "y": %, "w": %, "h": %}
+    roi: dict, # {"x": %, "y": %, "w": %, "h": %, "shape": "rect"|"circle"|"freehand"}
     instruction: str,
     product_context: str,
     segmento: str,
+    freehand_mask: "Image.Image" = None
 ) -> tuple:
     """
     Recorta a região selecionada (ROI), processa com Gemini Vision
-    e retorna uma nova camada de imagem com a edição aplicada naquela região.
+    e retorna uma nova camada de imagem com a edição aplicada naquela região,
+    respeitando a máscara da forma (retângulo, círculo ou livre).
     """
-    from PIL import Image
+    from PIL import Image, ImageDraw
     import io as _io
     
     # 1. Calcula coordenadas reais do crop
@@ -1815,18 +1817,41 @@ def apply_region_edit_with_vision(
     w0 = int(roi["w"] * w / 100)
     h0 = int(roi["h"] * h / 100)
     
+    # Garante que w0/h0 não sejam zero
+    w0 = max(1, w0)
+    h0 = max(1, h0)
+    
     crop_box = (x0, y0, x0 + w0, y0 + h0)
     region_img = image.crop(crop_box)
     
     # 2. Processa a região (ex: "mude a cor", "adicione brilho")
-    # Reutiliza o creative_edit_with_vision focado na região
     edited_region, desc = creative_edit_with_vision(
         region_img, instruction, product_context, segmento
     )
     
-    # 3. Cria uma camada transparente do tamanho total e cola a região editada
+    # 3. Cria a máscara de forma
+    shape = roi.get("shape", "rect")
+    mask = Image.new("L", (w0, h0), 0)
+    draw = ImageDraw.Draw(mask)
+    
+    if shape == "circle":
+        draw.ellipse([0, 0, w0, h0], fill=255)
+    elif shape == "freehand" and freehand_mask:
+        # Redimensiona a máscara livre para o tamanho real do crop
+        mask = freehand_mask.resize((w0, h0), Image.NEAREST)
+    else: # rect ou fallback
+        mask.paste(255, [0, 0, w0, h0])
+    
+    # 4. Cria uma camada transparente e aplica a região editada através da máscara
     layer_img = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    layer_img.paste(edited_region.convert("RGBA"), (x0, y0))
+    # Converte a região editada para RGBA
+    edited_rgba = edited_region.convert("RGBA")
+    
+    # Aplica a máscara na região editada (cropada) antes de colar no layer total
+    final_region = Image.new("RGBA", (w0, h0), (0, 0, 0, 0))
+    final_region.paste(edited_rgba, (0, 0), mask)
+    
+    layer_img.paste(final_region, (x0, y0), final_region)
     
     return layer_img, desc
 

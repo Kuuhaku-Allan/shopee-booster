@@ -11,6 +11,24 @@ Para alterar cores/tipografia/CSS → ui_theme.py
 """
 
 import streamlit as st
+import streamlit.elements.image as st_image
+
+# ── Monkeypatch para st_canvas (Correção de compatibilidade Streamlit 1.55) ──
+if not hasattr(st_image, "image_to_url"):
+    try:
+        # Tenta local 1 (1.40+)
+        from streamlit.runtime.image_util import image_to_url as _image_to_url  # type: ignore
+        st_image.image_to_url = _image_to_url
+    except ImportError:
+        try:
+            # Tenta local 2 (1.50+)
+            from streamlit.runtime.stats import image_to_url as _image_to_url  # type: ignore
+            st_image.image_to_url = _image_to_url
+        except ImportError:
+            # Fallback final (se nada funcionar, o componente vai falhar graciosamente em vez de crashar)
+            st_image.image_to_url = lambda *args, **kwargs: ""
+
+from streamlit_drawable_canvas import st_canvas
 import pandas as pd
 import sys
 import os
@@ -134,7 +152,10 @@ _DEFAULTS = {
     "chat_last_post_actions":  [],     # ações pós-resposta do último turno
     "chat_edit_history":       [],     # Histórico de edições para desfazer
     "chat_canvas_layers":      [],     # [{ "name": str, "img": PIL, "visible": bool, "type": str }]
-    "chat_canvas_roi":         {"x": 25, "y": 25, "w": 50, "h": 50}, # ROI em %
+    "chat_canvas_roi":         {"x": 25, "y": 25, "w": 50, "h": 50, "shape": "rect"}, # ROI em %
+    "chat_canvas_freehand_mask": None,
+    "canvas_tool":             "rect",
+    "canvas_mode":             "draw",
 }
 
 for k, v in _DEFAULTS.items():
@@ -871,11 +892,12 @@ def _render_copy_button(text: str, turn_idx: int):
 
 
 def _render_canvas_area(full_context: str, segmento: str):
-    """Renderiza a área do Canvas (Direção Criativa) na direita."""
+    """Renderiza a área do Canvas Interativo (ROI Visual)."""
     from backend_core import composite_layers, apply_region_edit_with_vision
     import io as _io
     import time as _time
     from PIL import Image, ImageDraw
+    from streamlit_drawable_canvas import st_canvas
     
     with st.container(border=True):
         st.markdown('<p class="section-label">🎨 Direção Criativa</p>', unsafe_allow_html=True)
@@ -883,7 +905,6 @@ def _render_canvas_area(full_context: str, segmento: str):
         layers = st.session_state.get("chat_canvas_layers", [])
         
         if not layers:
-            # Fallback: se houver imagem ativa mas nenhuma camada, inicializa
             active_img = st.session_state.get("chat_active_edit_image")
             if active_img:
                 layers = [{"name": "Original", "img": active_img, "visible": True, "type": "base"}]
@@ -896,57 +917,144 @@ def _render_canvas_area(full_context: str, segmento: str):
                 )
                 return
 
-        # ── Área do Canvas (Composite) ───────────────────────
         composite = composite_layers(layers)
-        if composite:
-            # ── ROI Visualization ────────────────────────────
-            roi = st.session_state.chat_canvas_roi
-            preview_img = composite.copy().convert("RGBA")
-            draw = ImageDraw.Draw(preview_img)
-            w, h = preview_img.size
-            x0 = int(roi["x"] * w / 100)
-            y0 = int(roi["y"] * h / 100)
-            w0 = int(roi["w"] * w / 100)
-            h0 = int(roi["h"] * h / 100)
-            
-            # Desenha retângulo vermelho semitransparente
-            draw.rectangle([x0, y0, x0+w0, y0+h0], outline=(255, 75, 75, 255), width=4)
-            overlay = Image.new("RGBA", preview_img.size, (0, 0, 0, 0))
-            draw_ov = ImageDraw.Draw(overlay)
-            draw_ov.rectangle([x0, y0, x0+w0, y0+h0], fill=(255, 75, 75, 40))
-            preview_img = Image.alpha_composite(preview_img, overlay)
-            
-            st.image(preview_img, use_container_width=True, caption="Preview com Área de Seleção (ROI)")
-            
-            c1, c2 = st.columns(2)
-            if c1.button("📥 Usar no Chat", use_container_width=True, help="Envia esta composição como anexo para o próximo prompt"):
-                buf = _io.BytesIO()
-                composite.convert("RGB").save(buf, format="JPEG", quality=92)
-                st.session_state.chat_active_edit_image = composite
-                st.session_state.chat_attachments = [buf.getvalue()]
-                st.session_state.chat_attachment_types = ["image"]
-                st.session_state.chat_attachment_previews = [composite.convert("RGB")]
-                st.session_state.show_attach_panel = True
-                st.success("✅ Composição pronta no chat!")
-                _time.sleep(0.5)
+        if not composite:
+            return
+
+        # ── Barra de Ferramentas ROI ────────────────────────
+        st.markdown("""
+            <style>
+            .canvas-toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+            .tool-btn { 
+                padding: 6px 12px; border-radius: 6px; border: 1px solid #444; 
+                cursor: pointer; background: #262730; color: white;
+                font-size: 13px; transition: 0.2s;
+            }
+            .tool-btn.active { background: #FF4B4B; border-color: #FF4B4B; }
+            </style>
+        """, unsafe_allow_html=True)
+
+        col_t1, col_t2, col_t3, col_t4 = st.columns([1,1,1,1])
+        
+        def toggle_tool(tool_name):
+            if st.session_state.canvas_tool == tool_name and st.session_state.canvas_mode == "draw":
+                st.session_state.canvas_mode = "transform"
+            else:
+                st.session_state.canvas_tool = tool_name
+                st.session_state.canvas_mode = "draw"
+
+        with col_t1:
+            if st.button("⬜ Retângulo", use_container_width=True, type="primary" if st.session_state.canvas_tool == "rect" and st.session_state.canvas_mode == "draw" else "secondary"):
+                toggle_tool("rect")
                 st.rerun()
-            
-            if c2.button("📌 Fixar como Base", use_container_width=True, help="Transforma a composição atual na nova camada 'Original'"):
-                st.session_state.chat_canvas_layers = [{
-                    "name": "Base Mesclada",
-                    "img": composite,
-                    "visible": True,
-                    "type": "base"
-                }]
-                st.session_state.chat_active_edit_image = composite
+        with col_t2:
+            if st.button("⭕ Círculo", use_container_width=True, type="primary" if st.session_state.canvas_tool == "circle" and st.session_state.canvas_mode == "draw" else "secondary"):
+                toggle_tool("circle")
+                st.rerun()
+        with col_t3:
+            if st.button("✏️ Livre", use_container_width=True, type="primary" if st.session_state.canvas_tool == "freeline" and st.session_state.canvas_mode == "draw" else "secondary"):
+                toggle_tool("freeline")
+                st.rerun()
+        with col_t4:
+            if st.button("🔄 Reset", use_container_width=True):
+                st.session_state.chat_canvas_roi = {"x": 25, "y": 25, "w": 50, "h": 50, "shape": "rect"}
+                st.session_state.chat_canvas_freehand_mask = None
+                st.session_state.canvas_mode = "transform"
                 st.rerun()
 
-        # ── Gerenciador de Camadas ────────────────────────────
+        # ── Renderização do Canvas ──────────────────────────
+        w, h = composite.size
+        # Limita largura visual mantendo proporção
+        display_width = 500 
+        display_height = int(h * (display_width / w))
+
+        drawing_mode = "transform"
+        if st.session_state.canvas_mode == "draw":
+            if st.session_state.canvas_tool == "rect": drawing_mode = "rect"
+            elif st.session_state.canvas_tool == "circle": drawing_mode = "circle"
+            elif st.session_state.canvas_tool == "freeline": drawing_mode = "freedraw"
+
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 75, 75, 0.3)",
+            stroke_width=3,
+            stroke_color="#FF4B4B",
+            background_image=composite,
+            update_streamlit=True,
+            height=display_height,
+            width=display_width,
+            drawing_mode=drawing_mode,
+            key="canvas_roi",
+        )
+
+        # ── Processamento da Seleção ────────────────────────
+        if canvas_result.json_data is not None:
+            objects = canvas_result.json_data["objects"]
+            if objects:
+                obj = objects[-1] # Pega o último objeto desenhado
+                
+                # Coordenadas em %
+                if obj["type"] in ["rect", "circle"]:
+                    st.session_state.chat_canvas_roi = {
+                        "x": (obj["left"] / display_width) * 100,
+                        "y": (obj["top"] / display_height) * 100,
+                        "w": (obj["width"] * obj["scaleX"] / display_width) * 100,
+                        "h": (obj["height"] * obj["scaleY"] / display_height) * 100,
+                        "shape": "rect" if obj["type"] == "rect" else "circle"
+                    }
+                    st.session_state.chat_canvas_freehand_mask = None
+                elif obj["type"] == "path":
+                    # Para freehand, precisamos da imagem do canvas (mask)
+                        # O streamlit-drawable-canvas retorna image_data como array numpy RGBA
+                    if canvas_result.image_data is not None:
+                        # Extrai bbox dos pixels não-transparentes
+                        import numpy as np
+                        mask_arr = canvas_result.image_data[:, :, 3] # Alpha channel
+                        coords = np.argwhere(mask_arr > 0)
+                        if coords.size > 0:
+                            y_min, x_min = coords.min(axis=0)
+                            y_max, x_max = coords.max(axis=0)
+                            
+                            st.session_state.chat_canvas_roi = {
+                                "x": (x_min / display_width) * 100,
+                                "y": (y_min / display_height) * 100,
+                                "w": ((x_max - x_min) / display_width) * 100,
+                                "h": ((y_max - y_min) / display_height) * 100,
+                                "shape": "freehand"
+                            }
+                            # Salva a máscara recortada pela bbox (binária)
+                            full_mask = Image.fromarray(mask_arr).convert("L")
+                            crop_box = (x_min, y_min, x_max, y_max)
+                            st.session_state.chat_canvas_freehand_mask = full_mask.crop(crop_box)
+
+        # ── Ações ──────────────────────────────────────────
+        c1, c2 = st.columns(2)
+        if c1.button("📥 Usar no Chat", use_container_width=True):
+            buf = _io.BytesIO()
+            composite.convert("RGB").save(buf, format="JPEG", quality=92)
+            st.session_state.chat_active_edit_image = composite
+            st.session_state.chat_attachments = [buf.getvalue()]
+            st.session_state.chat_attachment_types = ["image"]
+            st.session_state.chat_attachment_previews = [composite.convert("RGB")]
+            st.session_state.show_attach_panel = True
+            st.success("✅ Composição enviada!")
+            _time.sleep(0.5)
+            st.rerun()
+        
+        if c2.button("📌 Fixar como Base", use_container_width=True):
+            st.session_state.chat_canvas_layers = [{
+                "name": "Base Mesclada",
+                "img": composite,
+                "visible": True,
+                "type": "base"
+            }]
+            st.session_state.chat_active_edit_image = composite
+            st.rerun()
+
+        # ── Gerenciador de Camadas (Compacto) ───────────────
         st.markdown("---")
-        st.markdown('<p class="section-label" style="font-size:10px">📂 Camadas</p>', unsafe_allow_html=True)
-        for i, layer in enumerate(reversed(layers)):
-            idx = len(layers) - 1 - i
-            with st.container():
+        with st.expander("📂 Camadas", expanded=False):
+            for i, layer in enumerate(reversed(layers)):
+                idx = len(layers) - 1 - i
                 col_vis, col_name, col_del = st.columns([1, 4, 1])
                 with col_vis:
                     vis = st.checkbox("", value=layer["visible"], key=f"vis_{idx}_{len(layers)}")
@@ -956,39 +1064,33 @@ def _render_canvas_area(full_context: str, segmento: str):
                 with col_name:
                     st.markdown(f"<span style='font-size:12px'>{layer['name']}</span>", unsafe_allow_html=True)
                 with col_del:
-                    if layer["type"] != "base":
-                        if st.button("🗑️", key=f"del_lay_{idx}", help="Remover"):
-                            st.session_state.chat_canvas_layers.pop(idx)
-                            st.rerun()
-        
-        # ── Ferramentas Regionais (ROI) ──────────────────────
-        st.markdown("---")
-        with st.expander("🎯 Seleção de Área (ROI)", expanded=True):
-            st.markdown('<p class="section-label" style="font-size:10px">Ajuste os sliders para mover o retângulo vermelho</p>', unsafe_allow_html=True)
-            roi = st.session_state.chat_canvas_roi
-            c1, c2 = st.columns(2)
-            roi["x"] = c1.slider("Horizontal (%)", 0, 100, roi["x"], key="roi_x")
-            roi["y"] = c2.slider("Vertical (%)", 0, 100, roi["y"], key="roi_y")
-            roi["w"] = c1.slider("Largura (%)", 1, 100, roi["w"], key="roi_w")
-            roi["h"] = c2.slider("Altura (%)", 1, 100, roi["h"], key="roi_h")
-            st.session_state.chat_canvas_roi = roi
-            
-            instrucao = st.text_input("Comando para esta área:", placeholder="Ex: mude a cor, adicione brilho...", key="roi_inst")
-            if st.button("✨ Aplicar na Região Selecionada", type="primary", use_container_width=True, key="btn_apply_roi"):
-                if instrucao and composite:
-                    with st.spinner("IA processando região..."):
-                        new_layer_img, desc = apply_region_edit_with_vision(
-                            composite, roi, instrucao, full_context, segmento
-                        )
-                        st.session_state.chat_canvas_layers.append({
-                            "name": f"Região: {instrucao[:15]}",
-                            "img": new_layer_img,
-                            "visible": True,
-                            "type": "edit"
-                        })
-                        st.success(f"✅ {desc}")
-                        _time.sleep(1)
+                    if layer["type"] != "base" and st.button("🗑️", key=f"del_lay_{idx}"):
+                        st.session_state.chat_canvas_layers.pop(idx)
                         st.rerun()
+        
+        # ── Aplicação ROI ──────────────────────────────────
+        st.markdown("---")
+        instrucao = st.text_input("Comando para área selecionada:", placeholder="Ex: mude a cor para azul...")
+        if st.button("✨ Aplicar na Região", type="primary", use_container_width=True):
+            if instrucao and composite:
+                with st.spinner("IA processando região..."):
+                    # Passa a máscara se for freehand
+                    mask = st.session_state.chat_canvas_freehand_mask
+                    roi = st.session_state.chat_canvas_roi
+                    
+                    new_layer_img, desc = apply_region_edit_with_vision(
+                        composite, roi, instrucao, full_context, segmento,
+                        freehand_mask=mask
+                    )
+                    st.session_state.chat_canvas_layers.append({
+                        "name": f"Edição: {instrucao[:15]}",
+                        "img": new_layer_img,
+                        "visible": True,
+                        "type": "edit"
+                    })
+                    st.success(f"✅ {desc}")
+                    _time.sleep(1)
+                    st.rerun()
         
         # ── Exportação ──────────────────────────────────────
         st.markdown("---")
@@ -996,7 +1098,7 @@ def _render_canvas_area(full_context: str, segmento: str):
             buf = _io.BytesIO()
             composite.convert("RGB").save(buf, format="JPEG", quality=95)
             salvar_ou_baixar(
-                "Exportar Imagem Final",
+                "💾 Exportar Imagem Final",
                 data=buf.getvalue(),
                 file_name="composicao_final.jpg",
                 mime="image/jpeg",
