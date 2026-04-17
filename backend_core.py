@@ -1015,6 +1015,9 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
       "bota um badge à prova d'água"    → ["creative_edit"]
     """
     msg = user_message.lower()
+    # NORMALIZAÇÃO: Converte "amarela" -> "amarelo", "vermelhas" -> "vermelho", etc.
+    msg_normalized = normalize_message_colors(msg)
+    
     intents = []
 
     # ── Regras de Exclusividade (Filtros Prioritários) ────────
@@ -1024,38 +1027,38 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
         "deixe esta imagem com fundo transparente", "fundo transparente",
         "só o recorte", "apenas o recorte", "recortar produto"
     ]
-    if any(p in msg for p in BG_ONLY_PATTERNS):
+    if any(p in msg_normalized for p in BG_ONLY_PATTERNS):
         return ["remove_bg"]
 
     # ── Detecção individual ───────────────────────────────────
-    is_remove_bg = any(w in msg for w in [
+    is_remove_bg = any(w in msg_normalized for w in [
         "remov", "sem fundo", "fundo branco", "transparente", "recort"
     ])
-    is_scene = any(w in msg for w in [
+    is_scene = any(w in msg_normalized for w in [
         "cenário", "cena", "fundo bonito", "fundo ia", "gerar fundo",
         "estúdio", "packshot", "ambiente", "paisagem", "fundo clean",
         "fundo limpo"
     ])
-    is_upscale = any(w in msg for w in [
+    is_upscale = any(w in msg_normalized for w in [
         "qualidade", "upscale", "aumentar", "resolução", "nítid", "melhorar imagem"
     ])
-    is_optimize = any(w in msg for w in [
+    is_optimize = any(w in msg_normalized for w in [
         "otimiz", "título", "descrição", "tag", "listing", "seo", "keyword"
     ])
-    is_video = any(w in msg for w in [
+    is_video = any(w in msg_normalized for w in [
         "vídeo", "video", "retenção", "hook", "gancho", "analisar vídeo",
         "analise esse video", "analise o video", "ver o video", "vê o vídeo",
         "mp4", "clipe", "filmagem", "gravação", "gravaç",
         "consultoria", "consultor", "me diz o que", "o que acha do video",
     ])
-    is_analyze = has_media and any(w in msg for w in [
+    is_analyze = has_media and any(w in msg_normalized for w in [
         "boa", "ruim", "melhorar", "feedback", "avaliar", "analisar",
         "o que acha", "está bom", "tá bom", "tá boa", "está boa",
         "funciona", "serve", "adequad", "avaliaç", "opinion",
         "nota", "pontu", "qualidade da imagem"
     ])
 
-    is_variants = any(w in msg for w in [
+    is_variants = any(w in msg_normalized for w in [
         "variaç", "variante", "varias versoes", "várias versões", "estilos diferentes"
     ])
 
@@ -1068,24 +1071,24 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
     ]
     # Detecta se o pedido de "branco" é para o fundo e não para o produto
     WHITE_BG_PATTERNS = ["fundo branco", "background branco", "white background", "fundo limpo", "fundo sólido"]
-    is_white_bg_req = any(p in msg for p in WHITE_BG_PATTERNS)
+    is_white_bg_req = any(p in msg_normalized for p in WHITE_BG_PATTERNS)
 
-    is_recolor = any(w in msg for w in [
+    is_recolor = any(w in msg_normalized for w in [
         "cor ", "cores ", "variação", "variante", "versão ", "mudar a cor",
         "trocar a cor", "muda a cor", "troca a cor", "outra cor",
         "na cor", "em ", "colorir", "recolor",
-    ]) and any(c in msg for c in COLOR_WORDS)
+    ]) and any(c in msg_normalized for c in COLOR_WORDS)
     
     # Se detectou recolor para branco, mas a frase indica fundo branco, cancela o recolor
-    if is_recolor and is_white_bg_req and ("branco" in msg or "white" in msg):
+    if is_recolor and is_white_bg_req and ("branco" in msg_normalized or "white" in msg_normalized):
         # Só cancela se não houver outras cores na mensagem (ex: "mochila verde com fundo branco")
-        other_colors = [c for c in COLOR_WORDS if c in msg and c not in ["branco", "white"]]
+        other_colors = [c for c in COLOR_WORDS if c in msg_normalized and c not in ["branco", "white"]]
         if not other_colors:
             is_recolor = False
 
     # Edição criativa: qualquer instrução que implica manipular pixels
     # de forma aberta (badge, iluminação, detalhe de material, etc.)
-    is_creative = any(w in msg for w in [
+    is_creative = any(w in msg_normalized for w in [
         "badge", "etiqueta", "selos", "texto", "escrit", "escreve",
         "iluminaç", "luz", "brilh", "sombra", "contrast", "saturação",
         "cor", "trocar", "mudar", "mude a", "verde", "azul", "preto", "rosa",
@@ -1244,8 +1247,28 @@ _COLOR_MAP = {
     "brown":    ( 25, 0.55), "beige":    ( 35, 0.25),
 }
 
+_COLOR_ALIASES = {
+    "amarela": "amarelo", "amarelas": "amarelo", "amarelos": "amarelo",
+    "vermelha": "vermelho", "vermelhas": "vermelho", "vermelhos": "vermelho",
+    "roxa": "roxo", "roxas": "roxo", "roxos": "roxo",
+    "preta": "preto", "pretas": "preto", "pretos": "preto",
+    "branca": "branco", "brancas": "branco", "brancos": "branco",
+    "verdes": "verde", "azuis": "azul", "rosas": "rosa",
+    "laranjas": "laranja", "cinzas": "cinza", "marrons": "marrom",
+}
+
 # Cores que mudam valor (brilho) em vez de hue
 _ACHROMATIC = {"cinza", "gray", "grey", "preto", "black", "branco", "white", "bege", "beige"}
+
+def normalize_message_colors(text: str) -> str:
+    """Normaliza variações de gênero e plural de cores para a forma canônica."""
+    t = text.lower()
+    # Ordem decrescente de tamanho para evitar trocas parciais (ex: amarelas antes de amarela)
+    sorted_aliases = sorted(_COLOR_ALIASES.items(), key=lambda x: len(x[0]), reverse=True)
+    for alias, canonical in sorted_aliases:
+        # Tenta substituir como palavra inteira primeiro usando regex
+        t = re.sub(rf"\b{alias}\b", canonical, t)
+    return t
 
 
 def recolor_product_image(
@@ -2403,8 +2426,8 @@ def process_chat_turn(
                 current_img = bg
 
             elif intent == "recolor":
-                # Extrai nome da cor do pedido do usuário
-                msg_lower = user_message.lower()
+                # Extrai nome da cor do pedido do usuário (normalizado para capturar amarela/amarelo, etc.)
+                msg_normalized = normalize_message_colors(user_message)
                 COLOR_WORDS = [
                     "verde", "azul", "vermelho", "amarelo", "roxo", "lilás",
                     "laranja", "rosa", "ciano", "turquesa", "bege", "marrom",
@@ -2412,7 +2435,7 @@ def process_chat_turn(
                     "yellow", "purple", "orange", "pink", "gray",
                 ]
                 target_color = next(
-                    (c for c in COLOR_WORDS if c in msg_lower), "green"
+                    (c for c in COLOR_WORDS if c in msg_normalized), "green"
                 )
                 recolored, ok, recolor_desc = recolor_product_image(
                     current_img, target_color
