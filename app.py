@@ -1137,9 +1137,11 @@ def render_chatbot():
                         st.write(turn["assistant"])
                         # Imagens inline na bolha de resposta
                         if turn.get("result_images"):
-                            ri_cols = st.columns(min(len(turn["result_images"]), 2))
+                            n_imgs = len(turn["result_images"])
+                            num_cols = min(n_imgs, 2)
+                            ri_cols = st.columns(num_cols)
                             for ri, rimg in enumerate(turn["result_images"]):
-                                with ri_cols[ri]:
+                                with ri_cols[ri % num_cols]:
                                     rcap = ""
                                     if turn.get("result_captions") and ri < len(turn["result_captions"]):
                                         rcap = turn["result_captions"][ri]
@@ -1333,7 +1335,7 @@ def _render_quick_actions(att_types: list, full_context: str, segmento: str):
     if has_image:
         # Labels mais curtos para caber no chip
         acoes = [
-            ("🧼", "Fundo",      "remova o fundo desta imagem e coloque fundo branco limpo"),
+            ("🧼", "Fundo",      "remova o fundo desta imagem"),
             ("🎨", "Cenário",    "remova o fundo e gere um cenário clean para este produto"),
             ("🌈", "Variantes",  "gere 3 variações desta imagem com estilos diferentes"),
             ("🏷️", "Benefício",  "ADICIONAR_BENEFICIO_AUTO"), # Flag para lógica especial

@@ -1017,6 +1017,16 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
     msg = user_message.lower()
     intents = []
 
+    # ── Regras de Exclusividade (Filtros Prioritários) ────────
+    # Se a frase for um pedido explícito de recorte, ignora outros motores para evitar poluição
+    BG_ONLY_PATTERNS = [
+        "remova o fundo desta imagem", "remove o fundo desta imagem",
+        "deixe esta imagem com fundo transparente", "fundo transparente",
+        "só o recorte", "apenas o recorte", "recortar produto"
+    ]
+    if any(p in msg for p in BG_ONLY_PATTERNS):
+        return ["remove_bg"]
+
     # ── Detecção individual ───────────────────────────────────
     is_remove_bg = any(w in msg for w in [
         "remov", "sem fundo", "fundo branco", "transparente", "recort"
@@ -1056,37 +1066,56 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
         "cinza", "preto", "branco", "green", "blue", "red",
         "yellow", "purple", "orange", "pink", "gray",
     ]
+    # Detecta se o pedido de "branco" é para o fundo e não para o produto
+    WHITE_BG_PATTERNS = ["fundo branco", "background branco", "white background", "fundo limpo", "fundo sólido"]
+    is_white_bg_req = any(p in msg for p in WHITE_BG_PATTERNS)
+
     is_recolor = any(w in msg for w in [
         "cor ", "cores ", "variação", "variante", "versão ", "mudar a cor",
         "trocar a cor", "muda a cor", "troca a cor", "outra cor",
         "na cor", "em ", "colorir", "recolor",
     ]) and any(c in msg for c in COLOR_WORDS)
+    
+    # Se detectou recolor para branco, mas a frase indica fundo branco, cancela o recolor
+    if is_recolor and is_white_bg_req and ("branco" in msg or "white" in msg):
+        # Só cancela se não houver outras cores na mensagem (ex: "mochila verde com fundo branco")
+        other_colors = [c for c in COLOR_WORDS if c in msg and c not in ["branco", "white"]]
+        if not other_colors:
+            is_recolor = False
 
     # Edição criativa: qualquer instrução que implica manipular pixels
     # de forma aberta (badge, iluminação, detalhe de material, etc.)
     is_creative = any(w in msg for w in [
         "badge", "etiqueta", "selos", "texto", "escrit", "escreve",
-        "coloc", "adiciona", "bot", "colocar", "botar", "add",
         "iluminaç", "luz", "brilh", "sombra", "contrast", "saturação",
         "cor", "trocar", "mudar", "mude a", "verde", "azul", "preto", "rosa",
+        "amarelo", "vermelho", "laranja", "roxo", "branco", "cinza", "marrom",
         "filtro", "efeito",
-        "recort", "detal", "ampli", "zoom", "mostra",
+        "detal", "ampli", "zoom", "mostra",
         "prova", "resistente", "imperme", "material", "tecido",
         "profissional", "montag", "composição",
     ])
 
     # ── Ordem natural de encadeamento ────────────────────────
-    # upscale → remove_bg → generate_scene → analyze → creative_edit
+    # upscale → remove_bg → generate_scene → recolor → analyze → creative_edit
     if is_upscale:
         intents.append("upscale")
     if is_remove_bg:
         intents.append("remove_bg")
     if is_scene:
         intents.append("generate_scene")
-    if is_analyze and not intents:
+    if is_recolor:
+        intents.append("recolor")
+    
+    # Se já detectamos recolor para uma cor específica, não fazemos variantes de estilo genéricas
+    if is_variants and "recolor" not in intents:
+        intents.append("generate_variants")
+        
+    if is_analyze and not any(i in ["recolor", "creative_edit"] for i in intents):
         intents.append("analyze_image")
-    if is_creative and "analyze_image" not in intents:
-        # Criativo coexiste com processamento mas não com análise pura
+        
+    if is_creative and "analyze_image" not in intents and "recolor" not in intents:
+        # Criativo coexiste com processamento mas não com análise pura ou recolor dedicado
         intents.append("creative_edit")
 
     # Se tem mídia mas não classificou → análise genérica
@@ -2435,6 +2464,7 @@ def process_chat_turn(
             if "remove_bg" in intents:   cap_parts.append("✂️ sem fundo")
             if "generate_scene" in intents: cap_parts.append("🎨 cenário IA")
             if "upscale" in intents:     cap_parts.append("🔍 upscale 2×")
+            if "recolor" in intents:     cap_parts.append("🌈 variação de cor")
             if "creative_edit" in intents: cap_parts.append("✨ edição criativa")
             if "analyze_image" in intents: cap_parts.append("🔍 análise")
             captions.append(" · ".join(cap_parts) if cap_parts else "Processado")
