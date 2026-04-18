@@ -1149,7 +1149,8 @@ def detect_chat_intent(user_message: str, has_media: bool) -> str:
 def composite_layers(layers: list) -> Image.Image | None:
     """
     Mescla uma lista de camadas (dicts com 'img' e 'visible') em uma única imagem.
-    Layers: [{ "name": str, "img": PIL, "visible": bool, "type": str, "x": int, "y": int }]
+    Layers: [{ "name": str, "img": PIL, "visible": bool, "type": str, "offset_x": float, "offset_y": float }]
+    Offsets são em % (0 a 100).
     """
     from PIL import Image
 
@@ -1161,34 +1162,36 @@ def composite_layers(layers: list) -> Image.Image | None:
     base_layers = [l for l in visible_layers if l.get("type") == "base"]
     ref_layer = base_layers[0] if base_layers else visible_layers[0]
 
-    base_img = ref_layer["img"].convert("RGBA")
-    w_base, h_base = base_img.size
+    ref_img = ref_layer["img"]
+    w_base, h_base = ref_img.size
     composite = Image.new("RGBA", (w_base, h_base), (0, 0, 0, 0))
 
     for layer in visible_layers:
         l_img = layer["img"].convert("RGBA")
 
-        # Posição personalizada (se definida)
-        x = int(layer.get("x", 0))
-        y = int(layer.get("y", 0))
+        # Posição personalizada (offset em % tem prioridade)
+        if "offset_x" in layer and "offset_y" in layer:
+            x = int((layer["offset_x"] / 100.0) * w_base)
+            y = int((layer["offset_y"] / 100.0) * h_base)
+        else:
+            x = int(layer.get("x", 0))
+            y = int(layer.get("y", 0))
 
-        # Se for do tipo 'base' e o tamanho for diferente, redimensiona para o canvas
-        # Caso contrário (edit/local), apenas cola na posição (x,y)
         if layer.get("type") == "base" and l_img.size != (w_base, h_base):
             l_img.thumbnail((w_base, h_base), Image.LANCZOS)
             temp = Image.new("RGBA", (w_base, h_base), (0, 0, 0, 0))
-            offset = ((w_base - l_img.width) // 2, (h_base - l_img.height) // 2)
-            temp.paste(l_img, offset)
+            paste_x = (w_base - l_img.width) // 2
+            paste_y = (h_base - l_img.height) // 2
+            temp.paste(l_img, (paste_x, paste_y))
             l_img = temp
-            x, y = 0, 0 # Reseta offset para base centralizada
+            x, y = 0, 0
 
         # Camada de composição intermediária para suportar transparência na colagem
         overlay = Image.new("RGBA", (w_base, h_base), (0, 0, 0, 0))
         overlay.paste(l_img, (x, y))
-
         composite = Image.alpha_composite(composite, overlay)
 
-    return composite
+    return composite.convert("RGBA")
 
 def infer_primary_benefit_with_vision(
     image: "Image.Image",

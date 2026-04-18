@@ -179,7 +179,10 @@ _DEFAULTS = {
     "canvas_tool":             "rect",
     "canvas_mode":             "draw",
     "canvas_undo_stack":        [],     # Pilha para desfazer ações no canvas
+    "canvas_redo_stack":        [],     # Pilha para refazer ações no canvas
     "canvas_pending_layer":     None,   # { "img": PIL, "name": str, "intent": str }
+    "canvas_compare_mode":      False,  # Modo comparação original vs atual
+    "canvas_moving_layer":      None,   # Index da camada sendo movida manualmente
 }
 
 for k, v in _DEFAULTS.items():
@@ -933,6 +936,13 @@ def _push_undo():
     if len(st.session_state.canvas_undo_stack) > 10:
         st.session_state.canvas_undo_stack.pop(0)
 
+def _push_redo():
+    """Recupera estados desfeitos na pilha."""
+    import copy
+    if "canvas_redo_stack" in st.session_state and st.session_state.canvas_redo_stack:
+        st.session_state.canvas_undo_stack.append(copy.deepcopy(st.session_state.chat_canvas_layers))
+        st.session_state.chat_canvas_layers = st.session_state.canvas_redo_stack.pop()
+
 @st.dialog("Nova Versão da Imagem", width="large")
 def _render_layer_decision_dialog():
     """Diálogo para decidir se substitui a base ou adiciona como camada."""
@@ -1073,82 +1083,73 @@ def _render_canvas_area(full_context: str, segmento: str):
                 st.session_state.canvas_mode = "transform"
                 st.rerun()
 
-        # ── Renderização do Canvas ──────────────────────────
-        w, h = composite.size
-        # Limita largura visual mantendo proporção
-        display_width = 500 
-        display_height = int(h * (display_width / w))
+        # ── Visualização (Normal ou Comparação) ──────────────
+        if st.session_state.get("canvas_compare_mode") and layers:
+            col_orig, col_edit = st.columns(2)
+            with col_orig:
+                st.markdown('<p style="text-align:center;font-size:12px;color:gray">📷 ORIGINAL (Base)</p>', unsafe_allow_html=True)
+                base_only = [l for l in layers if l["type"] == "base"]
+                if base_only:
+                    st.image(composite_layers(base_only), use_container_width=True)
+            with col_edit:
+                st.markdown('<p style="text-align:center;font-size:12px;color:#FF4B4B">✨ COM EDIÇÕES</p>', unsafe_allow_html=True)
+                st.image(composite, use_container_width=True)
+        else:
+            # ── Renderização do Canvas (Normal) ──────────────────
+            w, h = composite.size
+            display_width = 500 
+            display_height = int(h * (display_width / w))
 
-        drawing_mode = "transform"
-        if st.session_state.canvas_mode == "draw":
-            if st.session_state.canvas_tool == "rect": drawing_mode = "rect"
-            elif st.session_state.canvas_tool == "circle": drawing_mode = "circle"
-            elif st.session_state.canvas_tool == "freeline": drawing_mode = "freedraw"
+            drawing_mode = "transform"
+            if st.session_state.canvas_mode == "draw":
+                if st.session_state.canvas_tool == "rect": drawing_mode = "rect"
+                elif st.session_state.canvas_tool == "circle": drawing_mode = "circle"
+                elif st.session_state.canvas_tool == "freeline": drawing_mode = "freedraw"
 
-        # Converte para RGBA para garantir compatibilidade com a URL do Streamlit
-        canvas_bg = composite.convert("RGBA")
-        
-        # Gera uma chave única baseada no conteúdo da imagem para forçar o refresh do componente
-        import hashlib
-        img_hash = hashlib.md5(canvas_bg.tobytes()).hexdigest()[:8]
+            canvas_bg = composite.convert("RGBA")
+            import hashlib
+            img_hash = hashlib.md5(canvas_bg.tobytes()).hexdigest()[:8]
 
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 75, 75, 0.3)",
-            stroke_width=3,
-            stroke_color="#FF4B4B",
-            background_image=canvas_bg,
-            update_streamlit=True,
-            height=display_height,
-            width=display_width,
-            drawing_mode=drawing_mode,
-            key=f"canvas_roi_{img_hash}",
-        )
+            canvas_result = st_canvas(
+                fill_color="rgba(255, 75, 75, 0.3)",
+                stroke_width=3,
+                stroke_color="#FF4B4B",
+                background_image=canvas_bg,
+                update_streamlit=True,
+                height=display_height,
+                width=display_width,
+                drawing_mode=drawing_mode,
+                key=f"canvas_roi_{img_hash}",
+            )
+            st.caption(f"📏 Resolução real: {w}x{h} | 🖥️ Canvas: {display_width}x{display_height}")
 
-        # Diagnóstico discreto (se precisar remover depois, só avisar)
-        st.caption(f"📏 Resolução real: {w}x{h} | 🖥️ Canvas: {display_width}x{display_height}")
-
-        # ── Processamento da Seleção ────────────────────────
-        if canvas_result.json_data is not None:
-            objects = canvas_result.json_data["objects"]
-            if objects:
-                obj = objects[-1] # Pega o último objeto desenhado
-                
-                # Coordenadas em %
-                if obj["type"] in ["rect", "circle"]:
-                    st.session_state.chat_canvas_roi = {
-                        "x": (obj["left"] / display_width) * 100,
-                        "y": (obj["top"] / display_height) * 100,
-                        "w": (obj["width"] * obj["scaleX"] / display_width) * 100,
-                        "h": (obj["height"] * obj["scaleY"] / display_height) * 100,
-                        "shape": "rect" if obj["type"] == "rect" else "circle"
-                    }
-                    st.session_state.chat_canvas_freehand_mask = None
-                elif obj["type"] == "path":
-                    # Para freehand, precisamos da imagem do canvas (mask)
-                        # O streamlit-drawable-canvas retorna image_data como array numpy RGBA
-                    if canvas_result.image_data is not None:
-                        # Extrai bbox dos pixels não-transparentes
+            # Processamento ROI (mantido igual)
+            if canvas_result.json_data is not None:
+                objects = canvas_result.json_data["objects"]
+                if objects:
+                    obj = objects[-1]
+                    if obj["type"] in ["rect", "circle"]:
+                        st.session_state.chat_canvas_roi = {
+                            "x": (obj["left"] / display_width) * 100, "y": (obj["top"] / display_height) * 100,
+                            "w": (obj["width"] * obj["scaleX"] / display_width) * 100, "h": (obj["height"] * obj["scaleY"] / display_height) * 100,
+                            "shape": "rect" if obj["type"] == "rect" else "circle"
+                        }
+                    elif obj["type"] == "path" and canvas_result.image_data is not None:
                         import numpy as np
-                        mask_arr = canvas_result.image_data[:, :, 3] # Alpha channel
+                        mask_arr = canvas_result.image_data[:, :, 3]
                         coords = np.argwhere(mask_arr > 0)
                         if coords.size > 0:
-                            y_min, x_min = coords.min(axis=0)
-                            y_max, x_max = coords.max(axis=0)
-                            
+                            y_min, x_min = coords.min(axis=0); y_max, x_max = coords.max(axis=0)
                             st.session_state.chat_canvas_roi = {
-                                "x": (x_min / display_width) * 100,
-                                "y": (y_min / display_height) * 100,
-                                "w": ((x_max - x_min) / display_width) * 100,
-                                "h": ((y_max - y_min) / display_height) * 100,
+                                "x": (x_min / display_width) * 100, "y": (y_min / display_height) * 100,
+                                "w": ((x_max - x_min) / display_width) * 100, "h": ((y_max - y_min) / display_height) * 100,
                                 "shape": "freehand"
                             }
-                            # Salva a máscara recortada pela bbox (binária)
                             full_mask = Image.fromarray(mask_arr).convert("L")
-                            crop_box = (x_min, y_min, x_max, y_max)
-                            st.session_state.chat_canvas_freehand_mask = full_mask.crop(crop_box)
+                            st.session_state.chat_canvas_freehand_mask = full_mask.crop((x_min, y_min, x_max, y_max))
 
         # ── Ações ──────────────────────────────────────────
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns([1, 1, 1])
         if c1.button("📥 Usar no Chat", use_container_width=True):
             buf = _io.BytesIO()
             composite.convert("RGB").save(buf, format="JPEG", quality=92)
@@ -1158,34 +1159,65 @@ def _render_canvas_area(full_context: str, segmento: str):
             st.session_state.chat_attachment_previews = [composite.convert("RGB")]
             st.session_state.show_attach_panel = True
             st.success("✅ Composição enviada!")
-            _time.sleep(0.5)
             st.rerun()
         
         if c2.button("📌 Fixar como Base", use_container_width=True):
             _push_undo()
             st.session_state.chat_canvas_layers = [{
-                "name": "Base Mesclada",
-                "img": composite,
-                "visible": True,
-                "type": "base"
+                "name": "Base Mesclada", "img": composite, "visible": True, "type": "base"
             }]
             st.session_state.chat_active_edit_image = composite
             st.rerun()
 
-        # ── Gerenciador de Camadas Pro ──────────────────────
+        with c3:
+            comp_label = "🖼️ Sair Comparar" if st.session_state.canvas_compare_mode else "🌓 Comparar Original"
+            if st.button(comp_label, use_container_width=True):
+                st.session_state.canvas_compare_mode = not st.session_state.canvas_compare_mode
+                st.rerun()
+
+        # ── Gerenciador de Camadas Pro (v2) ─────────────────
         st.markdown("---")
-        with st.expander("📂 Camadas", expanded=False):
-            # Undo Button
-            undo_stack = st.session_state.get("canvas_undo_stack", [])
-            if st.button(f"↶ Desfazer ({len(undo_stack)})", use_container_width=True, disabled=not undo_stack):
+        with st.expander("📂 Camadas & Histórico", expanded=False):
+            # Undo / Redo Row
+            col_undo, col_redo = st.columns(2)
+            undo_s = st.session_state.get("canvas_undo_stack", [])
+            redo_s = st.session_state.get("canvas_redo_stack", [])
+            
+            if col_undo.button(f"↶ Desfazer ({len(undo_s)})", use_container_width=True, disabled=not undo_s):
+                import copy
+                st.session_state.canvas_redo_stack.append(copy.deepcopy(st.session_state.chat_canvas_layers))
                 st.session_state.chat_canvas_layers = st.session_state.canvas_undo_stack.pop()
+                st.rerun()
+            
+            if col_redo.button(f"↷ Refazer ({len(redo_s)})", use_container_width=True, disabled=not redo_s):
+                _push_redo()
                 st.rerun()
             
             st.markdown("---")
             
+            # Movimentação Manual
+            moving_idx = st.session_state.get("canvas_moving_layer")
+            if moving_idx is not None and moving_idx < len(layers):
+                st.info(f"🎯 Movendo: **{layers[moving_idx]['name']}**")
+                col_x, col_y = st.columns(2)
+                l_move = st.session_state.chat_canvas_layers[moving_idx]
+                
+                new_x = col_x.slider("← → Horizontal (%)", 0, 100, int(l_move.get("offset_x", 0)), key="move_x")
+                new_y = col_y.slider("↑ ↓ Vertical (%)", 0, 100, int(l_move.get("offset_y", 0)), key="move_y")
+                
+                if new_x != l_move.get("offset_x") or new_y != l_move.get("offset_y"):
+                    st.session_state.chat_canvas_layers[moving_idx]["offset_x"] = float(new_x)
+                    st.session_state.chat_canvas_layers[moving_idx]["offset_y"] = float(new_y)
+                    st.rerun()
+                
+                if st.button("✅ Confirmar Posição", use_container_width=True):
+                    st.session_state.canvas_moving_layer = None
+                    st.rerun()
+                st.markdown("---")
+
             for i, layer in enumerate(reversed(layers)):
                 idx = len(layers) - 1 - i
-                col_vis, col_name, col_up, col_down, col_del = st.columns([1, 4, 1, 1, 1])
+                col_vis, col_name, col_move, col_up, col_down, col_del = st.columns([1, 3, 1, 1, 1, 1])
                 
                 with col_vis:
                     vis = st.checkbox("", value=layer["visible"], key=f"vis_{idx}_{len(layers)}")
@@ -1194,31 +1226,37 @@ def _render_canvas_area(full_context: str, segmento: str):
                         st.rerun()
                 
                 with col_name:
-                    st.markdown(f"<span style='font-size:12px'>{layer['name']}</span>", unsafe_allow_html=True)
+                    color = "#FF4B4B" if moving_idx == idx else "white"
+                    st.markdown(f"<span style='font-size:11px;color:{color}'>{layer['name'][:20]}</span>", unsafe_allow_html=True)
                 
-                with col_up:
-                    if idx < len(layers) - 1: # Se não for a última (topo)
-                        if st.button("↑", key=f"up_{idx}"):
-                            _push_undo()
-                            l = st.session_state.chat_canvas_layers.pop(idx)
-                            st.session_state.chat_canvas_layers.insert(idx + 1, l)
+                with col_move:
+                    if layer["type"] != "base":
+                        m_icon = "✓" if moving_idx == idx else "↔"
+                        if st.button(m_icon, key=f"move_btn_{idx}"):
+                            st.session_state.canvas_moving_layer = None if moving_idx == idx else idx
                             st.rerun()
                     else: st.write("")
+
+                with col_up:
+                    if idx < len(layers) - 1 and st.button("↑", key=f"up_{idx}"):
+                        _push_undo()
+                        l = st.session_state.chat_canvas_layers.pop(idx)
+                        st.session_state.chat_canvas_layers.insert(idx + 1, l)
+                        st.rerun()
                 
                 with col_down:
-                    if idx > 0: # Se não for a primeira (base)
-                        if st.button("↓", key=f"down_{idx}"):
-                            _push_undo()
-                            l = st.session_state.chat_canvas_layers.pop(idx)
-                            st.session_state.chat_canvas_layers.insert(idx - 1, l)
-                            st.rerun()
-                    else: st.write("")
+                    if idx > 0 and st.button("↓", key=f"down_{idx}"):
+                        _push_undo()
+                        l = st.session_state.chat_canvas_layers.pop(idx)
+                        st.session_state.chat_canvas_layers.insert(idx - 1, l)
+                        st.rerun()
                 
                 with col_del:
                     if layer["type"] != "base" and st.button("🗑️", key=f"del_lay_{idx}"):
                         _push_undo()
                         st.session_state.chat_canvas_layers.pop(idx)
                         st.rerun()
+
         
         # ── Aplicação ROI ──────────────────────────────────
         st.markdown("---")
