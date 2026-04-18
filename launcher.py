@@ -502,9 +502,12 @@ def main():
     threading.Thread(target=sentinela_heartbeat, daemon=True).start()
 
     # 3. Aguardar Streamlit subir
-    if not aguardar_streamlit(timeout=60):
-        ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (60s).", "Shopee Booster - Erro", 0 | 16)
+    if not aguardar_streamlit(timeout=120):
+        ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (120s).", "Shopee Booster - Erro", 0 | 16)
         sys.exit(1)
+    
+    # 3.5. Delay de respiro para o Streamlit renderizar o HTML inicial
+    time.sleep(2)
 
     # 4. Iniciar bandeja em thread NÃO-DAEMON
     # Isso faz com que o processo Python continue vivo mesmo se a janela principal fechar

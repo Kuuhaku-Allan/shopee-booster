@@ -51,7 +51,6 @@ if not hasattr(st_image, "image_to_url"):
         except ImportError:
             st_image.image_to_url = lambda *args, **kwargs: ""
 
-from streamlit_drawable_canvas import st_canvas
 import pandas as pd
 import sys
 import os
@@ -179,6 +178,8 @@ _DEFAULTS = {
     "chat_canvas_freehand_mask": None,
     "canvas_tool":             "rect",
     "canvas_mode":             "draw",
+    "canvas_undo_stack":        [],     # Pilha para desfazer ações no canvas
+    "canvas_pending_layer":     None,   # { "img": PIL, "name": str, "intent": str }
 }
 
 for k, v in _DEFAULTS.items():
@@ -272,6 +273,10 @@ with st.sidebar:
 # PARTIÇÃO I — AUDITORIA PRO
 # ══════════════════════════════════════════════════════════════════════════
 def render_auditoria():
+    from backend_core import (
+        salvar_ou_baixar, resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept, fetch_competitors_intercept, fetch_reviews_intercept, generate_full_optimization, build_catalog_context, chat_with_gemini, analyze_reviews_with_gemini, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, improve_image_quality, upscale_image, MODELOS_VISION, client, build_full_chat_context, detect_chat_intent, analyze_product_image_vision, process_chat_turn, suggest_faq_from_history, MODELOS_TEXTO, get_client
+    )
+    from PIL import Image
     # ── Cabeçalho ─────────────────────────────────────────────
     st.markdown("""
     <div class="page-header">
@@ -914,7 +919,76 @@ def _render_copy_button(text: str, turn_idx: int):
         )
 
 
+def _push_undo():
+    """Salva snapshot das camadas para desfazer (limite 10)."""
+    import copy
+    if "canvas_undo_stack" not in st.session_state:
+        st.session_state.canvas_undo_stack = []
+    
+    # Snapshot profundo das camadas atuais
+    snapshot = copy.deepcopy(st.session_state.chat_canvas_layers)
+    st.session_state.canvas_undo_stack.append(snapshot)
+    
+    # Mantém apenas as últimas 10 ações
+    if len(st.session_state.canvas_undo_stack) > 10:
+        st.session_state.canvas_undo_stack.pop(0)
+
+@st.dialog("Nova Versão da Imagem", width="large")
+def _render_layer_decision_dialog():
+    """Diálogo para decidir se substitui a base ou adiciona como camada."""
+    pending = st.session_state.get("canvas_pending_layer")
+    if not pending:
+        st.rerun()
+        return
+
+    st.markdown(
+        "### ✨ IA gerou uma nova versão!\n"
+        "Como você deseja aplicar esta alteração no editor?"
+    )
+    
+    col_pre, col_opt = st.columns([1, 1])
+    with col_pre:
+        st.image(pending["img"], caption=f"Preview: {pending['name']}", use_container_width=True)
+    
+    with col_opt:
+        st.info(
+            "💡 **Substituir Base:** Descarta as edições atuais e define esta como a imagem principal.\n\n"
+            "💡 **Nova Camada:** Mantém o que você já fez e adiciona esta por cima (ótimo para badges e stickers)."
+        )
+        
+        if st.button("🖼️ Substituir Base", type="primary", use_container_width=True):
+            _push_undo()
+            st.session_state.chat_canvas_layers = [{
+                "name": pending["name"],
+                "img": pending["img"],
+                "visible": True,
+                "type": "base"
+            }]
+            st.session_state.canvas_pending_layer = None
+            st.success("✅ Base atualizada!")
+            st.rerun()
+            
+        if st.button("➕ Adicionar como Camada", use_container_width=True):
+            _push_undo()
+            st.session_state.chat_canvas_layers.append({
+                "name": pending["name"],
+                "img": pending["img"],
+                "visible": True,
+                "type": "edit"
+            })
+            st.session_state.canvas_pending_layer = None
+            st.success("✅ Adicionado ao topo!")
+            st.rerun()
+            
+        if st.button("❌ Descartar", use_container_width=True):
+            st.session_state.canvas_pending_layer = None
+            st.rerun()
+
 def _render_canvas_area(full_context: str, segmento: str):
+    from backend_core import (
+        salvar_ou_baixar, resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept, fetch_competitors_intercept, fetch_reviews_intercept, generate_full_optimization, build_catalog_context, chat_with_gemini, analyze_reviews_with_gemini, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, improve_image_quality, upscale_image, MODELOS_VISION, client, build_full_chat_context, detect_chat_intent, analyze_product_image_vision, process_chat_turn, suggest_faq_from_history, MODELOS_TEXTO, get_client
+    )
+    from PIL import Image
     """Renderiza a área do Canvas Interativo (ROI Visual)."""
     from backend_core import composite_layers, apply_region_edit_with_vision
     import io as _io
@@ -925,6 +999,20 @@ def _render_canvas_area(full_context: str, segmento: str):
     with st.container(border=True):
         st.markdown('<p class="section-label">🎨 Direção Criativa</p>', unsafe_allow_html=True)
         
+        # ── Diálogo de Decisão (se houver pendência) ──────────
+        if st.session_state.get("canvas_pending_layer"):
+            # Se for a primeira imagem, vira base direto sem perguntar
+            if not st.session_state.get("chat_canvas_layers"):
+                p = st.session_state.canvas_pending_layer
+                st.session_state.chat_canvas_layers = [{
+                    "name": p["name"], "img": p["img"], "visible": True, "type": "base"
+                }]
+                st.session_state.canvas_pending_layer = None
+            else:
+                st.warning("✨ Nova imagem recebida via chat!")
+                if st.button("🤔 Abrir Opções de Aplicação", type="primary", use_container_width=True):
+                    _render_layer_decision_dialog()
+
         layers = st.session_state.get("chat_canvas_layers", [])
         
         if not layers:
@@ -1074,6 +1162,7 @@ def _render_canvas_area(full_context: str, segmento: str):
             st.rerun()
         
         if c2.button("📌 Fixar como Base", use_container_width=True):
+            _push_undo()
             st.session_state.chat_canvas_layers = [{
                 "name": "Base Mesclada",
                 "img": composite,
@@ -1083,21 +1172,51 @@ def _render_canvas_area(full_context: str, segmento: str):
             st.session_state.chat_active_edit_image = composite
             st.rerun()
 
-        # ── Gerenciador de Camadas (Compacto) ───────────────
+        # ── Gerenciador de Camadas Pro ──────────────────────
         st.markdown("---")
         with st.expander("📂 Camadas", expanded=False):
+            # Undo Button
+            undo_stack = st.session_state.get("canvas_undo_stack", [])
+            if st.button(f"↶ Desfazer ({len(undo_stack)})", use_container_width=True, disabled=not undo_stack):
+                st.session_state.chat_canvas_layers = st.session_state.canvas_undo_stack.pop()
+                st.rerun()
+            
+            st.markdown("---")
+            
             for i, layer in enumerate(reversed(layers)):
                 idx = len(layers) - 1 - i
-                col_vis, col_name, col_del = st.columns([1, 4, 1])
+                col_vis, col_name, col_up, col_down, col_del = st.columns([1, 4, 1, 1, 1])
+                
                 with col_vis:
                     vis = st.checkbox("", value=layer["visible"], key=f"vis_{idx}_{len(layers)}")
                     if vis != layer["visible"]:
                         st.session_state.chat_canvas_layers[idx]["visible"] = vis
                         st.rerun()
+                
                 with col_name:
                     st.markdown(f"<span style='font-size:12px'>{layer['name']}</span>", unsafe_allow_html=True)
+                
+                with col_up:
+                    if idx < len(layers) - 1: # Se não for a última (topo)
+                        if st.button("↑", key=f"up_{idx}"):
+                            _push_undo()
+                            l = st.session_state.chat_canvas_layers.pop(idx)
+                            st.session_state.chat_canvas_layers.insert(idx + 1, l)
+                            st.rerun()
+                    else: st.write("")
+                
+                with col_down:
+                    if idx > 0: # Se não for a primeira (base)
+                        if st.button("↓", key=f"down_{idx}"):
+                            _push_undo()
+                            l = st.session_state.chat_canvas_layers.pop(idx)
+                            st.session_state.chat_canvas_layers.insert(idx - 1, l)
+                            st.rerun()
+                    else: st.write("")
+                
                 with col_del:
                     if layer["type"] != "base" and st.button("🗑️", key=f"del_lay_{idx}"):
+                        _push_undo()
                         st.session_state.chat_canvas_layers.pop(idx)
                         st.rerun()
         
@@ -1115,6 +1234,7 @@ def _render_canvas_area(full_context: str, segmento: str):
                         composite, roi, instrucao, full_context, segmento,
                         freehand_mask=mask
                     )
+                    _push_undo()
                     st.session_state.chat_canvas_layers.append({
                         "name": f"Edição: {instrucao[:15]}",
                         "img": new_layer_img,
@@ -1140,6 +1260,10 @@ def _render_canvas_area(full_context: str, segmento: str):
 
 
 def render_chatbot():
+    from backend_core import (
+        salvar_ou_baixar, resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept, fetch_competitors_intercept, fetch_reviews_intercept, generate_full_optimization, build_catalog_context, chat_with_gemini, analyze_reviews_with_gemini, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, improve_image_quality, upscale_image, MODELOS_VISION, client, build_full_chat_context, detect_chat_intent, analyze_product_image_vision, process_chat_turn, suggest_faq_from_history, MODELOS_TEXTO, get_client
+    )
+    from PIL import Image
     st.markdown("""
     <div class="page-header">
         <div class="page-header-icon">🤖</div>
@@ -1451,6 +1575,10 @@ def render_chatbot():
 # ══════════════════════════════════════════════════════════════
 
 def _render_quick_actions(att_types: list, full_context: str, segmento: str):
+    from backend_core import (
+        salvar_ou_baixar, resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept, fetch_competitors_intercept, fetch_reviews_intercept, generate_full_optimization, build_catalog_context, chat_with_gemini, analyze_reviews_with_gemini, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, improve_image_quality, upscale_image, MODELOS_VISION, client, build_full_chat_context, detect_chat_intent, analyze_product_image_vision, process_chat_turn, suggest_faq_from_history, MODELOS_TEXTO, get_client
+    )
+    from PIL import Image
     """
     Mostra chips de ação rápida contextuais quando há anexo pendente.
     Imagem → ações de edição. Vídeo → ações de análise consultiva.
@@ -1516,6 +1644,10 @@ def _render_post_response_actions(
     full_context: str,
     segmento: str,
 ):
+    from backend_core import (
+        salvar_ou_baixar, resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept, fetch_competitors_intercept, fetch_reviews_intercept, generate_full_optimization, build_catalog_context, chat_with_gemini, analyze_reviews_with_gemini, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, improve_image_quality, upscale_image, MODELOS_VISION, client, build_full_chat_context, detect_chat_intent, analyze_product_image_vision, process_chat_turn, suggest_faq_from_history, MODELOS_TEXTO, get_client
+    )
+    from PIL import Image
     """
     Renderiza ações de follow-up embaixo de cada resposta do assistente.
     Depende de 'post_actions' registrado no histórico.
@@ -1674,6 +1806,10 @@ def _send_message(
     full_context: str,
     segmento:     str,
 ):
+    from backend_core import (
+        salvar_ou_baixar, resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept, fetch_competitors_intercept, fetch_reviews_intercept, generate_full_optimization, build_catalog_context, chat_with_gemini, analyze_reviews_with_gemini, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, improve_image_quality, upscale_image, MODELOS_VISION, client, build_full_chat_context, detect_chat_intent, analyze_product_image_vision, process_chat_turn, suggest_faq_from_history, MODELOS_TEXTO, get_client
+    )
+    from PIL import Image
     """
     Processa e registra um turno de chat.
 
@@ -1747,32 +1883,28 @@ def _send_message(
     # ── Atualiza Camadas do Canvas ────────────────────────────
     if result["images"]:
         # Lista de intents que representam uma nova "imagem completa/final"
-        # Essas operações devem substituir a base do canvas para evitar o bug da imagem antiga por baixo
         GLOBAL_INTENTS = {"generate_scene", "recolor", "remove_bg", "generate_variants", "upscale"}
         current_intent = result.get("intent")
         final_img = result["images"][0]
         caption = result.get("captions", [""])[0] or "Resultado"
         
-        # Se for a primeira imagem OU uma operação global/final, RESETAMOS as camadas para ter uma nova base
-        if not st.session_state.get("chat_canvas_layers") or current_intent in GLOBAL_INTENTS:
-            st.session_state.chat_canvas_layers = [{
+        # Se for a primeira imagem, vira base direto
+        if not st.session_state.get("chat_canvas_layers"):
+             st.session_state.chat_canvas_layers = [{
                 "name": f"Base: {caption}",
                 "img": final_img,
                 "visible": True,
                 "type": "base"
             }]
-            
-            # Se houver variantes extras (como no motor de 3 imagens), adiciona como camadas ocultas
-            if len(result["images"]) > 1:
-                for idx_var, var_img in enumerate(result["images"][1:]):
-                    st.session_state.chat_canvas_layers.append({
-                        "name": f"Variante {idx_var+1}",
-                        "img": var_img,
-                        "visible": False,
-                        "type": "edit"
-                    })
+        elif current_intent in GLOBAL_INTENTS:
+            # Operação Global -> Coloca em Pendente para o usuário decidir (Substituir vs Nova Camada)
+            st.session_state.canvas_pending_layer = {
+                "img": final_img,
+                "name": f"IA: {caption}",
+                "intent": current_intent
+            }
         else:
-            # Operação aditiva/local (badge, texto, ROI local) -> Adiciona como camada
+            # Operação aditiva/local (badge, texto, ROI local) -> Adiciona como camada direto
             for idx_res, res_img in enumerate(result["images"]):
                 st.session_state.chat_canvas_layers.append({
                     "name": f"Chat: {caption} ({idx_res+1})",
@@ -1800,6 +1932,10 @@ def _send_message(
 
 
 def _gerar_faq(full_context: str, shop_name: str):
+    from backend_core import (
+        salvar_ou_baixar, resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept, fetch_competitors_intercept, fetch_reviews_intercept, generate_full_optimization, build_catalog_context, chat_with_gemini, analyze_reviews_with_gemini, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, improve_image_quality, upscale_image, MODELOS_VISION, client, build_full_chat_context, detect_chat_intent, analyze_product_image_vision, process_chat_turn, suggest_faq_from_history, MODELOS_TEXTO, get_client
+    )
+    from PIL import Image
     """Gera o FAQ automático via Gemini e salva no session_state."""
     produtos = st.session_state.shop_produtos or []
     faq_prompt = f"""Você é especialista em e-commerce Shopee Brasil.
@@ -1861,6 +1997,10 @@ RESPOSTA 9: [texto]"""
 
 
 def _render_faq_output(shop_name: str):
+    from backend_core import (
+        salvar_ou_baixar, resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept, fetch_competitors_intercept, fetch_reviews_intercept, generate_full_optimization, build_catalog_context, chat_with_gemini, analyze_reviews_with_gemini, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, improve_image_quality, upscale_image, MODELOS_VISION, client, build_full_chat_context, detect_chat_intent, analyze_product_image_vision, process_chat_turn, suggest_faq_from_history, MODELOS_TEXTO, get_client
+    )
+    from PIL import Image
     """Exibe o FAQ gerado se houver."""
     if not st.session_state.get("faq_ia_geral"):
         return
@@ -1905,6 +2045,10 @@ def _render_faq_output(shop_name: str):
 # PARTIÇÃO III — SENTINELA (3.0.0)
 # ══════════════════════════════════════════════════════════════════════════
 def render_sentinela():
+    from backend_core import (
+        salvar_ou_baixar, resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept, fetch_competitors_intercept, fetch_reviews_intercept, generate_full_optimization, build_catalog_context, chat_with_gemini, analyze_reviews_with_gemini, generate_ai_scenario, generate_gradient_background, apply_contact_shadow, improve_image_quality, upscale_image, MODELOS_VISION, client, build_full_chat_context, detect_chat_intent, analyze_product_image_vision, process_chat_turn, suggest_faq_from_history, MODELOS_TEXTO, get_client
+    )
+    from PIL import Image
     st.markdown("""
     <div class="page-header">
         <div class="page-header-icon">📡</div>

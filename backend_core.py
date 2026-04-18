@@ -1149,37 +1149,46 @@ def detect_chat_intent(user_message: str, has_media: bool) -> str:
 def composite_layers(layers: list) -> Image.Image | None:
     """
     Mescla uma lista de camadas (dicts com 'img' e 'visible') em uma única imagem.
-    Layers: [{ "name": str, "img": PIL, "visible": bool, "type": str }]
+    Layers: [{ "name": str, "img": PIL, "visible": bool, "type": str, "x": int, "y": int }]
     """
     from PIL import Image
-    
-    visible_layers = [L for l in layers if (L := l).get("visible", True)]
+
+    visible_layers = [l for l in layers if l.get("visible", True)]
     if not visible_layers:
         return None
-        
-    # Usa o tamanho da primeira camada como base (referência de aspect ratio)
-    base_img = visible_layers[0]["img"].convert("RGBA")
+
+    # Encontra a camada base (se houver) ou usa a primeira para definir o canvas
+    base_layers = [l for l in visible_layers if l.get("type") == "base"]
+    ref_layer = base_layers[0] if base_layers else visible_layers[0]
+
+    base_img = ref_layer["img"].convert("RGBA")
     w_base, h_base = base_img.size
     composite = Image.new("RGBA", (w_base, h_base), (0, 0, 0, 0))
-    
+
     for layer in visible_layers:
         l_img = layer["img"].convert("RGBA")
-        
-        # Se o tamanho for diferente, redimensiona mantendo proporção (Contain)
-        if l_img.size != (w_base, h_base):
-            # Calcula proporção para não achatar
-            l_img.thumbnail((w_base, h_base), Image.LANCZOS)
-            
-            # Centraliza a imagem redimensionada no canvas da base
-            new_layer = Image.new("RGBA", (w_base, h_base), (0, 0, 0, 0))
-            offset = ((w_base - l_img.width) // 2, (h_base - l_img.height) // 2)
-            new_layer.paste(l_img, offset)
-            l_img = new_layer
-            
-        composite = Image.alpha_composite(composite, l_img)
-        
-    return composite
 
+        # Posição personalizada (se definida)
+        x = int(layer.get("x", 0))
+        y = int(layer.get("y", 0))
+
+        # Se for do tipo 'base' e o tamanho for diferente, redimensiona para o canvas
+        # Caso contrário (edit/local), apenas cola na posição (x,y)
+        if layer.get("type") == "base" and l_img.size != (w_base, h_base):
+            l_img.thumbnail((w_base, h_base), Image.LANCZOS)
+            temp = Image.new("RGBA", (w_base, h_base), (0, 0, 0, 0))
+            offset = ((w_base - l_img.width) // 2, (h_base - l_img.height) // 2)
+            temp.paste(l_img, offset)
+            l_img = temp
+            x, y = 0, 0 # Reseta offset para base centralizada
+
+        # Camada de composição intermediária para suportar transparência na colagem
+        overlay = Image.new("RGBA", (w_base, h_base), (0, 0, 0, 0))
+        overlay.paste(l_img, (x, y))
+
+        composite = Image.alpha_composite(composite, overlay)
+
+    return composite
 
 def infer_primary_benefit_with_vision(
     image: "Image.Image",

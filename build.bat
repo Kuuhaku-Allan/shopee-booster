@@ -1,39 +1,39 @@
 @echo off
-title Shopee Booster — Build .exe
+title Shopee Booster â€” Build .exe
 color 0B
 
 echo.
 echo  ============================================
-echo   SHOPEE BOOSTER — GERANDO EXECUTAVEL
+echo   SHOPEE BOOSTER â€” GERANDO EXECUTAVEL
 echo  ============================================
 echo.
 
-REM ── Ativar virtualenv ────────────────────────────────────────
+REM â”€â”€ Ativar virtualenv â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 if exist ".venv\Scripts\activate.bat" (
     call .venv\Scripts\activate.bat
 ) else if exist "venv\Scripts\activate.bat" (
     call venv\Scripts\activate.bat
 )
 
-REM ── Instalar PyInstaller se necessário ───────────────────────
+REM â”€â”€ Instalar PyInstaller se necessÃ¡rio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 pip show pyinstaller >nul 2>nul
 if %errorlevel% neq 0 (
     echo  Instalando PyInstaller...
     pip install pyinstaller
 )
 
-REM ── Instalar Playwright (browsers) ───────────────────────────
+REM â”€â”€ Instalar Playwright (browsers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 echo  Verificando Playwright...
 python -m playwright install chromium
 
-REM ── Build ────────────────────────────────────────────────────
+REM â”€â”€ Build â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 echo.
 echo  Gerando .exe...
 echo.
 
 pyinstaller ^
     --noconfirm ^
-    --onefile ^
+    --onedir ^
     --windowed ^
     --name "ShopeeBooster" ^
     --icon "assets\icon.ico" ^
