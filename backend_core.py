@@ -157,7 +157,11 @@ def playwright_intercept(script: str) -> dict | list | None:
             try:
                 result = subprocess.run(
                     [sys.executable, "runscript", script_path],
-                    capture_output=True, text=True, timeout=150
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=150
                 )
             finally:
                 try:
@@ -167,16 +171,24 @@ def playwright_intercept(script: str) -> dict | list | None:
         else:
             result = subprocess.run(
                 [sys.executable, "-c", script],
-                capture_output=True, text=True, timeout=150
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=150
             )
 
-        if result.stderr.strip():
-            st.caption(f"🔍 Debug stderr: {result.stderr.strip()[:2000]}")
+        # Proteção contra None (pode acontecer com erros de encoding)
+        stderr_text = (result.stderr or "").strip()
+        stdout_text = (result.stdout or "").strip()
+
+        if stderr_text:
+            st.caption(f"🔍 Debug stderr: {stderr_text[:2000]}")
         if result.returncode != 0:
             st.caption(f"🔍 Debug returncode: {result.returncode}")
-            st.caption(f"🔍 Debug stdout: {result.stdout.strip()[:500]}")
-        if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout.strip())
+            st.caption(f"🔍 Debug stdout: {stdout_text[:500]}")
+        if result.returncode == 0 and stdout_text:
+            return json.loads(stdout_text)
         return None
     except subprocess.TimeoutExpired:
         st.warning("⏱️ Timeout — Playwright demorou mais de 150s")
