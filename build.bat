@@ -71,8 +71,27 @@ pyinstaller ^
 if %errorlevel% == 0 (
     echo.
     echo  ============================================
-    echo   BUILD CONCLUIDO! Arquivo em dist\ShopeeBooster\
-echo  ============================================
+    echo   BUILD CONCLUIDO!
+    echo  Gerando instalador de browsers...
+    echo  ============================================
+    echo.
+
+    REM -- Build do instalador de browsers --
+    pyinstaller --noconfirm --onefile --console --name "install_browsers" install_browsers.py
+
+    if %errorlevel% == 0 (
+        echo  Copiando install_browsers.exe para dist\ShopeeBooster...
+        copy /Y "dist\install_browsers.exe" "dist\ShopeeBooster\install_browsers.exe" >nul
+
+        echo.
+        echo  ============================================
+        echo   BUILD COMPLETO!
+        echo   Arquivos em dist\ShopeeBooster\
+        echo  ============================================
+    ) else (
+        echo  Aviso: Falha ao criar install_browsers.exe
+        echo  O app ainda funcionara, mas precisara dos browsers instalados manualmente.
+    )
 ) else (
     echo.
     echo  ERRO no build. Veja a saida acima.

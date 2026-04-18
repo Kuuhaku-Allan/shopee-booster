@@ -362,14 +362,23 @@ def instalar_chromium() -> bool:
     """
     Instala o Chromium do Playwright automaticamente.
     Retorna True se instalação com sucesso ou já existir.
+
+    NOTA: No modo .exe (frozen), isso NÃO funciona porque sys.executable
+    é o próprio launcher. Usar o script install_browsers.py separado.
     """
     if chromium_existe():
         return True
 
+    # No modo frozen, NÃO podemos usar sys.executable -m playwright
+    # porque isso reabre o próprio app, causando loop infinito
+    if getattr(sys, "frozen", False):
+        _sentinela_log("[Playwright] Instalação automática não suportada no modo .exe. Use install_browsers.py")
+        return False
+
     try:
         _sentinela_log("[Playwright] Chromium não encontrado. Instalando...")
 
-        # Determinar o comando
+        # Modo desenvolvimento - usar Python diretamente
         cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
 
         # Executar instalação
@@ -378,7 +387,6 @@ def instalar_chromium() -> bool:
             capture_output=True,
             text=True,
             timeout=300,  # 5 minutos de timeout
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
 
         if result.returncode == 0:
@@ -405,44 +413,61 @@ def garantir_chromium() -> bool:
     if chromium_existe():
         return True
 
-    # Chromium não existe — precisa instalar
-    msg = (
-        "O navegador Chromium (usado pela Auditoria e Sentinela) não foi encontrado.\n\n"
-        "Deseja baixar e instalar agora?\n"
-        "Isso é necessário para o funcionamento correto do app.\n\n"
-        "O download tem aproximadamente 130MB."
-    )
-    res = ctypes.windll.user32.MessageBoxW(
-        0, msg, "Shopee Booster - Chromium necessário", 4 | 64
-    )
+    # Verificar se está no modo .exe (frozen)
+    is_frozen = getattr(sys, "frozen", False)
 
-    if res != 6:  # IDYES = 6
-        _sentinela_log("[Playwright] Usuário recusou instalação do Chromium.")
-        return False
-
-    # Usuário clicou em Sim — instalar
-    _sentinela_log("[Playwright] Iniciando instalação do Chromium...")
-    success = instalar_chromium()
-
-    if success:
-        ctypes.windll.user32.MessageBoxW(
-            0,
-            "Chromium instalado com sucesso!\nO app continuará normalmente.",
-            "Shopee Booster",
-            0 | 64
+    if is_frozen:
+        # No modo .exe, não podemos instalar automaticamente
+        msg = (
+            "O navegador Chromium não foi encontrado.\n\n"
+            "Para a Auditoria e Sentinela funcionarem, você precisa:\n\n"
+            "1. Copie a pasta 'pw-browsers' de uma instalação funcional\n"
+            "   para a pasta onde está o ShopeeBooster.exe\n\n"
+            "   OU\n\n"
+            "2. Execute 'install_browsers.exe' que vem junto com o app\n\n"
+            "O app continuará, mas a Auditoria e Sentinela não funcionarão\n"
+            "até que o Chromium seja instalado."
         )
-        return True
+        ctypes.windll.user32.MessageBoxW(0, msg, "Shopee Booster - Chromium Ausente", 0 | 48)
+        _sentinela_log("[Playwright] Chromium ausente no modo .exe. Auditoria/Sentinela podem falhar.")
+        return False
     else:
-        ctypes.windll.user32.MessageBoxW(
-            0,
-            "Falha ao instalar Chromium automaticamente.\n\n"
-            "Execute manualmente no terminal:\n"
-            "python -m playwright install chromium\n\n"
-            "Ou copie a pasta pw-browsers de uma instalação funcional.",
-            "Shopee Booster - Erro",
-            0 | 16
+        # Modo desenvolvimento - pode instalar automaticamente
+        msg = (
+            "O navegador Chromium (usado pela Auditoria e Sentinela) não foi encontrado.\n\n"
+            "Deseja baixar e instalar agora?\n"
+            "O download tem aproximadamente 130MB."
         )
-        return False
+        res = ctypes.windll.user32.MessageBoxW(
+            0, msg, "Shopee Booster - Chromium necessário", 4 | 64
+        )
+
+        if res != 6:  # IDYES = 6
+            _sentinela_log("[Playwright] Usuário recusou instalação do Chromium.")
+            return False
+
+        # Usuário clicou em Sim — instalar
+        _sentinela_log("[Playwright] Iniciando instalação do Chromium...")
+        success = instalar_chromium()
+
+        if success:
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "Chromium instalado com sucesso!\nO app continuará normalmente.",
+                "Shopee Booster",
+                0 | 64
+            )
+            return True
+        else:
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "Falha ao instalar Chromium automaticamente.\n\n"
+                "Execute manualmente no terminal:\n"
+                "python -m playwright install chromium",
+                "Shopee Booster - Erro",
+                0 | 16
+            )
+            return False
 
 
 def _fetch_competitors_headless(keyword: str) -> list:
