@@ -101,7 +101,7 @@ def iniciar_streamlit():
             "--server.enableCORS", "false",
             "--server.enableXsrfProtection", "false",
             "--browser.gatherUsageStats", "false",
-            "--theme.base", "light",
+            "--theme.base", "dark",
             "--global.developmentMode", "false",
         ]
     else:
@@ -113,7 +113,7 @@ def iniciar_streamlit():
             "--server.enableCORS", "false",
             "--server.enableXsrfProtection", "false",
             "--browser.gatherUsageStats", "false",
-            "--theme.base", "light",
+            "--theme.base", "dark",
             "--global.developmentMode", "false",
         ]
     global log_file

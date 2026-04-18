@@ -123,6 +123,43 @@ pre[class*="language-"] {
     align-items: center !important;
     justify-content: center !important;
 }
+
+/* ═══════════════════ FILE UPLOADER (MODO ESCURO) ═══════════════════ */
+[data-testid="stFileUploader"] {
+    background: transparent !important;
+    border: none !important;
+}
+[data-testid="stFileUploaderDropzone"] {
+    background-color: var(--bg-card) !important;
+    border: 2px dashed var(--border-color) !important;
+    border-radius: var(--radius-md) !important;
+}
+[data-testid="stFileUploaderDropzone"] * {
+    color: var(--text-primary) !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"],
+[data-testid="stFileUploaderDropzoneInstructions"] * {
+    color: var(--text-secondary) !important;
+}
+[data-testid="stFileUploaderDropzone"] button,
+[data-testid="stFileUploader"] section button {
+    background-color: var(--bg-card-hover) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
+}
+
+/* ═══════════════════ EXPANDER / FAQ (MODO ESCURO) ═══════════════════ */
+[data-testid="stExpander"] > details {
+    background-color: var(--bg-card) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: var(--radius-md) !important;
+}
+[data-testid="stExpander"] summary * {
+    color: var(--text-primary) !important;
+}
+[data-testid="stExpander"] summary:hover {
+    background-color: var(--bg-card-hover) !important;
+}
 .stButton > button[kind="primary"] {
     background-color: var(--accent) !important;
     color: var(--text-on-accent) !important;

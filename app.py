@@ -2439,10 +2439,23 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
             df_trend["dia"] = pd.to_datetime(df_trend["dia"])
 
             try:
-                st.line_chart(df_trend.set_index("dia")["preco_medio"], width="stretch")
+                import altair as alt
+                chart = (
+                    alt.Chart(df_trend)
+                    .mark_line(point=True, color="#ee4d2d")
+                    .encode(
+                        x=alt.X("dia:T", title=None, axis=alt.Axis(labelColor="#f1f1f1", titleColor="#f1f1f1", gridColor="rgba(255,255,255,0.08)")),
+                        y=alt.Y("preco_medio:Q", title=None, axis=alt.Axis(labelColor="#f1f1f1", titleColor="#f1f1f1", gridColor="rgba(255,255,255,0.08)")),
+                        tooltip=["dia:T", alt.Tooltip("preco_medio:Q", format=".2f")]
+                    )
+                    .properties(height=300)
+                    .configure(background="#1e1e24")
+                    .configure_view(stroke=None)
+                )
+                st.altair_chart(chart, use_container_width=True)
             except Exception:
                 st.warning("Não foi possível renderizar o gráfico nesta build. Exibindo tabela de tendência.")
-                st.dataframe(df_trend, width="stretch", hide_index=True)
+                st.table(df_trend.reset_index(drop=True))
 
             c1, c2, c3 = st.columns(3)
             preco_inicio = df_trend.iloc[0]["preco_medio"]
@@ -2477,7 +2490,7 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
                     for r in ranking
                 ],
             })
-            st.dataframe(df_display, width="stretch", hide_index=True)
+            st.table(df_display.reset_index(drop=True))
 
     # ══════════════════════════════════════════════════════════
     # TAB 4 — Status & Diagnóstico  ← NOVO
