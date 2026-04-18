@@ -5,6 +5,7 @@ Responsabilidades:
   - Ícone na bandeja do sistema (system tray)
   - Janela nativa via pywebview (modo "instalado")
   - Verificar atualizações no GitHub ao iniciar
+  - Verificar e instalar Chromium do Playwright se necessário
 """
 
 import subprocess
@@ -17,6 +18,7 @@ import socket
 import ctypes
 import json
 import importlib  # Para importação dinâmica
+import platform
 import pystray
 import webview
 from PIL import Image, ImageDraw
@@ -50,6 +52,7 @@ from sentinela_db import RUNTIME_DIR, SENTINELA_LOG_PATH
 # Browsers do Playwright — pasta persistente ao lado do .exe
 if getattr(sys, "frozen", False):
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(RUNTIME_DIR, "pw-browsers")
+
 
 # ── Estado global ─────────────────────────────────────────────
 streamlit_proc = None
@@ -249,14 +252,49 @@ def acao_sair(icon, item):
     os._exit(0)
 
 
+def acao_reinstalar_chromium(icon, item):
+    """Reinstala o Chromium do Playwright."""
+    threading.Thread(target=_reinstalar_chromium_dialog, daemon=True).start()
+
+
+def _reinstalar_chromium_dialog():
+    """Thread para reinstalar Chromium com diálogo."""
+    msg = (
+        "Deseja reinstalar o navegador Chromium?\n\n"
+        "Isso pode resolver problemas com a Auditoria e Sentinela.\n"
+        "O download tem aproximadamente 130MB."
+    )
+    res = ctypes.windll.user32.MessageBoxW(
+        0, msg, "Shopee Booster - Reinstalar Chromium", 4 | 64
+    )
+
+    if res == 6:  # IDYES
+        success = instalar_chromium()
+        if success:
+            ctypes.windll.user32.MessageBoxW(
+                0, "Chromium reinstalado com sucesso!", "Shopee Booster", 0 | 64
+            )
+        else:
+            ctypes.windll.user32.MessageBoxW(
+                0, "Falha ao reinstalar Chromium.\nVeja o log sentinela_log.txt para detalhes.",
+                "Shopee Booster - Erro", 0 | 16
+            )
+
+
 def iniciar_tray():
     global tray_icon
     icone_img = criar_icone_imagem()
+
+    # Verificar status do Chromium para tooltip
+    chromium_ok = chromium_existe()
+    status_chromium = "Chromium: OK" if chromium_ok else "Chromium: FALTANDO"
+
     menu = pystray.Menu(
         pystray.MenuItem("📦 Abrir Janela",      acao_abrir_janela, default=True),
         pystray.MenuItem("🌐 Abrir no Navegador", acao_abrir_navegador),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("🔄 Verificar Atualizações", acao_verificar_atualizacao),
+        pystray.MenuItem("🌐 Reinstalar Chromium", acao_reinstalar_chromium),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("❌ Sair",               acao_sair),
     )
@@ -284,6 +322,128 @@ def _sentinela_log(msg: str):
             f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
     except Exception:
         pass
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ── PLAYWRIGHT: Verificação do Chromium ──────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+
+def get_chromium_path() -> str:
+    """
+    Retorna o caminho esperado do executável do Chromium headless.
+    Caminho varia conforme versão do Playwright e sistema.
+    """
+    browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+    if not browsers_path:
+        # Fallback para desenvolvimento
+        browsers_path = os.path.join(RUNTIME_DIR, "pw-browsers")
+
+    system = platform.system().lower()
+    if system == "windows":
+        # Estrutura típica: pw-browsers/chromium_headless_shell-XXXX/chrome-headless-shell-win64/
+        if os.path.exists(browsers_path):
+            for item in os.listdir(browsers_path):
+                if item.startswith("chromium_headless_shell-"):
+                    exe_path = os.path.join(
+                        browsers_path, item, "chrome-headless-shell-win64",
+                        "chrome-headless-shell.exe"
+                    )
+                    if os.path.exists(exe_path):
+                        return exe_path
+    return ""
+
+
+def chromium_existe() -> bool:
+    """Verifica se o Chromium headless está instalado."""
+    return bool(get_chromium_path())
+
+
+def instalar_chromium() -> bool:
+    """
+    Instala o Chromium do Playwright automaticamente.
+    Retorna True se instalação com sucesso ou já existir.
+    """
+    if chromium_existe():
+        return True
+
+    try:
+        _sentinela_log("[Playwright] Chromium não encontrado. Instalando...")
+
+        # Determinar o comando
+        cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+
+        # Executar instalação
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minutos de timeout
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+
+        if result.returncode == 0:
+            _sentinela_log("[Playwright] Chromium instalado com sucesso.")
+            return True
+        else:
+            _sentinela_log(f"[Playwright] ERRO ao instalar: {result.stderr[:500]}")
+            return False
+
+    except subprocess.TimeoutExpired:
+        _sentinela_log("[Playwright] TIMEOUT na instalação do Chromium.")
+        return False
+    except Exception as e:
+        _sentinela_log(f"[Playwright] Exceção ao instalar: {e}")
+        return False
+
+
+def garantir_chromium() -> bool:
+    """
+    Garante que o Chromium está instalado.
+    Mostra diálogo se precisar instalar.
+    Retorna True se Chromium disponível, False caso contrário.
+    """
+    if chromium_existe():
+        return True
+
+    # Chromium não existe — precisa instalar
+    msg = (
+        "O navegador Chromium (usado pela Auditoria e Sentinela) não foi encontrado.\n\n"
+        "Deseja baixar e instalar agora?\n"
+        "Isso é necessário para o funcionamento correto do app.\n\n"
+        "O download tem aproximadamente 130MB."
+    )
+    res = ctypes.windll.user32.MessageBoxW(
+        0, msg, "Shopee Booster - Chromium necessário", 4 | 64
+    )
+
+    if res != 6:  # IDYES = 6
+        _sentinela_log("[Playwright] Usuário recusou instalação do Chromium.")
+        return False
+
+    # Usuário clicou em Sim — instalar
+    _sentinela_log("[Playwright] Iniciando instalação do Chromium...")
+    success = instalar_chromium()
+
+    if success:
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "Chromium instalado com sucesso!\nO app continuará normalmente.",
+            "Shopee Booster",
+            0 | 64
+        )
+        return True
+    else:
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "Falha ao instalar Chromium automaticamente.\n\n"
+            "Execute manualmente no terminal:\n"
+            "python -m playwright install chromium\n\n"
+            "Ou copie a pasta pw-browsers de uma instalação funcional.",
+            "Shopee Booster - Erro",
+            0 | 16
+        )
+        return False
+
 
 def _fetch_competitors_headless(keyword: str) -> list:
     """
@@ -512,6 +672,14 @@ def sentinela_heartbeat():
 
 # ── Entrada principal ─────────────────────────────────────────
 def main():
+    # 0. Verificar se o Chromium do Playwright está instalado
+    if not garantir_chromium():
+        _sentinela_log("[Main] Chromium não disponível. App pode não funcionar corretamente.")
+
+    # 0.5 Garantir que PLAYWRIGHT_BROWSERS_PATH está definido
+    if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(RUNTIME_DIR, "pw-browsers")
+
     # 1. Iniciar Streamlit em background
     iniciar_streamlit()
 
