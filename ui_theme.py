@@ -98,6 +98,31 @@ pre[class*="language-"] {
     border-color: var(--accent) !important;
     color: var(--text-primary) !important;
 }
+
+/* Centralização para botões pequenos de camada */
+.layer-icon-btn {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 40px !important;
+}
+.layer-icon-btn div[data-testid="stButton"] > button {
+    width: 100% !important;
+    min-width: 44px !important;
+    height: 40px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    line-height: 1 !important;
+}
+.layer-icon-btn div[data-testid="stButton"] > button p {
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
 .stButton > button[kind="primary"] {
     background-color: var(--accent) !important;
     color: var(--text-on-accent) !important;

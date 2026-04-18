@@ -1168,6 +1168,13 @@ def composite_layers(layers: list) -> Image.Image | None:
 
     for layer in visible_layers:
         l_img = layer["img"].convert("RGBA")
+        
+        # Redimensionamento personalizado (opcional)
+        if layer.get("width_pct") and layer.get("height_pct"):
+            new_w = int((layer["width_pct"] / 100.0) * w_base)
+            new_h = int((layer["height_pct"] / 100.0) * h_base)
+            if new_w > 0 and new_h > 0:
+                l_img = l_img.resize((new_w, new_h), Image.LANCZOS)
 
         # Posição personalizada (offset em % tem prioridade)
         if "offset_x" in layer and "offset_y" in layer:
