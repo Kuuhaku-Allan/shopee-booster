@@ -16,7 +16,7 @@ import subprocess
 GITHUB_USUARIO = "AmaDeusAlsoSatan"
 GITHUB_REPO    = "shopee-booster"
 
-VERSAO_ATUAL = "3.0.0"  # Atualizar a cada release
+VERSAO_ATUAL = "4.0.0"  # Atualizar a cada release
 
 API_URL = f"https://api.github.com/repos/{GITHUB_USUARIO}/{GITHUB_REPO}/releases/latest"
 
@@ -152,11 +152,12 @@ def baixar_e_aplicar_atualizacao(url_download: str):
 
         bat_path = os.path.join(tmp_dir, "update.bat")
         # Script BAT para sincronização via robocopy
+        # /XD exclui pastas, /XF exclui arquivos específicos
         bat_conteudo = (
             "@echo off\n"
             "echo Aplicando atualizacao... Aguarde 5 segundos.\n"
             "timeout /t 5 /nobreak > nul\n"
-            f'robocopy "{extract_dir}" "{app_dir}" /E /v /it /is /XD data logs\n'
+            f'robocopy "{extract_dir}" "{app_dir}" /E /v /it /is /XD data logs pw-browsers /XF .shopee_config\n'
             "echo Reiniciando...\n"
             f'start "" "{caminho_atual_exe}"\n'
             "del \"%~f0\"\n"

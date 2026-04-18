@@ -1,5 +1,5 @@
 """
-app.py — Orquestrador do Shopee Booster 2.0
+app.py — Orquestrador do Shopee Booster 4.0.0
 ============================================
 Este arquivo controla APENAS:
   - Configuração da página e API key
@@ -78,7 +78,7 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # ── Configuração da página (deve ser a PRIMEIRA chamada st.*) ──────────────
 st.set_page_config(
-    page_title="Shopee Booster 2.0",
+    page_title="Shopee Booster 4.0.0",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -202,7 +202,7 @@ with st.sidebar:
         <div class="brand-logo-icon">🛍️</div>
         <div>
             <div class="brand-logo-text">Shopee Booster</div>
-            <div class="brand-logo-sub">v2.0 · Suite Pro</div>
+            <div class="brand-logo-sub">v4.0.0 · Suite Pro</div>
         </div>
     </div>
     """, unsafe_allow_html=True)

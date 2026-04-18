@@ -202,11 +202,31 @@ def acao_abrir_navegador(icon, item):
 
 
 def acao_verificar_atualizacao(icon, item):
-    """Checa GitHub e mostra diálogo se houver update."""
-    threading.Thread(target=_checar_e_notificar, daemon=True).start()
+    """Checa GitHub e mostra diálogo se houver update (manual via tray)."""
+    threading.Thread(target=_checar_e_notificar_manual, daemon=True).start()
 
 
-def _checar_e_notificar():
+def _checar_e_atualizar_automatico():
+    """
+    Verificação automática no startup.
+    Se houver update, aplica automaticamente sem perguntar.
+    """
+    resultado = verificar_atualizacao()
+    if resultado["disponivel"]:
+        msg = (f"Nova versão disponível: {resultado['versao_nova']}\n"
+               f"Versão atual: {VERSAO_ATUAL}\n\n"
+               f"A atualização será aplicada agora.\n"
+               f"O app será reiniciado automaticamente.")
+        ctypes.windll.user32.MessageBoxW(0, msg, "Atualizando Shopee Booster", 0 | 64)
+        from updater import baixar_e_aplicar_atualizacao
+        baixar_e_aplicar_atualizacao(resultado["url_download"])
+
+
+def _checar_e_notificar_manual():
+    """
+    Verificação manual via botão do tray.
+    Mostra status e pergunta se deseja atualizar.
+    """
     resultado = verificar_atualizacao()
     if resultado["disponivel"]:
         msg = (f"Nova versão: {resultado['versao_nova']}\n"
@@ -495,8 +515,8 @@ def main():
     # 1. Iniciar Streamlit em background
     iniciar_streamlit()
 
-    # 2. Verificar atualização silenciosamente
-    threading.Thread(target=_checar_e_notificar, daemon=True).start()
+    # 2. Verificar atualização automaticamente (atualiza sem perguntar)
+    threading.Thread(target=_checar_e_atualizar_automatico, daemon=True).start()
 
     # 2.5. 📡 Iniciar a Sentinela em segundo plano
     threading.Thread(target=sentinela_heartbeat, daemon=True).start()
