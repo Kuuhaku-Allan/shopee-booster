@@ -59,6 +59,7 @@ import time
 
 import nest_asyncio
 from dotenv import load_dotenv
+from release_meta import VERSAO_ATUAL
 
 nest_asyncio.apply()
 
@@ -78,7 +79,7 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # ── Configuração da página (deve ser a PRIMEIRA chamada st.*) ──────────────
 st.set_page_config(
-    page_title="Shopee Booster 4.0.0",
+    page_title=f"Shopee Booster {VERSAO_ATUAL}",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -197,12 +198,12 @@ for k, v in _DEFAULTS.items():
 # ══════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     # Brand
-    st.markdown("""
+    st.markdown(f"""
     <div class="brand-logo">
         <div class="brand-logo-icon">🛍️</div>
         <div>
             <div class="brand-logo-text">Shopee Booster</div>
-            <div class="brand-logo-sub">v4.0.0 · Suite Pro</div>
+            <div class="brand-logo-sub">v{VERSAO_ATUAL} · Suite Pro</div>
         </div>
     </div>
     """, unsafe_allow_html=True)

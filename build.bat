@@ -41,6 +41,7 @@ pyinstaller ^
     --add-data "backend_core.py;." ^
     --add-data "ui_theme.py;." ^
     --add-data "updater.py;." ^
+    --add-data "release_meta.py;." ^
     --add-data "version.txt;." ^
     --add-data "assets;assets" ^
     --add-data "models;models" ^
@@ -49,6 +50,7 @@ pyinstaller ^
     --copy-metadata rembg ^
     --copy-metadata onnxruntime ^
     --collect-all streamlit ^
+    --collect-all streamlit_drawable_canvas ^
     --collect-all pystray ^
     --collect-all webview ^
     --collect-all rembg ^

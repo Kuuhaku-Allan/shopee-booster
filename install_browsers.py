@@ -3,8 +3,8 @@ install_browsers.py — Shopee Booster
 Instala os navegadores do Playwright (Chromium) necessários para
 a Auditoria e Sentinela funcionarem.
 
-Este script deve ser empacotado como um executável separado
-que roda ANTES do app principal.
+NOTA: Este script só funciona em modo desenvolvimento (Python).
+No modo .exe empacotado, use as instruções manuais.
 """
 
 import subprocess
@@ -42,7 +42,7 @@ def check_chromium_installed():
 
 
 def install_chromium():
-    """Instala o Chromium do Playwright."""
+    """Instala o Chromium do Playwright (apenas em modo desenvolvimento)."""
     browsers_path = get_browsers_path()
 
     # Garantir que a pasta existe
@@ -57,11 +57,8 @@ def install_chromium():
     print()
 
     try:
-        # No modo frozen, usar o Python embutido
-        if getattr(sys, "frozen", False):
-            cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
-        else:
-            cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+        # Só funciona em modo desenvolvimento
+        cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
 
         result = subprocess.run(
             cmd,
@@ -80,9 +77,9 @@ def install_chromium():
 
 
 def main():
-    print("=" * 50)
+    print("=" * 60)
     print("Shopee Booster - Instalador de Navegadores")
-    print("=" * 50)
+    print("=" * 60)
     print()
 
     browsers_path = get_browsers_path()
@@ -90,12 +87,47 @@ def main():
     print()
 
     if check_chromium_installed():
-        print("Chromium já está instalado!")
+        print("Chromium JA ESTA INSTALADO!")
         print()
         input("Pressione Enter para sair...")
         return
 
-    print("Chromium não encontrado.")
+    # Verificar se está em modo frozen (.exe)
+    if getattr(sys, "frozen", False):
+        print("=" * 60)
+        print("MODO EXECUTAVEL DETECTADO")
+        print("=" * 60)
+        print()
+        print("Este instalador nao pode instalar browsers automaticamente")
+        print("quando empacotado como .exe (causaria recursao infinita).")
+        print()
+        print("SOLUCAO:")
+        print("-" * 60)
+        print()
+        print("1. Abra o Prompt de Comando (cmd)")
+        print()
+        print("2. Execute os comandos:")
+        print()
+        print(f'   set PLAYWRIGHT_BROWSERS_PATH={browsers_path}')
+        print("   python -m playwright install chromium")
+        print()
+        print("   OU (se tiver o venv ativado):")
+        print()
+        print(f'   set PLAYWRIGHT_BROWSERS_PATH={browsers_path}')
+        print("   venv\\Scripts\\python.exe -m playwright install chromium")
+        print()
+        print("-" * 60)
+        print()
+        print("3. Alternativa: copie a pasta 'pw-browsers' de uma")
+        print("   instalacao que ja funciona para:")
+        print(f"   {browsers_path}")
+        print()
+        print("=" * 60)
+        input("Pressione Enter para sair...")
+        return
+
+    # Modo desenvolvimento - pode instalar
+    print("Modo desenvolvimento detectado.")
     print("Iniciando instalação...")
     print()
 
@@ -109,7 +141,7 @@ def main():
         print("Falha ao instalar Chromium.")
         print()
         print("Tente executar manualmente no terminal:")
-        print(f"  set PLAYWRIGHT_BROWSERS_PATH={browsers_path}")
+        print(f'  set PLAYWRIGHT_BROWSERS_PATH={browsers_path}')
         print("  python -m playwright install chromium")
 
     print()

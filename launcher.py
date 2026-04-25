@@ -150,20 +150,31 @@ def abrir_janela_nativa():
     Fechar a janela NÃO encerra o app — ele continua na bandeja.
     """
     global janela_webview
-    
-    # Downloads vão automaticamente para a pasta Downloads do usuário
-    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-    
-    janela_webview = webview.create_window(
-        TITULO_JANELA,
-        URL_APP,
-        width=1280,
-        height=800,
-        resizable=True,
-        min_size=(900, 600),
-    )
-    webview.start(debug=False)
-    janela_webview = None
+
+    try:
+        janela_webview = webview.create_window(
+            TITULO_JANELA,
+            URL_APP,
+            width=1280,
+            height=800,
+            resizable=True,
+            min_size=(900, 600),
+        )
+        webview.start(debug=False)
+    except Exception as e:
+        _sentinela_log(f"[WebView] ERRO ao abrir janela: {e}")
+        # Fallback: abrir no navegador
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            f"Nao foi possivel abrir a janela nativa.\n\n"
+            f"O app abrira no navegador.\n\n"
+            f"Erro: {str(e)[:100]}",
+            "Shopee Booster - Aviso",
+            0 | 48
+        )
+        webbrowser.open(URL_APP)
+    finally:
+        janela_webview = None
 
 
 def abrir_no_navegador():
@@ -480,7 +491,39 @@ def _fetch_competitors_headless(keyword: str) -> list:
 
     script = f"""
 import asyncio, json, sys
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+
+def parse_items(data):
+    items = data.get("items") or data.get("data", {{}}).get("items") or []
+    competitors = []
+    seen_ids = set()
+
+    for item in items[:20]:
+        b = item.get("item_basic", item) or {{}}
+        item_id = b.get("itemid") or item.get("itemid")
+        if not item_id or item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+
+        rating = b.get("item_rating") or {{}}
+        price_raw = b.get("price_min") or b.get("price") or 0
+        competitors.append({{
+            "item_id":    item_id,
+            "shop_id":    b.get("shopid") or item.get("shopid"),
+            "nome":       (b.get("name") or "")[:65],
+            "preco":      price_raw / 100000 if price_raw > 1000 else price_raw,
+            "avaliações": b.get("cmt_count", 0),
+            "curtidas":   b.get("liked_count", 0),
+            "estrelas":   round(rating.get("rating_star", 0), 1),
+        }})
+
+    return competitors[:10]
+
+def is_search_response(response):
+    if response.request.method == "OPTIONS":
+        return False
+    url = response.url
+    return "api/v4/search/search_items" in url or "v4/search/search_items" in url
 
 async def run():
     async with async_playwright() as p:
@@ -496,44 +539,28 @@ async def run():
         )
         page = await context.new_page()
         competitors = []
+        search_url = "https://shopee.com.br/search?keyword={kw_encoded}&sortBy=sales"
 
-        async def handle_response(response):
-            if response.request.method == "OPTIONS": return
-            url = response.url
-            if ("search_items" in url or "v4/search" in url) and not competitors:
-                try:
-                    data = await response.json()
-                    items = (
-                        data.get("items") or
-                        data.get("data", {{}}).get("items") or
-                        []
-                    )
-                    for item in items[:10]:
-                        b = item.get("item_basic", item)
-                        if b.get("itemid"):
-                            competitors.append({{
-                                "item_id":    b.get("itemid"),
-                                "shop_id":    b.get("shopid"),
-                                "nome":       b.get("name", "")[:65],
-                                "preco":      b.get("price_min", b.get("price", 0)) / 100000,
-                                "avaliações": b.get("cmt_count", 0),
-                                "curtidas":   b.get("liked_count", 0),
-                                "estrelas":   round(b.get("item_rating", {{}}).get("rating_star", 0), 1),
-                            }})
-                except Exception:
-                    pass
+        try:
+            async with page.expect_response(is_search_response, timeout=30000) as response_info:
+                await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
+            response = await response_info.value
+            data = await response.json()
+            competitors = parse_items(data)
+            print(f"search_items url: {{response.url}}", file=sys.stderr)
+            print(f"competitors parsed: {{len(competitors)}}", file=sys.stderr)
+        except PlaywrightTimeoutError as e:
+            print(f"search_items timeout: {{e}}", file=sys.stderr)
+        except Exception as e:
+            print(f"search_items parse err: {{e}}", file=sys.stderr)
 
-        page.on("response", handle_response)
-        await page.goto(
-            "https://shopee.com.br/search?keyword={kw_encoded}&sortBy=sales",
-            wait_until="networkidle", timeout=45000
-        )
-        await asyncio.sleep(6)
         if not competitors:
-            for _ in range(5):
-                await page.mouse.wheel(0, 900)
-                await asyncio.sleep(2)
-            await asyncio.sleep(4)
+            try:
+                await page.goto(search_url, wait_until="load", timeout=45000)
+            except Exception as e:
+                print(f"fallback goto err: {{e}}", file=sys.stderr)
+            await asyncio.sleep(5)
+
         await browser.close()
         print(json.dumps(competitors))
 
@@ -697,42 +724,53 @@ def sentinela_heartbeat():
 
 # ── Entrada principal ─────────────────────────────────────────
 def main():
+    _sentinela_log(f"[Main] Iniciando Shopee Booster v{VERSAO_ATUAL}")
+    _sentinela_log(f"[Main] RUNTIME_DIR={RUNTIME_DIR}")
+    _sentinela_log(f"[Main] frozen={getattr(sys, 'frozen', False)}")
+
     # 0. Verificar se o Chromium do Playwright está instalado
-    if not garantir_chromium():
-        _sentinela_log("[Main] Chromium não disponível. App pode não funcionar corretamente.")
+    chromium_ok = garantir_chromium()
+    if not chromium_ok:
+        _sentinela_log("[Main] Chromium não disponível. Auditoria pode falhar.")
 
     # 0.5 Garantir que PLAYWRIGHT_BROWSERS_PATH está definido
     if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(RUNTIME_DIR, "pw-browsers")
+    _sentinela_log(f"[Main] PLAYWRIGHT_BROWSERS_PATH={os.environ.get('PLAYWRIGHT_BROWSERS_PATH')}")
 
     # 1. Iniciar Streamlit em background
+    _sentinela_log("[Main] Iniciando Streamlit...")
     iniciar_streamlit()
 
     # 2. Verificar atualização automaticamente (atualiza sem perguntar)
     threading.Thread(target=_checar_e_atualizar_automatico, daemon=True).start()
 
-    # 2.5. 📡 Iniciar a Sentinela em segundo plano
+    # 2.5. Iniciar a Sentinela em segundo plano
     threading.Thread(target=sentinela_heartbeat, daemon=True).start()
 
     # 3. Aguardar Streamlit subir
+    _sentinela_log("[Main] Aguardando Streamlit subir...")
     if not aguardar_streamlit(timeout=120):
+        _sentinela_log("[Main] ERRO: Streamlit não iniciou")
         ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (120s).", "Shopee Booster - Erro", 0 | 16)
         sys.exit(1)
-    
+
+    _sentinela_log("[Main] Streamlit OK. Iniciando janela...")
+
     # 3.5. Delay de respiro para o Streamlit renderizar o HTML inicial
     time.sleep(2)
 
     # 4. Iniciar bandeja em thread NÃO-DAEMON
-    # Isso faz com que o processo Python continue vivo mesmo se a janela principal fechar
     tray_thread = threading.Thread(target=iniciar_tray, daemon=False)
     tray_thread.start()
 
     # 5. Abrir janela nativa principal (bloqueante)
+    _sentinela_log("[Main] Abrindo janela nativa...")
     abrir_janela_nativa()
 
-    # 🚀 Se chegamos aqui, o usuário fechou a janela no "X"
+    # Se chegamos aqui, o usuário fechou a janela no "X"
     # O app continua rodando via tray_thread (não-daemon)
-    # Aguardamos a thread da bandeja terminar (quando clicar em 'Sair')
+    _sentinela_log("[Main] Janela fechada. Aguardando tray...")
     tray_thread.join()
 
 

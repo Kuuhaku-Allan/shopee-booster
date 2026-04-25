@@ -351,8 +351,40 @@ asyncio.run(run())
 def fetch_competitors_intercept(keyword: str) -> list:
     kw_encoded = keyword.replace(" ", "+")
     script = f"""
-import asyncio, json
-from playwright.async_api import async_playwright
+import asyncio, json, sys
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+
+def parse_items(data):
+    items = data.get("items") or data.get("data", {{}}).get("items") or []
+    competitors = []
+    seen_ids = set()
+
+    for item in items[:20]:
+        b = item.get("item_basic", item) or {{}}
+        item_id = b.get("itemid") or item.get("itemid")
+        if not item_id or item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+
+        rating = b.get("item_rating") or {{}}
+        price_raw = b.get("price_min") or b.get("price") or 0
+        competitors.append({{
+            "item_id":    item_id,
+            "shop_id":    b.get("shopid") or item.get("shopid"),
+            "nome":       (b.get("name") or "")[:65],
+            "preco":      price_raw / 100000 if price_raw > 1000 else price_raw,
+            "avaliações": b.get("cmt_count", 0),
+            "curtidas":   b.get("liked_count", 0),
+            "estrelas":   round(rating.get("rating_star", 0), 1),
+        }})
+
+    return competitors[:10]
+
+def is_search_response(response):
+    if response.request.method == "OPTIONS":
+        return False
+    url = response.url
+    return "api/v4/search/search_items" in url or "v4/search/search_items" in url
 
 async def run():
     async with async_playwright() as p:
@@ -368,44 +400,28 @@ async def run():
         )
         page = await context.new_page()
         competitors = []
+        search_url = "https://shopee.com.br/search?keyword={kw_encoded}&sortBy=sales"
 
-        async def handle_response(response):
-            if response.request.method == "OPTIONS": return
-            url = response.url
-            if ("search_items" in url or "v4/search" in url) and not competitors:
-                try:
-                    data = await response.json()
-                    items = (
-                        data.get("items") or
-                        data.get("data", {{}}).get("items") or
-                        []
-                    )
-                    for item in items[:10]:
-                        b = item.get("item_basic", item)
-                        if b.get("itemid"):
-                            competitors.append({{
-                                "item_id":    b.get("itemid"),
-                                "shop_id":    b.get("shopid"),
-                                "nome":       b.get("name", "")[:65],
-                                "preco":      b.get("price_min", b.get("price", 0)) / 100000,
-                                "avaliações": b.get("cmt_count", 0),
-                                "curtidas":   b.get("liked_count", 0),
-                                "estrelas":   round(b.get("item_rating", {{}}).get("rating_star", 0), 1),
-                            }})
-                except Exception:
-                    pass
+        try:
+            async with page.expect_response(is_search_response, timeout=30000) as response_info:
+                await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
+            response = await response_info.value
+            data = await response.json()
+            competitors = parse_items(data)
+            print(f"search_items url: {{response.url}}", file=sys.stderr)
+            print(f"competitors parsed: {{len(competitors)}}", file=sys.stderr)
+        except PlaywrightTimeoutError as e:
+            print(f"search_items timeout: {{e}}", file=sys.stderr)
+        except Exception as e:
+            print(f"search_items parse err: {{e}}", file=sys.stderr)
 
-        page.on("response", handle_response)
-        await page.goto(
-            "https://shopee.com.br/search?keyword={kw_encoded}&sortBy=sales",
-            wait_until="networkidle", timeout=45000
-        )
-        await asyncio.sleep(6)
         if not competitors:
-            for _ in range(5):
-                await page.mouse.wheel(0, 900)
-                await asyncio.sleep(2)
-            await asyncio.sleep(4)
+            try:
+                await page.goto(search_url, wait_until="load", timeout=45000)
+            except Exception as e:
+                print(f"fallback goto err: {{e}}", file=sys.stderr)
+            await asyncio.sleep(5)
+
         await browser.close()
         print(json.dumps(competitors))
 

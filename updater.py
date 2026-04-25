@@ -10,14 +10,9 @@ import shutil
 import requests
 import tempfile
 import subprocess
+from release_meta import GITHUB_REPO, GITHUB_USUARIO, VERSAO_ATUAL
 
 # ── Configure aqui ────────────────────────────────────────────
-# Substitua com o usuário e repositório corretos no GitHub
-GITHUB_USUARIO = "AmaDeusAlsoSatan"
-GITHUB_REPO    = "shopee-booster"
-
-VERSAO_ATUAL = "4.0.1"  # Atualizar a cada release
-
 API_URL = f"https://api.github.com/repos/{GITHUB_USUARIO}/{GITHUB_REPO}/releases/latest"
 
 
