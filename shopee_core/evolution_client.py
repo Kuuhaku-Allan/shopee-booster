@@ -93,23 +93,51 @@ def normalize_whatsapp_number(user_id: str) -> str:
 def send_text(user_id: str, text: str) -> dict:
     """
     Envia uma mensagem de texto simples para o usuário pelo WhatsApp.
-
-    A Evolution API v2 aceita o número como dígitos puros (sem @, sem +).
-    Tenta primeiro o formato {"text": ...} e, se receber 422/400,
-    tenta o formato alternativo {"textMessage": {"text": ...}}.
-
-    Returns dict com:
-        ok          (bool)
-        status_code (int)
-        data        (dict) — resposta da Evolution API
-        error       (str)  — presente apenas em caso de exceção
+    Divide automaticamente a mensagem se for muito longa (>3500 chars).
     """
+    MAX_LEN = 3500
+    if len(text) <= MAX_LEN:
+        return _send_single_text(user_id, text)
+
+    # Divide a mensagem em blocos
+    chunks = []
+    paragraphs = text.split("\n\n")
+    current_chunk = ""
+    for p in paragraphs:
+        if len(current_chunk) + len(p) + 2 > MAX_LEN:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = p
+        else:
+            current_chunk += ("\n\n" + p) if current_chunk else p
+
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
+    # Fallback caso um parágrafo único seja gigante
+    if not chunks:
+        chunks = [text[i:i+MAX_LEN] for i in range(0, len(text), MAX_LEN)]
+
+    total = len(chunks)
+    last_result = None
+    for i, chunk in enumerate(chunks, start=1):
+        chunk_text = f"{chunk}\n\n_[Parte {i}/{total}]_" if total > 1 else chunk
+        last_result = _send_single_text(user_id, chunk_text)
+        if not last_result.get("ok"):
+            log.warning(f"[EVO] Falha ao enviar parte {i}/{total}")
+            return last_result
+
+    return last_result or {"ok": False, "error": "Empty chunks"}
+
+
+def _send_single_text(user_id: str, text: str) -> dict:
+    """Helper interno que de fato faz a chamada HTTP para enviar uma mensagem."""
     number = normalize_whatsapp_number(user_id)
     if not number:
         return {"ok": False, "error": "Número/JID inválido ou vazio."}
 
     url = f"{_base_url()}/message/sendText/{_instance()}"
-    log.info(f"[EVO] send_text → {url} number={number} len={len(text)}")
+    log.info(f"[EVO] _send_single_text → {url} number={number} len={len(text)}")
 
     # Formato primário (Evolution API v2)
     payload_v2 = {"number": number, "text": text}
@@ -125,7 +153,7 @@ def send_text(user_id: str, text: str) -> dict:
                 timeout=30,
             )
             log.info(
-                f"[EVO] send_text attempt={attempt} "
+                f"[EVO] _send_single_text attempt={attempt} "
                 f"status={r.status_code} ok={r.ok}"
             )
 
@@ -154,7 +182,7 @@ def send_text(user_id: str, text: str) -> dict:
             }
 
         except requests.exceptions.ConnectionError:
-            log.error("[EVO] send_text — Evolution API inacessível (ConnectionError)")
+            log.error("[EVO] _send_single_text — Evolution API inacessível (ConnectionError)")
             return {
                 "ok": False,
                 "error": (
@@ -163,7 +191,7 @@ def send_text(user_id: str, text: str) -> dict:
                 ),
             }
         except Exception as e:
-            log.error(f"[EVO] send_text — exceção inesperada: {e}")
+            log.error(f"[EVO] _send_single_text — exceção inesperada: {e}")
             return {"ok": False, "error": str(e)}
 
     return {"ok": False, "error": "Todos os formatos de envio falharam."}

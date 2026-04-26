@@ -56,7 +56,6 @@ from shopee_core.media_service import (
     analyze_image,
 )
 from shopee_core.session_service import get_all_active_sessions, save_session, clear_session
-from shopee_core.audit_service import generate_product_optimization, load_shop_from_url
 from shopee_core.evolution_client import (
     send_text as evo_send_text,
     set_webhook as evo_set_webhook,
@@ -314,6 +313,15 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
         has_media = msg.get("has_media", False)
         reason = "media_not_supported_yet" if has_media else "empty_text"
         return {"ok": True, "ignored": True, "reason": reason}
+
+    # ── Deduplicação de Mensagens (Fase 3E) ───────────────────────
+    message_id = msg.get("message_id")
+    if message_id:
+        from shopee_core.session_service import is_message_processed, mark_message_processed
+        if is_message_processed(message_id):
+            log.info(f"/webhook/evolution IGNORADO duplicado: msg_id={message_id}")
+            return {"ok": True, "ignored": True, "reason": "already_processed"}
+        mark_message_processed(message_id, msg["user_id"])
 
     # ── Processa a mensagem e obtém a resposta do bot ─────────────
     try:

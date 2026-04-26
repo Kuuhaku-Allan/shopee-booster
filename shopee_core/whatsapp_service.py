@@ -102,12 +102,16 @@ def extract_evolution_message(payload: dict) -> dict:
     }
     has_media = any(k in message for k in MEDIA_TYPES)
 
+    # Tenta extrair message_id para deduplicação (v2: data.key.id)
+    message_id = key.get("id", "")
+
     return {
         "event": event,
         "from_me": from_me,
         "user_id": user_id,
         "text": text.strip(),
         "has_media": has_media,
+        "message_id": message_id,
         "raw": payload,
     }
 
@@ -415,9 +419,7 @@ def format_optimization_result(result: dict, product_name: str) -> str:
         f"💬 Avaliações coletadas: *{reviews_count}*\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
     )
-    body = optimization[:OPTIMIZATION_MAX_CHARS]
-    if len(optimization) > OPTIMIZATION_MAX_CHARS:
-        body += "\n\n_[Conteúdo truncado. Acesse o .exe para ver a versão completa.]_"
+    body = optimization
     footer = (
         "\n\n━━━━━━━━━━━━━━━━━━━━━━\n"
         "Quer otimizar outro produto? Envie */auditar*"

@@ -54,6 +54,19 @@ def _init_session_table():
             """
         )
 
+def _init_processed_messages_table():
+    """Cria a tabela de controle de mensagens duplicadas. Idempotente."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS whatsapp_processed_messages (
+                message_id TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
 
 # ══════════════════════════════════════════════════════════════════
 # API PÚBLICA
@@ -151,3 +164,35 @@ def get_all_active_sessions() -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ══════════════════════════════════════════════════════════════════
+# DEDUPLICAÇÃO DE MENSAGENS (Fase 3E)
+# ══════════════════════════════════════════════════════════════════
+
+def is_message_processed(message_id: str) -> bool:
+    """Verifica se a mensagem já foi processada anteriormente."""
+    if not message_id:
+        return False
+    _init_processed_messages_table()
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT message_id FROM whatsapp_processed_messages WHERE message_id = ?",
+            (message_id,)
+        ).fetchone()
+    return bool(row)
+
+def mark_message_processed(message_id: str, user_id: str):
+    """Marca a mensagem como processada para evitar duplicidade."""
+    if not message_id:
+        return
+    _init_processed_messages_table()
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO whatsapp_processed_messages (message_id, user_id, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (message_id, user_id, datetime.utcnow().isoformat())
+        )
+
