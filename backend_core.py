@@ -263,6 +263,7 @@ async def run():
             if response.request.method == "OPTIONS":
                 return
             url = response.url
+            
             if "rcmd_items" not in url and "shop_page" not in url:
                 return
             try:
