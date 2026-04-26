@@ -19,3 +19,9 @@ infra/evolution/.env
 
 # Banco de dados de estado do bot (gerado em runtime)
 data/bot_state.db
+data/bot_state.db-shm
+data/bot_state.db-wal
+
+# Logs do servidor
+uvicorn.log
+uvicorn_err.log
