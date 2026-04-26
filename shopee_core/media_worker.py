@@ -136,20 +136,31 @@ def _process_remove_background(image_bytes: bytes) -> dict:
         }
 
 
-def _process_generate_scene(image_bytes: bytes, segmento: str) -> dict:
+def _process_generate_scene(image_bytes: bytes, segmento: str, style_prompt: str = "") -> dict:
     """Gera cenário de produto."""
     start = time.time()
 
     try:
-        log.info(f"[SCENE] Iniciando geração de cenário. segmento={segmento}")
+        log.info(f"[SCENE] Iniciando geração de cenário. segmento={segmento}, style={style_prompt[:50]}")
 
-        # Primeiro remove o fundo
-        rb = _process_remove_background(image_bytes)
-        if not rb["ok"]:
-            return rb
-
-        fg_bytes = base64.b64decode(rb["image_b64"])
-        fg = _load_image_from_bytes(fg_bytes)
+        # Primeiro remove o fundo se ainda não foi removido
+        # (quando usado em pipeline, a imagem já vem sem fundo)
+        from PIL import Image
+        img = _load_image_from_bytes(image_bytes)
+        
+        # Verifica se a imagem tem canal alpha (já sem fundo)
+        has_alpha = img.mode == "RGBA" and img.getchannel("A").getextrema()[0] < 255
+        
+        if not has_alpha:
+            log.info("[SCENE] Imagem não tem transparência, removendo fundo primeiro...")
+            rb = _process_remove_background(image_bytes)
+            if not rb["ok"]:
+                return rb
+            fg_bytes = base64.b64decode(rb["image_b64"])
+            fg = _load_image_from_bytes(fg_bytes)
+        else:
+            log.info("[SCENE] Imagem já tem transparência, usando diretamente")
+            fg = img
 
         # Importa funções do backend_core
         from backend_core import (
@@ -158,13 +169,17 @@ def _process_generate_scene(image_bytes: bytes, segmento: str) -> dict:
             apply_contact_shadow,
         )
 
-        prompt_map = {
-            "Escolar / Juvenil": "minimalist white geometric podium soft lavender background",
-            "Viagem": "stone platform outdoors golden hour soft focus",
-            "Profissional / Tech": "sleek white desk surface modern office lighting",
-            "Moda": "white marble floor fashion studio aesthetic",
-        }
-        prompt = prompt_map.get(segmento, "product photography studio white background soft lighting")
+        # Usa style_prompt se fornecido, senão usa mapeamento padrão
+        if style_prompt:
+            prompt = style_prompt
+        else:
+            prompt_map = {
+                "Escolar / Juvenil": "minimalist white geometric podium soft lavender background",
+                "Viagem": "stone platform outdoors golden hour soft focus",
+                "Profissional / Tech": "sleek white desk surface modern office lighting",
+                "Moda": "white marble floor fashion studio aesthetic",
+            }
+            prompt = prompt_map.get(segmento, "product photography studio white background soft lighting")
 
         log.info(f"[SCENE] Gerando cenário com prompt: {prompt[:50]}...")
         bg = generate_ai_scenario(prompt, segmento)
@@ -296,7 +311,7 @@ def _worker_process(
         if action == "remove_background":
             result = _process_remove_background(image_bytes)
         elif action == "generate_scene":
-            result = _process_generate_scene(image_bytes, segmento)
+            result = _process_generate_scene(image_bytes, segmento, style_prompt=caption)
         elif action == "analyze_image":
             result = _process_analyze_image(image_bytes, caption or "Analise esta imagem", full_context, segmento)
         elif action == "creative_edit":

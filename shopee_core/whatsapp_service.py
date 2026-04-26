@@ -223,55 +223,141 @@ def normalize_intent_text(text: str) -> str:
     return text
 
 
-def classify_media_action(caption: str) -> str:
+def extract_scene_prompt(caption: str) -> str:
     """
-    Classifica a ação de mídia baseada na legenda.
+    Extrai o prompt de estilo do cenário da legenda.
     
-    Ordem de prioridade:
-    1. analyze_image - análise, avaliação, feedback
-    2. remove_background - remover fundo
-    3. generate_scene - gerar cenário
-    4. creative_edit - fallback para edições criativas
+    Exemplos:
+        "gere um cenário clean" → "gere um cenário clean"
+        "cenário delicado" → "cenário delicado"
     """
-    lower = normalize_intent_text(caption)
+    text = caption.strip()
     
-    # Análise precisa vir ANTES do fallback de edição criativa
-    if any(term in lower for term in [
+    trigger_words = [
+        "gere um cenário",
+        "gerar um cenário",
+        "crie um cenário",
+        "gere um cenario",
+        "gerar um cenario",
+        "crie um cenario",
+        "cenário",
+        "cenario",
+    ]
+    
+    lower = text.lower()
+    for trigger in trigger_words:
+        idx = lower.find(trigger)
+        if idx != -1:
+            # Retorna a partir do trigger até o final ou próxima vírgula
+            rest = text[idx:].split(",")[0].strip()
+            return rest
+    
+    return "Gere um cenário clean e profissional para este produto."
+
+
+def extract_media_plan(caption: str) -> list[dict]:
+    """
+    Extrai um plano de ações ordenadas da legenda.
+    
+    Suporta comandos compostos como:
+        "Remova o fundo e gere um cenário clean"
+    
+    Returns:
+        Lista de dicts com {"action": str, ...params}
+        
+    Exemplos:
+        "Remova o fundo" → [{"action": "remove_background"}]
+        "Remova o fundo e gere um cenário clean" → [
+            {"action": "remove_background"},
+            {"action": "generate_scene", "style_prompt": "gere um cenário clean"}
+        ]
+    """
+    text = normalize_intent_text(caption)
+    plan = []
+    
+    # Detecta intenções
+    wants_remove_bg = ("remov" in text and "fundo" in text)
+    wants_scene = any(term in text for term in [
+        "gere um cenario",
+        "gerar cenario",
+        "crie um cenario",
+        "cenario clean",
+        "cenario",
+        "fundo clean",
+        "fundo profissional",
+        "fundo bonito",
+        "ambiente",
+        "backdrop",
+    ])
+    wants_analysis = any(term in text for term in [
         "analise",
         "analisar",
-        "analisa",
+        "avalie",
         "avaliar",
-        "avalia",
-        "avaliacao",
         "feedback",
         "opiniao",
         "o que acha",
         "imagem esta boa",
-        "essa imagem esta boa",
-        "melhorar imagem",
-        "como esta",
         "ta boa",
         "esta boa",
-    ]):
-        return "analyze_image"
+    ])
     
-    # Remover fundo
-    if "remov" in lower and "fundo" in lower:
-        return "remove_background"
+    # Regra: análise + edição = ambíguo, pedir esclarecimento
+    if wants_analysis and (wants_remove_bg or wants_scene):
+        plan.append({
+            "action": "clarify",
+            "message": (
+                "🤔 Posso fazer uma destas opções:\n\n"
+                "1️⃣ *Analisar* a imagem (retorna texto)\n"
+                "2️⃣ *Editar* a imagem (retorna imagem processada)\n\n"
+                "Para edição em cadeia, diga algo como:\n"
+                "_\"Remova o fundo e gere um cenário clean\"_"
+            )
+        })
+        return plan
     
-    # Gerar cenário
-    if any(term in lower for term in [
-        "cenario",
-        "fundo bonito",
-        "fundo profissional",
-        "fundo de estudio",
-        "ambiente",
-        "backdrop",
-    ]):
-        return "generate_scene"
+    # Análise sozinha
+    if wants_analysis and not wants_remove_bg and not wants_scene:
+        plan.append({"action": "analyze_image"})
+        return plan
+    
+    # Cadeia de edição
+    if wants_remove_bg:
+        plan.append({"action": "remove_background"})
+    
+    if wants_scene:
+        style_prompt = extract_scene_prompt(caption)
+        plan.append({
+            "action": "generate_scene",
+            "style_prompt": style_prompt,
+        })
     
     # Fallback: edição criativa
-    return "creative_edit"
+    if not plan:
+        plan.append({
+            "action": "creative_edit",
+            "instruction": caption,
+        })
+    
+    return plan
+
+
+def format_plan_steps(plan: list[dict]) -> str:
+    """Formata as etapas do plano para exibir ao usuário."""
+    step_names = {
+        "remove_background": "remover fundo",
+        "generate_scene": "gerar cenário",
+        "creative_edit": "editar imagem",
+        "analyze_image": "analisar imagem",
+    }
+    
+    steps = []
+    for step in plan:
+        action = step.get("action", "")
+        name = step_names.get(action, action)
+        steps.append(f"• {name}")
+    
+    return "\n".join(steps)
 
 def handle_whatsapp_message(msg: dict) -> dict:
     """
@@ -605,29 +691,54 @@ def _handle_media_message(user_id: str, msg: dict, state: str, data: dict) -> di
             "• remova o fundo\n"
             "• gere um cenário de estúdio\n"
             "• analise a imagem\n"
-            "• adicione um sticker de oferta"
+            "• remova o fundo e gere um cenário clean"
         )
 
-    action = classify_media_action(caption)
-    log.info(f"[WA] Mídia: media_type={media_type} action={action} caption={caption[:60]!r} base64_len={len(msg.get('base64_data', ''))}")
+    # Extrai plano de ações
+    plan = extract_media_plan(caption)
+    
+    # Se for pedido de esclarecimento, responde imediatamente
+    if plan and plan[0].get("action") == "clarify":
+        return _txt(plan[0].get("message", "Por favor, esclareça sua solicitação."))
+    
+    log.info(f"[WA] Mídia: media_type={media_type} plan={plan} caption={caption[:60]!r} base64_len={len(msg.get('base64_data', ''))}")
 
     # Cria job_id para controle de cancelamento
     from shopee_core.media_jobs import create_media_job
-    job_id = create_media_job(user_id, action)
-    log.info(f"[WA] Job criado: job_id={job_id} user={user_id} action={action}")
+    
+    # Usa a primeira ação como identificador do job
+    first_action = plan[0].get("action", "unknown") if plan else "unknown"
+    job_id = create_media_job(user_id, first_action)
+    log.info(f"[WA] Job criado: job_id={job_id} user={user_id} plan={plan}")
 
     save_session(user_id, "processing_media", {
-        "action": action,
+        "plan": plan,
         "caption": caption,
         "job_id": job_id,
     })
 
+    # Monta mensagem de processamento
+    if len(plan) > 1:
+        steps_text = format_plan_steps(plan)
+        wait_text = (
+            f"⏳ *Processando sua imagem...*\n\n"
+            f"Etapas detectadas:\n{steps_text}\n\n"
+            f"Isso pode levar alguns segundos.\n"
+            f"_Envie /cancelar para interromper._"
+        )
+    else:
+        wait_text = (
+            "⏳ *Processando sua imagem...*\n\n"
+            "Isso pode levar alguns segundos.\n\n"
+            "_Envie /cancelar para interromper._"
+        )
+
     return {
         "type": "background_task",
         "task": "process_media",
-        "text": "⏳ *Processando sua imagem...*\n\nIsso pode levar alguns segundos.\n\n_Envie /cancelar para interromper._",
+        "text": wait_text,
         "user_id": user_id,
         "msg": msg,
-        "action": action,
+        "plan": plan,
         "job_id": job_id,
     }
