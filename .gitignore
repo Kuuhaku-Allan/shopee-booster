@@ -13,3 +13,9 @@ build/
 # AI Models
 models/u2net.onnx
 models/
+
+# Evolution API — chave real nunca deve ser commitada
+infra/evolution/.env
+
+# Banco de dados de estado do bot (gerado em runtime)
+data/bot_state.db

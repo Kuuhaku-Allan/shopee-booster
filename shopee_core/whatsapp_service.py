@@ -158,8 +158,14 @@ def handle_whatsapp_text(user_id: str, text: str) -> dict:
     no estado atual e no texto recebido, e retorna a resposta.
 
     Returns dict com:
-        type  (str) — "text" (por enquanto; futuramente "image", "document")
-        text  (str) — conteúdo da mensagem a enviar
+        type  (str) — "text" ou "background_task"
+        text  (str) — mensagem imediata a enviar
+
+        Quando type="background_task", também inclui:
+          task     (str)  — "optimize_product"
+          product  (dict) — produto a otimizar
+          segmento (str)  — segmento de mercado
+          user_id  (str)  — JID para enviar o resultado depois
     """
     lower = text.lower().strip()
     session = get_session(user_id)
@@ -237,6 +243,15 @@ def _route(
             "Exemplo: https://shopee.com.br/nome_da_loja"
         )
 
+    # ── Guard: bloqueia nova mensagem enquanto auditoria está em andamento ──
+
+    if state == "processing":
+        return _txt(
+            "⏳ Ainda estou processando a auditoria anterior.\n"
+            "Por favor, aguarde. Envio o resultado assim que terminar.\n\n"
+            "_Se quiser cancelar, envie_ */reset*"
+        )
+
     # ── Estados do fluxo de auditoria ────────────────────────────
 
     if state == "awaiting_shop_url":
@@ -304,7 +319,14 @@ def _handle_shop_url(user_id: str, url: str) -> dict:
 
 
 def _handle_product_selection(user_id: str, text: str, data: dict) -> dict:
-    """Processa a seleção de produto e executa a otimização completa."""
+    """
+    Valida a seleção de produto e delega a otimização para background.
+
+    Retorna type="background_task" para que o api_server.py:
+      1. Envie a mensagem "aguarde" imediatamente via evo_send_text()
+      2. Agende generate_product_optimization() via BackgroundTasks
+      3. Ao finalizar, envie o resultado via evo_send_text()
+    """
     try:
         index = int(text.strip())
     except ValueError:
@@ -326,44 +348,26 @@ def _handle_product_selection(user_id: str, text: str, data: dict) -> dict:
     product = products[index]
     product_name = product.get("name", f"Produto {index}")
 
-    # Limpa a sessão antes de processar (operação longa)
-    # — isso evita duplicação se o usuário mandar outra mensagem enquanto processa
-    clear_session(user_id)
+    # Transita para 'processing' — guard bloqueia mensagens duplicadas
+    save_session(user_id, "processing", {
+        "product_name": product_name,
+        "product_index": index,
+    })
 
-    log.info(f"[WA] Otimizando produto '{product_name}' para user={user_id}")
+    log.info(f"[WA] Agendando otimização background: '{product_name}' user={user_id}")
 
-    result = generate_product_optimization(product, segmento=segmento)
-
-    if not result["ok"]:
-        return _txt(
-            f"❌ Não consegui gerar a otimização: {result['message']}\n\n"
-            "Tente novamente com */auditar*."
-        )
-
-    optimization = result["data"].get("optimization", "")
-    competitors_count = len(result["data"].get("competitors", []))
-    reviews_count = len(result["data"].get("reviews", []))
-
-    # Cabeçalho com métricas da análise
-    header = (
-        f"✅ *Otimização concluída!*\n"
-        f"📦 Produto: _{product_name[:50]}_\n"
-        f"🏪 Concorrentes analisados: *{competitors_count}*\n"
-        f"💬 Avaliações coletadas: *{reviews_count}*\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    )
-
-    # Trunca se necessário (WhatsApp tem limite de ~65k chars, mas mantemos legível)
-    body = optimization[:OPTIMIZATION_MAX_CHARS]
-    if len(optimization) > OPTIMIZATION_MAX_CHARS:
-        body += "\n\n_[Conteúdo truncado. Acesse o .exe para ver a versão completa.]_"
-
-    footer = (
-        "\n\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Quer otimizar outro produto? Envie */auditar*"
-    )
-
-    return _txt(header + body + footer)
+    return {
+        "type": "background_task",
+        "task": "optimize_product",
+        "text": (
+            f"⏳ *Otimizando: _{product_name[:50]}_*\n\n"
+            "Estou buscando concorrentes, coletando avaliações e gerando o listing com IA.\n"
+            "Isso pode levar de 1 a 3 minutos. Vou te avisar quando terminar!"
+        ),
+        "product": product,
+        "segmento": segmento,
+        "user_id": user_id,
+    }
 
 
 def _handle_general_chat(user_id: str, text: str, data: dict) -> dict:
@@ -385,3 +389,40 @@ def _handle_general_chat(user_id: str, text: str, data: dict) -> dict:
         )
 
     return _txt(response_text)
+
+
+# ══════════════════════════════════════════════════════════════════
+# FORMATAÇÃO DO RESULTADO (chamada pelo background task)
+# ══════════════════════════════════════════════════════════════════
+
+def format_optimization_result(result: dict, product_name: str) -> str:
+    """
+    Formata o resultado de generate_product_optimization() para WhatsApp.
+    Chamado pelo api_server.py quando o BackgroundTask conclui.
+    """
+    if not result.get("ok"):
+        return (
+            f"❌ Não consegui gerar a otimização para *{product_name[:50]}*.\n"
+            f"Erro: {result.get('message', 'desconhecido')}\n\n"
+            "Tente novamente com */auditar*."
+        )
+
+    optimization = result["data"].get("optimization", "")
+    competitors_count = len(result["data"].get("competitors", []))
+    reviews_count = len(result["data"].get("reviews", []))
+
+    header = (
+        f"✅ *Otimização concluída!*\n"
+        f"📦 Produto: _{product_name[:50]}_\n"
+        f"🏪 Concorrentes analisados: *{competitors_count}*\n"
+        f"💬 Avaliações coletadas: *{reviews_count}*\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+    body = optimization[:OPTIMIZATION_MAX_CHARS]
+    if len(optimization) > OPTIMIZATION_MAX_CHARS:
+        body += "\n\n_[Conteúdo truncado. Acesse o .exe para ver a versão completa.]_"
+    footer = (
+        "\n\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Quer otimizar outro produto? Envie */auditar*"
+    )
+    return header + body + footer

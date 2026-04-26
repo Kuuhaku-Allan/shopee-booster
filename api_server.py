@@ -47,6 +47,7 @@ from shopee_core.sentinel_service import (
 from shopee_core.whatsapp_service import (
     extract_evolution_message,
     handle_whatsapp_text,
+    format_optimization_result,
 )
 from shopee_core.media_service import (
     remove_background,
@@ -54,7 +55,8 @@ from shopee_core.media_service import (
     creative_edit,
     analyze_image,
 )
-from shopee_core.session_service import get_all_active_sessions
+from shopee_core.session_service import get_all_active_sessions, clear_session
+from shopee_core.audit_service import generate_product_optimization
 from shopee_core.evolution_client import (
     send_text as evo_send_text,
     set_webhook as evo_set_webhook,
@@ -283,17 +285,17 @@ def sentinel_status(loja_id: str, keyword: str, janela_execucao: str):
 # ══════════════════════════════════════════════════════════════════
 
 @app.post("/webhook/evolution", tags=["WhatsApp"])
-def evolution_webhook(payload: dict):
+def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
     """
     Recebe eventos da Evolution API (MESSAGES_UPSERT etc.) e envia a resposta
     de volta ao usuário via Evolution API (send_text).
 
-    Fluxo completo (Fase 3B):
+    Fluxo completo (Fase 3B/3C):
       WhatsApp → Evolution API → POST /webhook/evolution
         → extract_evolution_message()
-        → handle_whatsapp_text()      ← lógica do bot
-        → send_text()                 ← envia de volta via Evolution API
-        → retorna JSON com received + response + send_result
+        → handle_whatsapp_text()           ← lógica do bot
+        → type="text"    → evo_send_text() imediato
+        → type="background_task" → envia "aguarde" + agenda otimização
     """
     msg = extract_evolution_message(payload)
 
@@ -332,11 +334,27 @@ def evolution_webhook(payload: dict):
         f"len={len(response.get('text', ''))}"
     )
 
-    # ── Envia a resposta pelo WhatsApp (Fase 3B) ──────────────────
-    # Se EVOLUTION_API_URL não estiver configurada, send_text() vai falhar
-    # graciosamente e retornar ok=False — não vai travar o endpoint.
+    # ── Envia a resposta pelo WhatsApp ───────────────────────────
     send_result = None
-    if response.get("type") == "text" and response.get("text"):
+
+    if response.get("type") == "background_task" and response.get("task") == "optimize_product":
+        # 1. Envia a mensagem de "aguarde" imediatamente
+        wait_text = response.get("text", "⏳ Processando...")
+        try:
+            send_result = evo_send_text(user_id=msg["user_id"], text=wait_text)
+        except Exception as e:
+            send_result = {"ok": False, "error": str(e)}
+
+        # 2. Agenda a otimização em background
+        background_tasks.add_task(
+            _run_optimization_bg,
+            user_id=response["user_id"],
+            product=response["product"],
+            segmento=response["segmento"],
+        )
+        log.info(f"[BG] Tarefa de otimização agendada para user={msg['user_id']!r}")
+
+    elif response.get("type") == "text" and response.get("text"):
         try:
             send_result = evo_send_text(
                 user_id=msg["user_id"],
@@ -357,9 +375,39 @@ def evolution_webhook(payload: dict):
             "user_id": msg["user_id"],
             "text": msg["text"],
         },
-        "response": response,
+        "response": {k: v for k, v in response.items() if k != "product"},  # omite dados grandes
         "send_result": send_result,
     }
+
+
+def _run_optimization_bg(user_id: str, product: dict, segmento: str):
+    """
+    Background task: executa otimização completa e envia resultado pelo WhatsApp.
+    Roda fora do ciclo de request/response do FastAPI.
+    """
+    product_name = product.get("name", "Produto")
+    log.info(f"[BG] Iniciando otimização: '{product_name}' user={user_id}")
+
+    try:
+        result = generate_product_optimization(product, segmento=segmento)
+        message = format_optimization_result(result, product_name)
+    except Exception as e:
+        log.error(f"[BG] Erro na otimização: {e}")
+        message = (
+            f"❌ Ocorreu um erro durante a otimização de *{product_name[:50]}*.\n"
+            "Tente novamente com */auditar*."
+        )
+    finally:
+        # Garante que a sessão sai do estado 'processing' mesmo com erro
+        clear_session(user_id)
+        log.info(f"[BG] Sessão 'processing' limpa para user={user_id}")
+
+    # Envia o resultado de volta para o usuário
+    try:
+        send_result = evo_send_text(user_id=user_id, text=message)
+        log.info(f"[BG] Resultado enviado: ok={send_result.get('ok')}")
+    except Exception as e:
+        log.error(f"[BG] Falha ao enviar resultado: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════
