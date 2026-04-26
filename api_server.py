@@ -531,18 +531,18 @@ def _run_optimization_bg(user_id: str, product: dict, segmento: str):
 
 def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
     """
-    Background task: carrega loja para configuração do Sentinela.
+    Background task: carrega loja para configuração do Sentinela com fallback robusto.
     """
-    from shopee_core.audit_service import load_shop_from_url
+    from shopee_core.shop_loader_service import load_shop_with_fallback
     from shopee_core.sentinel_whatsapp_service import (
         generate_keywords_from_shop,
         extract_shop_id_from_url,
     )
     
-    log.info(f"[BG] Carregando loja para Sentinela: url={shop_url!r} user={user_id}")
+    log.info(f"[BG] Carregando loja para Sentinela com fallback: url={shop_url!r} user={user_id}")
 
     try:
-        loaded = load_shop_from_url(shop_url)
+        loaded = load_shop_with_fallback(shop_url)
     except Exception as e:
         log.error(f"[BG] Exceção ao carregar loja para Sentinela: {e}")
         loaded = {"ok": False, "message": str(e)}
@@ -564,13 +564,23 @@ def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
     shop_data = loaded["data"]
     username = shop_data.get("username", "loja")
     products = shop_data.get("products", [])
+    method_used = shop_data.get("method_used", "unknown")
+
+    log.info(f"[BG] Loja carregada: username={username}, products={len(products)}, method={method_used}")
 
     if not products:
         clear_session(user_id)
         try:
             evo_send_text(
                 user_id=user_id,
-                text=f"⚠️ A loja *{username}* foi encontrada, mas não há produtos visíveis para gerar keywords de monitoramento."
+                text=(
+                    f"⚠️ A loja *{username}* foi encontrada, mas não consegui carregar os produtos.\n\n"
+                    "Isso pode ser:\n"
+                    "• Instabilidade temporária da Shopee\n"
+                    "• Loja sem produtos públicos\n"
+                    "• Bloqueio de carregamento\n\n"
+                    "Tente novamente em alguns minutos ou use */auditar* para testar a loja."
+                )
             )
         except Exception as e:
             log.error(f"[BG] Falha ao enviar aviso de loja vazia para Sentinela: {e}")
@@ -585,7 +595,11 @@ def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
         try:
             evo_send_text(
                 user_id=user_id,
-                text=f"⚠️ Não consegui gerar keywords de monitoramento para a loja *{username}*. Tente uma loja com produtos mais específicos."
+                text=(
+                    f"⚠️ Não consegui gerar keywords de monitoramento para a loja *{username}*.\n\n"
+                    "Os produtos podem ter nomes muito genéricos ou sem palavras-chave específicas.\n"
+                    "Tente uma loja com produtos mais específicos."
+                )
             )
         except Exception as e:
             log.error(f"[BG] Falha ao enviar aviso de keywords vazias: {e}")
@@ -600,16 +614,24 @@ def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
             "username": username,
             "shop_id": shop_id,
             "keywords": keywords,
+            "method_used": method_used,
         },
     )
     
-    log.info(f"[BG] Loja '{username}' carregada para Sentinela: {len(keywords)} keywords geradas")
+    log.info(f"[BG] Loja '{username}' carregada para Sentinela: {len(keywords)} keywords geradas via {method_used}")
 
     # Monta mensagem de confirmação
     keywords_preview = keywords[:10]
     keywords_text = "\n".join(f"• {kw}" for kw in keywords_preview)
     if len(keywords) > 10:
         keywords_text += f"\n• ... e mais {len(keywords) - 10} keywords"
+
+    # Adiciona info sobre método usado
+    method_info = ""
+    if method_used == "fallback":
+        method_info = "\n\n_ℹ️ Produtos carregados via método alternativo (API direta)_"
+    elif method_used == "intercept":
+        method_info = "\n\n_✅ Produtos carregados via método padrão_"
 
     msg = (
         f"✅ *Loja analisada!*\n\n"
@@ -618,6 +640,7 @@ def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
         f"🔍 *Keywords geradas ({len(keywords)}):*\n{keywords_text}\n\n"
         f"Essas keywords serão usadas para monitorar concorrentes.\n\n"
         f"*Confirmar* essa configuração?"
+        f"{method_info}"
     )
     
     try:
