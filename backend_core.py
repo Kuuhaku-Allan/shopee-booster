@@ -239,8 +239,17 @@ asyncio.run(run())
 
 
 def fetch_shop_products_intercept(username: str, shopid) -> list:
+    """
+    Carrega produtos da loja via Playwright esperando por elementos DOM.
+    
+    NOTA: A Shopee mudou a arquitetura em 2026 e não usa mais endpoints
+    rcmd_items ou shop_page. Agora os produtos são carregados dinamicamente
+    via Module Federation (Webpack 5) + React.
+    
+    Esta versão espera os produtos aparecerem no DOM após o JavaScript carregar.
+    """
     script = f"""
-import asyncio, json, sys
+import asyncio, json, sys, re
 from playwright.async_api import async_playwright
 
 async def run():
@@ -257,89 +266,118 @@ async def run():
         )
         page = await context.new_page()
         products = []
-        seen_ids = set()
-
-        async def handle_response(response):
-            if response.request.method == "OPTIONS":
-                return
-            url = response.url
-            
-            if "rcmd_items" not in url and "shop_page" not in url:
-                return
-            try:
-                d = await response.json()
-                cic = d.get("data", {{}}).get("centralize_item_card", {{}})
-                item_cards = cic.get("item_cards", [])
-                print(f"item_cards: {{len(item_cards)}}", file=sys.stderr)
-
-                for card in item_cards[:30]:
-                    iid = card.get("itemid") or card.get("item_id")
-                    if not iid or iid in seen_ids:
-                        continue
-                    seen_ids.add(iid)
-
-                    sid = card.get("shopid") or card.get("shop_id") or "{shopid}"
-
-                    price_raw = 0
-                    for price_key in ["item_card_display_price", "price_obj", "price_info"]:
-                        po = card.get(price_key, {{}})
-                        if isinstance(po, dict):
-                            price_raw = po.get("price", po.get("current_price", po.get("min_price", 0)))
-                            if price_raw: break
-                    if not price_raw:
-                        price_raw = card.get("price", card.get("price_min", 0))
-
-                    sold = 0
-                    for sold_key in ["item_card_display_sold_count", "sold_obj"]:
-                        so = card.get(sold_key, {{}})
-                        if isinstance(so, dict):
-                            sold = so.get("historical_sold_count", so.get("sold", 0))
-                            if sold: break
-                    if not sold:
-                        sold = card.get("historical_sold", card.get("sold", 0))
-
-                    asset = card.get("item_card_displayed_asset") or {{}}
-                    name = asset.get("name") or ""
-
-                    img = ""
-                    for img_key in ["image", "cover", "thumbnail"]:
-                        val = asset.get(img_key)
-                        if val and isinstance(val, str):
-                            img = val
-                            break
-                    if not img:
-                        imgs_list = asset.get("images") or asset.get("image_list") or []
-                        if imgs_list:
-                            img = imgs_list[0]
-
-                    print(f"  → iid={{iid}} name={{repr(name[:30])}} img={{repr(img[:40])}}", file=sys.stderr)
-                    products.append({{
-                         "itemid": iid,
-                         "shopid": sid,
-                         "name":   name or f"Produto {{iid}}",
-                         "price":  price_raw / 100000 if price_raw > 1000 else price_raw,
-                         "sold":   sold,
-                         "image":  img,
-                    }})
-
-            except Exception as e:
-                print(f"parse err: {{e}}", file=sys.stderr)
-
-        page.on("response", handle_response)
+        
         try:
+            print("[LOADER] Navegando para loja...", file=sys.stderr)
             await page.goto(
                 "https://shopee.com.br/{username}",
-                wait_until="networkidle", timeout=50000
+                wait_until="domcontentloaded",
+                timeout=50000
             )
+            
+            print("[LOADER] Aguardando produtos aparecerem no DOM...", file=sys.stderr)
+            
+            # Espera por links de produtos (seletor comum da Shopee)
+            # Tenta múltiplos seletores possíveis
+            selectors = [
+                'a[href*="/product/"]',  # Links de produtos
+                '[data-sqe="link"]',  # Atributo data comum
+                '.shopee-search-item-result__item a',  # Grid de produtos
+                '.shop-search-result-view__item a',  # Outro formato
+            ]
+            
+            product_elements = None
+            for selector in selectors:
+                try:
+                    await page.wait_for_selector(selector, timeout=15000, state="visible")
+                    product_elements = await page.query_selector_all(selector)
+                    if product_elements:
+                        print(f"[LOADER] Encontrados {{len(product_elements)}} elementos com selector: {{selector}}", file=sys.stderr)
+                        break
+                except Exception as e:
+                    print(f"[LOADER] Selector {{selector}} falhou: {{e}}", file=sys.stderr)
+                    continue
+            
+            if not product_elements:
+                print("[LOADER] Nenhum produto encontrado no DOM", file=sys.stderr)
+                await browser.close()
+                print(json.dumps([]))
+                return
+            
+            # Extrai dados dos elementos
+            seen_ids = set()
+            for elem in product_elements[:30]:  # Limita a 30 produtos
+                try:
+                    # Extrai href
+                    href = await elem.get_attribute('href')
+                    if not href or '/product/' not in href:
+                        continue
+                    
+                    # Extrai itemid e shopid do href
+                    # Formato: /product/123456/789012 ou /Nome-do-Produto-i.123456.789012
+                    match = re.search(r'[.-]i\\.?(\\d+)\\.(\\d+)', href)
+                    if not match:
+                        match = re.search(r'/product/(\\d+)/(\\d+)', href)
+                    
+                    if not match:
+                        continue
+                    
+                    itemid = int(match.group(1))
+                    product_shopid = int(match.group(2))
+                    
+                    if itemid in seen_ids:
+                        continue
+                    seen_ids.add(itemid)
+                    
+                    # Extrai nome (title ou texto)
+                    name = await elem.get_attribute('title')
+                    if not name:
+                        name = await elem.inner_text()
+                    name = (name or "").strip()
+                    
+                    # Busca imagem no elemento ou pai
+                    img = ""
+                    try:
+                        img_elem = await elem.query_selector('img')
+                        if img_elem:
+                            img = await img_elem.get_attribute('src') or await img_elem.get_attribute('data-src') or ""
+                    except:
+                        pass
+                    
+                    # Busca preço no elemento ou pai
+                    price = 0
+                    try:
+                        # Tenta encontrar elemento de preço próximo
+                        parent = await elem.evaluate_handle('el => el.closest("div")')
+                        price_text = await parent.inner_text()
+                        # Procura por padrão R$ 123,45 ou 123.45
+                        price_match = re.search(r'R\\$\\s*([\\d.,]+)', price_text)
+                        if price_match:
+                            price_str = price_match.group(1).replace('.', '').replace(',', '.')
+                            price = float(price_str)
+                    except:
+                        pass
+                    
+                    print(f"[LOADER] Produto: itemid={{itemid}}, name={{name[:30]}}", file=sys.stderr)
+                    
+                    products.append({{
+                        "itemid": itemid,
+                        "shopid": product_shopid,
+                        "name": name or f"Produto {{itemid}}",
+                        "price": price,
+                        "sold": 0,  # Não disponível facilmente no DOM
+                        "image": img,
+                    }})
+                    
+                except Exception as e:
+                    print(f"[LOADER] Erro ao processar elemento: {{e}}", file=sys.stderr)
+                    continue
+            
+            print(f"[LOADER] Total de produtos extraídos: {{len(products)}}", file=sys.stderr)
+            
         except Exception as e:
-            print(f"goto err: {{e}}", file=sys.stderr)
-
-        await asyncio.sleep(3)
-        for _ in range(6):
-            await page.mouse.wheel(0, 400)
-            await asyncio.sleep(1.0)
-
-        await asyncio.sleep(2)
+            print(f"[LOADER] Erro geral: {{e}}", file=sys.stderr)
+        
         await browser.close()
         print(json.dumps(products[:30]))
 
