@@ -4,14 +4,18 @@ api_server.py — FastAPI do Shopee Booster Bot
 Servidor HTTP que expõe o shopee_core como API REST.
 
 Interfaces que vão consumir esta API:
-  - Future WhatsApp Bot (Evolution API / Baileys webhook)
-  - Opcionalmente: o .exe para sincronização de locks e histórico
+  - WhatsApp Bot via Evolution API (webhook POST /webhook/evolution)
+  - .exe (para locks de Sentinela e futura sincronização)
 
 Como iniciar (desenvolvimento):
     uvicorn api_server:app --reload --port 8787
 
 Como iniciar (produção):
     uvicorn api_server:app --host 0.0.0.0 --port 8787 --workers 2
+
+Fases implementadas:
+  v0.1.0 — health, chat, audit, sentinel
+  v0.2.0 — webhook Evolution API, endpoints de mídia, sessões
 """
 
 from __future__ import annotations
@@ -40,6 +44,17 @@ from shopee_core.sentinel_service import (
     mark_sentinel_finished,
     check_sentinel_status,
 )
+from shopee_core.whatsapp_service import (
+    extract_evolution_message,
+    handle_whatsapp_text,
+)
+from shopee_core.media_service import (
+    remove_background,
+    generate_product_scene,
+    creative_edit,
+    analyze_image,
+)
+from shopee_core.session_service import get_all_active_sessions
 
 # ── Configuração de logging ────────────────────────────────────────
 logging.basicConfig(
@@ -55,7 +70,7 @@ app = FastAPI(
         "Núcleo compartilhado do ShopeeBooster exposto como API REST. "
         "Consumido pelo .exe (para locks de Sentinela) e pelo futuro Bot de WhatsApp."
     ),
-    version="0.1.0",
+    version="0.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -255,3 +270,171 @@ def sentinel_status(loja_id: str, keyword: str, janela_execucao: str):
         keyword=keyword,
         janela_execucao=janela_execucao,
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+# WHATSAPP — Webhook da Evolution API
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/webhook/evolution", tags=["WhatsApp"])
+def evolution_webhook(payload: dict):
+    """
+    Recebe eventos da Evolution API (MESSAGES_UPSERT etc.).
+
+    Fluxo:
+      Evolution API → POST /webhook/evolution → whatsapp_service → resposta JSON
+
+    Na fase atual (3A), apenas retorna a resposta como JSON.
+    Na Fase 3B, este endpoint também chamará a Evolution API para
+    enviar a mensagem de volta ao usuário via Send Plain Text.
+    """
+    msg = extract_evolution_message(payload)
+
+    log.info(
+        f"/webhook/evolution event={msg['event']!r} "
+        f"user={msg['user_id']!r} from_me={msg['from_me']} "
+        f"text={msg['text'][:60]!r}"
+    )
+
+    # Ignora mensagens enviadas pelo próprio bot (evita loops)
+    if msg["from_me"]:
+        return {"ok": True, "ignored": True, "reason": "from_me"}
+
+    # Ignora eventos sem texto (ex: status, chamadas, stickers)
+    if not msg["text"]:
+        has_media = msg.get("has_media", False)
+        reason = "media_not_supported_yet" if has_media else "empty_text"
+        return {"ok": True, "ignored": True, "reason": reason}
+
+    # Roteamento principal
+    try:
+        response = handle_whatsapp_text(
+            user_id=msg["user_id"],
+            text=msg["text"],
+        )
+    except Exception as e:
+        log.error(f"/webhook/evolution ERRO: {e}\n{traceback.format_exc()}")
+        return {
+            "ok": False,
+            "error": str(e),
+            "received": msg,
+        }
+
+    log.info(
+        f"/webhook/evolution resposta type={response.get('type')!r} "
+        f"len={len(response.get('text', ''))}"
+    )
+
+    return {
+        "ok": True,
+        "received": {
+            "event": msg["event"],
+            "user_id": msg["user_id"],
+            "text": msg["text"],
+        },
+        "response": response,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════
+# MÍDIA — Operações de imagem via API
+# ══════════════════════════════════════════════════════════════════
+
+from fastapi import UploadFile, File, Form
+
+
+@app.post("/media/remove-background", tags=["Mídia"])
+async def media_remove_background(file: UploadFile = File(...)):
+    """
+    Remove o fundo de uma imagem.
+    Retorna a imagem processada em base64 (PNG).
+    """
+    log.info(f"/media/remove-background filename={file.filename!r}")
+    try:
+        image_bytes = await file.read()
+        return remove_background(image_bytes)
+    except Exception as e:
+        log.error(f"/media/remove-background ERRO: {e}")
+        raise HTTPException(500, detail=str(e))
+
+
+@app.post("/media/generate-scene", tags=["Mídia"])
+async def media_generate_scene(
+    file: UploadFile = File(...),
+    segmento: str = Form(default="Escolar / Juvenil"),
+):
+    """
+    Gera um cenário de e-commerce para o produto.
+    Remove o fundo e compõe com background gerado por IA.
+    """
+    log.info(f"/media/generate-scene filename={file.filename!r} segmento={segmento!r}")
+    try:
+        image_bytes = await file.read()
+        return generate_product_scene(image_bytes, segmento)
+    except Exception as e:
+        log.error(f"/media/generate-scene ERRO: {e}")
+        raise HTTPException(500, detail=str(e))
+
+
+@app.post("/media/creative-edit", tags=["Mídia"])
+async def media_creative_edit(
+    file: UploadFile = File(...),
+    instruction: str = Form(...),
+    segmento: str = Form(default=""),
+    full_context: str = Form(default=""),
+):
+    """
+    Aplica edição criativa guiada por instrução em linguagem natural.
+    Exemplos: 'adicione um badge azul', 'mude para fundo branco', 'coloque sombra'.
+    """
+    log.info(
+        f"/media/creative-edit filename={file.filename!r} "
+        f"instruction={instruction[:60]!r}"
+    )
+    try:
+        image_bytes = await file.read()
+        return creative_edit(image_bytes, instruction, full_context, segmento)
+    except Exception as e:
+        log.error(f"/media/creative-edit ERRO: {e}")
+        raise HTTPException(500, detail=str(e))
+
+
+@app.post("/media/analyze", tags=["Mídia"])
+async def media_analyze(
+    file: UploadFile = File(...),
+    question: str = Form(default="Analise esta imagem de produto."),
+    segmento: str = Form(default=""),
+    product_context: str = Form(default=""),
+):
+    """
+    Analisa uma imagem de produto com Gemini Vision.
+    Retorna feedback textual com nota, pontos fortes e melhorias sugeridas.
+    """
+    log.info(
+        f"/media/analyze filename={file.filename!r} "
+        f"question={question[:60]!r}"
+    )
+    try:
+        image_bytes = await file.read()
+        return analyze_image(image_bytes, question, product_context, segmento)
+    except Exception as e:
+        log.error(f"/media/analyze ERRO: {e}")
+        raise HTTPException(500, detail=str(e))
+
+
+# ══════════════════════════════════════════════════════════════════
+# SESSÕES — Diagnóstico e monitoramento
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/sessions/active", tags=["Sessões"])
+def sessions_active():
+    """
+    Lista todas as sessões WhatsApp ativas (state != 'idle').
+    Útil para debug e monitoramento do bot.
+    """
+    sessions = get_all_active_sessions()
+    return {
+        "ok": True,
+        "count": len(sessions),
+        "sessions": sessions,
+    }
