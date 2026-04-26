@@ -265,6 +265,13 @@ def _route(
     # ── Comandos globais (funcionam em qualquer estado) ───────────
 
     if lower in {"/reset", "resetar", "cancelar", "/cancelar"}:
+        # Cancela job de mídia se existir
+        job_id = data.get("job_id") if data else None
+        if job_id:
+            from shopee_core.media_jobs import cancel_media_job
+            cancel_media_job(job_id)
+            log.info(f"[WA] Job cancelado: job_id={job_id} user={user_id}")
+        
         clear_session(user_id)
         return _txt("✅ Operação cancelada e sessão reiniciada com segurança. Pode me mandar uma nova tarefa quando quiser!")
 
@@ -546,16 +553,23 @@ def _handle_media_message(user_id: str, msg: dict, state: str, data: dict) -> di
     action = classify_media_action(caption)
     log.info(f"[WA] Mídia: media_type={media_type} action={action} caption={caption[:60]!r} base64_len={len(msg.get('base64_data', ''))}")
 
+    # Cria job_id para controle de cancelamento
+    from shopee_core.media_jobs import create_media_job
+    job_id = create_media_job(user_id, action)
+    log.info(f"[WA] Job criado: job_id={job_id} user={user_id} action={action}")
+
     save_session(user_id, "processing_media", {
         "action": action,
-        "caption": caption
+        "caption": caption,
+        "job_id": job_id,
     })
 
     return {
         "type": "background_task",
         "task": "process_media",
-        "text": "⏳ *Processando sua imagem...*\n\nIsso pode levar alguns segundos.",
+        "text": "⏳ *Processando sua imagem...*\n\nIsso pode levar alguns segundos.\n\n_Envie /cancelar para interromper._",
         "user_id": user_id,
         "msg": msg,
-        "action": action
+        "action": action,
+        "job_id": job_id,
     }

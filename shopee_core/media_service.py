@@ -9,15 +9,42 @@ Futuramente será a camada que gerencia undo/redo no Bot:
   - Retorna imagem processada
 
 Por ora, expõe as operações de imagem de forma stateless.
+
+Fase 4A.1:
+  - Sessão rembg cacheada (u2netp)
+  - Resize para 1024px (WhatsApp)
+  - Logs detalhados
 """
 
 from __future__ import annotations
 
 import io
 import base64
+import logging
+import time
+import traceback
 from typing import Any
 
 from PIL import Image
+
+log = logging.getLogger("media_service")
+
+# Tamanho máximo para imagens no WhatsApp
+MAX_SIDE_WHATSAPP = 1024
+
+# Sessão rembg cacheada
+_rembg_session = None
+
+
+def _get_rembg_session():
+    """Retorna sessão rembg cacheada (u2netp - modelo leve)."""
+    global _rembg_session
+    if _rembg_session is None:
+        from rembg import new_session
+        log.info("[REMBG] Criando nova sessão u2netp...")
+        _rembg_session = new_session("u2netp")
+        log.info("[REMBG] Sessão u2netp criada com sucesso")
+    return _rembg_session
 
 
 def _load_image_from_bytes(data: bytes) -> Image.Image:
@@ -37,6 +64,17 @@ def _image_to_base64(image: Image.Image, fmt: str = "PNG") -> str:
     return base64.b64encode(_image_to_bytes(image, fmt)).decode("utf-8")
 
 
+def _resize_for_whatsapp(img: Image.Image) -> Image.Image:
+    """Redimensiona imagem para no máximo 1024px no lado maior."""
+    if img.width <= MAX_SIDE_WHATSAPP and img.height <= MAX_SIDE_WHATSAPP:
+        return img
+
+    img = img.copy()
+    img.thumbnail((MAX_SIDE_WHATSAPP, MAX_SIDE_WHATSAPP), Image.LANCZOS)
+    log.info(f"[RESIZE] Imagem redimensionada para {img.size}")
+    return img
+
+
 # ══════════════════════════════════════════════════════════════
 # OPERAÇÕES DISPONÍVEIS
 # ══════════════════════════════════════════════════════════════
@@ -46,35 +84,62 @@ def remove_background(image_bytes: bytes) -> dict:
     Remove o fundo da imagem.
 
     Returns:
-        ok, message, image_b64 (base64 PNG)
+        ok, message, image_b64 (base64 PNG), elapsed_seconds
     """
+    start = time.time()
+
     try:
         from rembg import remove as rembg_remove
-        img = _load_image_from_bytes(image_bytes)
 
-        # Resize preventivo (igual ao backend_core)
+        log.info(f"[MEDIA] remove_background iniciado. bytes={len(image_bytes)}")
+
+        img = _load_image_from_bytes(image_bytes)
         orig_size = img.size
-        work = img.convert("RGB")
-        MAX_SIDE = 1280
-        if work.width > MAX_SIDE or work.height > MAX_SIDE:
-            work = work.copy()
-            work.thumbnail((MAX_SIDE, MAX_SIDE), Image.LANCZOS)
+        log.info(f"[MEDIA] Imagem carregada: size={orig_size}, mode={img.mode}")
+
+        # Resize para WhatsApp (1024px)
+        work = _resize_for_whatsapp(img.convert("RGB"))
+        log.info(f"[MEDIA] Imagem redimensionada: {work.size}")
 
         buf = io.BytesIO()
         work.save(buf, format="PNG")
-        no_bg = rembg_remove(buf.getvalue())
-        result = Image.open(io.BytesIO(no_bg)).convert("RGBA")
+        img_bytes_for_rembg = buf.getvalue()
+        log.info(f"[MEDIA] Bytes para rembg: {len(img_bytes_for_rembg)}")
 
+        # Usa sessão cacheada
+        session = _get_rembg_session()
+        log.info("[MEDIA] Executando rembg remove()...")
+
+        no_bg = rembg_remove(img_bytes_for_rembg, session=session)
+
+        result = Image.open(io.BytesIO(no_bg)).convert("RGBA")
+        log.info(f"[MEDIA] Resultado rembg: size={result.size}")
+
+        # Redimensiona de volta se necessário
         if result.size != orig_size:
             result = result.resize(orig_size, Image.LANCZOS)
+            log.info(f"[MEDIA] Redimensionado de volta para {orig_size}")
+
+        elapsed = time.time() - start
+        log.info(f"[MEDIA] remove_background finalizado em {elapsed:.2f}s")
 
         return {
             "ok": True,
             "message": "Fundo removido com sucesso.",
             "image_b64": _image_to_base64(result),
+            "elapsed_seconds": elapsed,
         }
+
     except Exception as e:
-        return {"ok": False, "message": f"Erro ao remover fundo: {e}", "image_b64": ""}
+        elapsed = time.time() - start
+        log.error(f"[MEDIA] Erro em remove_background após {elapsed:.2f}s: {e}\n{traceback.format_exc()}")
+        return {
+            "ok": False,
+            "message": f"Erro ao remover fundo: {e}",
+            "image_b64": "",
+            "elapsed_seconds": elapsed,
+            "error_traceback": traceback.format_exc(),
+        }
 
 
 def generate_product_scene(image_bytes: bytes, segmento: str) -> dict:

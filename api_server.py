@@ -361,13 +361,15 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
             log.info(f"[BG] Otimização agendada para user={msg['user_id']!r}")
 
         elif task == "process_media":
+            job_id = response.get("job_id", "")
             background_tasks.add_task(
                 _run_media_bg,
                 user_id=response["user_id"],
                 msg=response["msg"],
                 action=response["action"],
+                job_id=job_id,
             )
-            log.info(f"[BG] Processamento de mídia agendado para user={msg['user_id']!r} action={response['action']!r}")
+            log.info(f"[BG] Processamento de mídia agendado para user={msg['user_id']!r} action={response['action']!r} job_id={job_id!r}")
 
         else:
             log.warning(f"[BG] Tipo de background_task desconhecido: {task!r}")
@@ -510,71 +512,198 @@ def _run_optimization_bg(user_id: str, product: dict, segmento: str):
 # BACKGROUND TASK — Processamento de Mídia
 # ══════════════════════════════════════════════════════════════════
 
-def _run_media_bg(user_id: str, msg: dict, action: str):
+def _run_media_bg(user_id: str, msg: dict, action: str, job_id: str = ""):
     """
     Background task: processa imagem recebida pelo WhatsApp e envia de volta.
     Roda fora do ciclo de request/response do FastAPI.
+
+    Fase 4A.1:
+      - Logs detalhados
+      - Timeout de 90s via media_worker
+      - Verificação de cancelamento via job_id
     """
     import base64
-    from shopee_core.session_service import clear_session
+    import time
+    from shopee_core.session_service import clear_session, get_session
+    from shopee_core.media_jobs import is_media_job_canceled, finish_media_job, timeout_media_job
+    from shopee_core.media_worker import process_media_with_timeout
 
-    log.info(f"[BG] Processamento de mídia: action={action!r} user={user_id}")
+    start_time = time.time()
+
+    log.info(f"[MEDIA] ════════════════════════════════════════════════════")
+    log.info(f"[MEDIA] Iniciando processamento de mídia")
+    log.info(f"[MEDIA] user_id={user_id}")
+    log.info(f"[MEDIA] action={action!r}")
+    log.info(f"[MEDIA] job_id={job_id!r}")
+    log.info(f"[MEDIA] ════════════════════════════════════════════════════")
 
     try:
+        # ── Extrai dados da mensagem ───────────────────────────────
         base64_str = msg.get("base64_data", "")
+        media_type = msg.get("media_type", "")
+        mimetype = msg.get("mimetype", "")
+        caption = msg.get("caption", "")
+
+        log.info(f"[MEDIA] Dados recebidos:")
+        log.info(f"[MEDIA]   media_type={media_type!r}")
+        log.info(f"[MEDIA]   mimetype={mimetype!r}")
+        caption_preview = caption[:60] if caption else "None"
+        log.info(f"[MEDIA]   caption={caption_preview!r}")
+        log.info(f"[MEDIA]   base64_len={len(base64_str)}")
+
         if not base64_str:
-            log.error("[BG] base64_data vazio — Evolution API não enviou a imagem em base64.")
+            log.error("[MEDIA] ERRO: base64_data vazio — Evolution API não enviou a imagem")
             evo_send_text(user_id=user_id, text=(
                 "❌ Não consegui receber a imagem. Isso pode ser um problema temporário.\n"
                 "Tente reenviar a foto ou use */cancelar* para recomeçar."
             ))
             return
 
+        # ── Decodifica base64 ─────────────────────────────────────
+        log.info("[MEDIA] Decodificando base64...")
+        decode_start = time.time()
+
         # Evolution API as vezes manda com prefixo "data:image/jpeg;base64,"
         if "," in base64_str:
             base64_str = base64_str.split(",", 1)[1]
 
-        image_bytes = base64.b64decode(base64_str)
-        caption = msg.get("caption", "")
-        log.info(f"[BG] Imagem decodificada: {len(image_bytes)} bytes. action={action!r}")
+        try:
+            image_bytes = base64.b64decode(base64_str)
+        except Exception as e:
+            log.error(f"[MEDIA] ERRO ao decodificar base64: {e}")
+            evo_send_text(user_id=user_id, text=(
+                "❌ A imagem veio corrompida ou em formato inválido.\n"
+                "Tente enviar outra foto."
+            ))
+            return
 
-        from shopee_core.media_service import remove_background, generate_product_scene, creative_edit, analyze_image
-        if action == "remove_background":
-            result = remove_background(image_bytes)
-            b64 = result.get("image_base64") or result.get("base64") or result.get("data", {}).get("image_base64", "")
-            if b64:
-                evo_send_media(user_id=user_id, base64_media=b64, mediatype="image", mimetype="image/png", caption="✅ Fundo removido!")
-            else:
-                evo_send_text(user_id=user_id, text="❌ Não foi possível remover o fundo. Tente outra imagem.")
+        decode_elapsed = time.time() - decode_start
+        log.info(f"[MEDIA] Base64 decodificado: {len(image_bytes)} bytes em {decode_elapsed:.2f}s")
 
-        elif action == "generate_scene":
-            result = generate_product_scene(image_bytes, segmento="E-commerce")
-            b64 = result.get("image_base64") or result.get("base64") or result.get("data", {}).get("image_base64", "")
-            if b64:
-                evo_send_media(user_id=user_id, base64_media=b64, mediatype="image", mimetype="image/png", caption="✅ Cenário gerado com IA!")
-            else:
-                evo_send_text(user_id=user_id, text="❌ Não foi possível gerar o cenário. Tente outra imagem.")
+        # ── Verifica se job foi cancelado antes de processar ───────
+        if job_id and is_media_job_canceled(job_id):
+            log.info(f"[MEDIA] Job {job_id} foi cancelado ANTES do processamento. Abortando.")
+            return
 
-        elif action == "analyze_image":
-            result = analyze_image(image_bytes, question=caption or "Analise esta imagem de produto.", product_context="", segmento="")
-            analysis = result.get("text") or result.get("analysis") or str(result)
-            evo_send_text(user_id=user_id, text=f"🔍 *Análise da Imagem:*\n\n{analysis}")
+        # ── Processa com timeout ───────────────────────────────────
+        log.info(f"[MEDIA] Iniciando processamento com timeout de 90s...")
+        process_start = time.time()
 
-        else:  # creative_edit
-            result = creative_edit(image_bytes, instruction=caption or "Melhore a imagem", full_context="", segmento="")
-            b64 = result.get("image_base64") or result.get("base64") or result.get("data", {}).get("image_base64", "")
-            if b64:
-                evo_send_media(user_id=user_id, base64_media=b64, mediatype="image", mimetype="image/png", caption="✅ Imagem editada!")
-            else:
-                text = result.get("text", "")
-                evo_send_text(user_id=user_id, text=text or "❌ Não foi possível editar a imagem. Tente outra instrução.")
+        result = process_media_with_timeout(
+            action=action,
+            image_bytes=image_bytes,
+            caption=caption,
+            segmento="E-commerce",
+            timeout=90,
+        )
+
+        process_elapsed = time.time() - process_start
+        log.info(f"[MEDIA] Processamento finalizado em {process_elapsed:.2f}s")
+        log.info(f"[MEDIA] Resultado: ok={result.get('ok')}, message={result.get('message', '')[:50]}")
+
+        # ── Verifica se job foi cancelado DEPOIS do processamento ──
+        if job_id and is_media_job_canceled(job_id):
+            log.info(f"[MEDIA] Job {job_id} foi cancelado DEPOIS do processamento. NÃO enviando resultado.")
+            return
+
+        # ── Verifica timeout ───────────────────────────────────────
+        if result.get("timeout"):
+            log.warning(f"[MEDIA] Timeout detectado para job {job_id}")
+            if job_id:
+                timeout_media_job(job_id)
+            evo_send_text(user_id=user_id, text=(
+                "❌ O processamento demorou demais.\n"
+                "Tente uma imagem menor ou mais simples."
+            ))
+            return
+
+        # ── Envia resultado ────────────────────────────────────────
+        if not result.get("ok"):
+            # Erro no processamento
+            error_msg = result.get("message", "Erro desconhecido")
+            log.error(f"[MEDIA] Erro no processamento: {error_msg}")
+
+            if job_id:
+                finish_media_job(job_id, success=False)
+
+            evo_send_text(user_id=user_id, text=f"❌ {error_msg}")
+            return
+
+        # Sucesso - envia imagem ou texto
+        image_b64 = result.get("image_b64", "")
+
+        if action == "analyze_image":
+            # Análise retorna texto
+            analysis = result.get("message", "")
+            log.info(f"[MEDIA] Enviando análise: {len(analysis)} chars")
+            send_result = evo_send_text(user_id=user_id, text=f"🔍 *Análise da Imagem:*\n\n{analysis}")
+            log.info(f"[MEDIA] send_text ok={send_result.get('ok')}")
+
+        elif image_b64:
+            # Ações que retornam imagem
+            log.info(f"[MEDIA] Enviando imagem processada via Evolution API...")
+            log.info(f"[MEDIA] image_b64 len={len(image_b64)}")
+
+            caption_map = {
+                "remove_background": "✅ Fundo removido!",
+                "generate_scene": "✅ Cenário gerado com IA!",
+                "creative_edit": "✅ Imagem editada!",
+            }
+            send_caption = caption_map.get(action, "✅ Imagem processada!")
+
+            send_result = evo_send_media(
+                user_id=user_id,
+                base64_media=image_b64,
+                mediatype="image",
+                mimetype="image/png",
+                caption=send_caption,
+            )
+            log.info(f"[MEDIA] send_media ok={send_result.get('ok')}")
+
+            if not send_result.get("ok"):
+                log.error(f"[MEDIA] Falha ao enviar mídia: {send_result}")
+                evo_send_text(user_id=user_id, text=(
+                    "❌ Processei a imagem, mas não consegui enviar de volta.\n"
+                    "Tente novamente."
+                ))
+        else:
+            # Fallback
+            log.warning(f"[MEDIA] Resultado sem image_b64 para action={action}")
+            evo_send_text(user_id=user_id, text=result.get("message", "Processamento concluído."))
+
+        # Marca job como finalizado
+        if job_id:
+            finish_media_job(job_id, success=True)
+
+        total_elapsed = time.time() - start_time
+        log.info(f"[MEDIA] ════════════════════════════════════════════════════")
+        log.info(f"[MEDIA] Processamento concluído em {total_elapsed:.2f}s")
+        log.info(f"[MEDIA] ════════════════════════════════════════════════════")
 
     except Exception as e:
-        log.error(f"[BG] Erro ao processar mídia: {e}\n{traceback.format_exc()}")
-        evo_send_text(user_id=user_id, text="❌ Ocorreu um erro ao processar sua imagem. Tente novamente ou use */cancelar*.")
+        log.error(f"[MEDIA] ERRO CRÍTICO: {e}\n{traceback.format_exc()}")
+
+        if job_id:
+            finish_media_job(job_id, success=False)
+
+        try:
+            evo_send_text(user_id=user_id, text=(
+                "❌ Ocorreu um erro ao processar sua imagem.\n"
+                "Tente novamente ou use */cancelar*."
+            ))
+        except:
+            pass
+
     finally:
-        clear_session(user_id)
-        log.info(f"[BG] Sessão 'processing_media' limpa para user={user_id}")
+        # Limpa sessão apenas se ainda for o mesmo job
+        session = get_session(user_id)
+        session_job_id = session.get("data", {}).get("job_id", "")
+
+        if not job_id or session_job_id == job_id:
+            clear_session(user_id)
+            log.info(f"[MEDIA] Sessão limpa para user={user_id}")
+        else:
+            log.info(f"[MEDIA] Sessão NÃO limpa (job diferente: session={session_job_id}, current={job_id})")
 
 
 # ══════════════════════════════════════════════════════════════════
