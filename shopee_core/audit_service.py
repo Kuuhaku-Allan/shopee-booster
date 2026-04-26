@@ -15,19 +15,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-# ── Importa as funções existentes do backend_core ───────────────────
-# Atenção: backend_core.py importa `streamlit` no nível do módulo,
-# então ao importarmos aqui o Streamlit é carregado.  Isso é OK
-# enquanto não há reruns de UI; em produção o FastAPI nunca vai
-# renderizar componentes Streamlit — apenas chama as funções puras.
-from backend_core import (
-    resolve_shopee_url,
-    fetch_shop_info,
-    fetch_shop_products_intercept,
-    fetch_competitors_intercept,
-    fetch_reviews_intercept,
-    generate_full_optimization,
-)
+# ── Funções de Auditoria ──────────────────────────────────────────
 
 
 def load_shop_from_url(shop_url: str) -> dict:
@@ -40,6 +28,7 @@ def load_shop_from_url(shop_url: str) -> dict:
         data (dict):
           username, shop, products
     """
+    from backend_core import resolve_shopee_url
     resolved = resolve_shopee_url(shop_url.strip())
 
     if not resolved or resolved.get("type") != "shop":
@@ -55,6 +44,7 @@ def load_shop_from_url(shop_url: str) -> dict:
     username = resolved["username"]
 
     # Busca informações da loja via Playwright
+    from backend_core import fetch_shop_info
     shop_raw = fetch_shop_info(username)
     shop_data = shop_raw.get("data", shop_raw) if isinstance(shop_raw, dict) else {}
 
@@ -68,6 +58,7 @@ def load_shop_from_url(shop_url: str) -> dict:
     shopid = shop_data.get("shopid") or shop_data.get("shop_id")
 
     # Carrega os produtos via Playwright
+    from backend_core import fetch_shop_products_intercept
     products = fetch_shop_products_intercept(username, shopid)
 
     return {
@@ -102,10 +93,12 @@ def generate_product_optimization(product: dict, segmento: str) -> dict:
     shop_id = str(product.get("shopid", ""))
 
     # 1. Concorrentes
+    from backend_core import fetch_competitors_intercept
     competitors = fetch_competitors_intercept(keyword)
     df_competitors = pd.DataFrame(competitors) if competitors else pd.DataFrame()
 
     # 2. Avaliações (via Mercado Livre como proxy de qualidade de reviews)
+    from backend_core import fetch_reviews_intercept
     reviews, logs = fetch_reviews_intercept(
         item_id=item_id,
         shop_id=shop_id,
@@ -114,6 +107,7 @@ def generate_product_optimization(product: dict, segmento: str) -> dict:
     )
 
     # 3. Otimização Gemini
+    from backend_core import generate_full_optimization
     optimization_text = generate_full_optimization(
         product=product,
         competitors_df=df_competitors,

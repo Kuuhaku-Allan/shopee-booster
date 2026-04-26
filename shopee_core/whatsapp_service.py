@@ -87,10 +87,25 @@ def extract_evolution_message(payload: dict) -> dict:
         or ""
     )
 
-    # Texto: tenta múltiplos campos em ordem de prioridade
+    # ── Extração de sub-objetos de mídia ─────────────────────────
+    image_msg    = message.get("imageMessage") or {}
+    video_msg    = message.get("videoMessage") or {}
+    document_msg = message.get("documentMessage") or {}
+    audio_msg    = message.get("audioMessage") or {}
+
+    # Caption vem DENTRO do imageMessage, não em message.conversation
+    caption = (
+        image_msg.get("caption")
+        or video_msg.get("caption")
+        or document_msg.get("caption")
+        or ""
+    )
+
+    # Texto: tenta múltiplos campos em ordem de prioridade; caption como fallback
     text = (
         message.get("conversation")
         or (message.get("extendedTextMessage") or {}).get("text")
+        or caption
         or data.get("messageBody")
         or ""
     )
@@ -105,23 +120,37 @@ def extract_evolution_message(payload: dict) -> dict:
     # Tenta extrair message_id para deduplicação (v2: data.key.id)
     message_id = key.get("id", "")
 
-    # Extração de base64 e metadados de mídia (Fase 4A)
+    # base64: busca em múltiplos locais (tolerante a variações de versão)
     base64_data = (
-        message.get("base64")
-        or data.get("base64")
-        or (message.get("imageMessage") or {}).get("base64")
-        or (message.get("videoMessage") or {}).get("base64")
+        data.get("base64")
+        or message.get("base64")
+        or image_msg.get("base64")
+        or video_msg.get("base64")
+        or document_msg.get("base64")
+        or ""
     )
-    
-    media_obj = message.get("imageMessage") or message.get("videoMessage") or message.get("documentMessage") or {}
-    caption = media_obj.get("caption", "")
-    mimetype = media_obj.get("mimetype", "")
-    
-    media_type = "unknown"
-    for k in MEDIA_TYPES:
-        if k in message:
-            media_type = k
-            break
+
+    mimetype = (
+        image_msg.get("mimetype")
+        or video_msg.get("mimetype")
+        or document_msg.get("mimetype")
+        or audio_msg.get("mimetype")
+        or ""
+    )
+
+    # media_type como string simples (image/video/document/audio/sticker)
+    if "imageMessage" in message:
+        media_type = "image"
+    elif "videoMessage" in message:
+        media_type = "video"
+    elif "documentMessage" in message:
+        media_type = "document"
+    elif "audioMessage" in message:
+        media_type = "audio"
+    elif "stickerMessage" in message:
+        media_type = "sticker"
+    else:
+        media_type = ""
 
     return {
         "event": event,
@@ -129,11 +158,11 @@ def extract_evolution_message(payload: dict) -> dict:
         "user_id": user_id,
         "text": text.strip(),
         "has_media": has_media,
-        "message_id": message_id,
-        "base64": base64_data,
-        "caption": caption.strip(),
-        "mimetype": mimetype,
         "media_type": media_type,
+        "mimetype": mimetype,
+        "base64_data": base64_data,
+        "caption": caption.strip(),
+        "message_id": message_id,
         "raw": payload,
     }
 
@@ -491,12 +520,19 @@ def handle_whatsapp_text(user_id: str, text: str) -> dict:
     return handle_whatsapp_message({"user_id": user_id, "text": text, "has_media": False})
 
 def _handle_media_message(user_id: str, msg: dict, state: str, data: dict) -> dict:
-    media_type = msg.get("media_type")
-    
-    if media_type != "imageMessage":
-        return _txt("⏳ Ainda não suporto envio de vídeos, áudios ou documentos. Por favor, envie apenas uma *imagem* para edição.")
-        
-    caption = msg.get("caption", "")
+    media_type = msg.get("media_type", "")
+
+    if media_type != "image":
+        return _txt(
+            "🔴 Ainda só aceito *imagens* para editar.\n\n"
+            "Vídeos, áudios e documentos chegam em breve!\n\n"
+            "Envie uma foto com uma legenda como:\n"
+            "• remova o fundo\n"
+            "• gere um cenário de estúdio\n"
+            "• analise a imagem"
+        )
+
+    caption = msg.get("caption", "").strip()
     if not caption:
         return _txt(
             "🖼️ Recebi sua imagem! O que você quer fazer com ela?\n\n"
@@ -506,18 +542,19 @@ def _handle_media_message(user_id: str, msg: dict, state: str, data: dict) -> di
             "• analise a imagem\n"
             "• adicione um sticker de oferta"
         )
-        
+
     action = classify_media_action(caption)
-    
+    log.info(f"[WA] Mídia: media_type={media_type} action={action} caption={caption[:60]!r} base64_len={len(msg.get('base64_data', ''))}")
+
     save_session(user_id, "processing_media", {
         "action": action,
         "caption": caption
     })
-    
+
     return {
         "type": "background_task",
         "task": "process_media",
-        "text": "⏳ Processando sua imagem... Isso pode levar alguns segundos.",
+        "text": "⏳ *Processando sua imagem...*\n\nIsso pode levar alguns segundos.",
         "user_id": user_id,
         "msg": msg,
         "action": action

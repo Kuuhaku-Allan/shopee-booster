@@ -14,8 +14,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend_core import process_chat_turn
-
 
 def run_chatbot_turn(
     user_message: str,
@@ -47,6 +45,7 @@ def run_chatbot_turn(
         captions    — Legendas das imagens
         post_actions — Ações sugeridas de follow-up
     """
+    from backend_core import process_chat_turn
     result = process_chat_turn(
         user_message=user_message,
         attachments=attachments or [],

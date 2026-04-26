@@ -34,26 +34,11 @@ from shopee_core.types import (
     SentinelFinishRequest,
 )
 from shopee_core.chatbot_service import run_chatbot_turn
-from shopee_core.audit_service import (
-    load_shop_from_url,
-    generate_product_optimization,
-    list_products_summary,
-)
+# ── Funções de Auditoria e Mídia importadas sob demanda ──────────
 from shopee_core.sentinel_service import (
     request_sentinel_execution,
     mark_sentinel_finished,
     check_sentinel_status,
-)
-from shopee_core.whatsapp_service import (
-    extract_evolution_message,
-    handle_whatsapp_text,
-    format_optimization_result,
-)
-from shopee_core.media_service import (
-    remove_background,
-    generate_product_scene,
-    creative_edit,
-    analyze_image,
 )
 from shopee_core.session_service import get_all_active_sessions, save_session, clear_session
 from shopee_core.evolution_client import (
@@ -156,6 +141,7 @@ def audit_load_shop(req: AuditRequest):
     """
     log.info(f"/audit/load-shop user_id={req.user_id} url={req.shop_url!r}")
     try:
+        from shopee_core.audit_service import load_shop_from_url, list_products_summary
         result = load_shop_from_url(req.shop_url)
         if result["ok"]:
             # Injeta resumo compacto para facilitar apresentação no WhatsApp
@@ -188,6 +174,7 @@ def audit_optimize_selected(req: AuditRequest):
         f"url={req.shop_url!r} index={req.product_index}"
     )
     try:
+        from shopee_core.audit_service import load_shop_from_url, list_products_summary, generate_product_optimization
         loaded = load_shop_from_url(req.shop_url)
 
         if not loaded["ok"]:
@@ -297,11 +284,14 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
         → type="text"    → evo_send_text() imediato
         → type="background_task" → envia "aguarde" + agenda otimização
     """
+    from shopee_core.whatsapp_service import extract_evolution_message
     msg = extract_evolution_message(payload)
 
     log.info(
         f"/webhook/evolution event={msg['event']!r} "
         f"user={msg['user_id']!r} from_me={msg['from_me']} "
+        f"has_media={msg['has_media']} media_type={msg.get('media_type')!r} "
+        f"mimetype={msg.get('mimetype')!r} base64_len={len(msg.get('base64_data', ''))} "
         f"text={msg['text'][:60]!r}"
     )
 
@@ -309,11 +299,9 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
     if msg["from_me"]:
         return {"ok": True, "ignored": True, "reason": "from_me"}
 
-    # Ignora eventos sem texto (stickers, chamadas, status etc.)
-    if not msg["text"]:
-        has_media = msg.get("has_media", False)
-        reason = "media_not_supported_yet" if has_media else "empty_text"
-        return {"ok": True, "ignored": True, "reason": reason}
+    # Ignora eventos sem texto E sem mídia (stickers, chamadas, status etc.)
+    if not msg["text"] and not msg.get("has_media"):
+        return {"ok": True, "ignored": True, "reason": "empty_text"}
 
     # ── Deduplicação de Mensagens (Fase 3E) ───────────────────────
     message_id = msg.get("message_id")
@@ -326,10 +314,8 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
 
     # ── Processa a mensagem e obtém a resposta do bot ─────────────
     try:
-        response = handle_whatsapp_text(
-            user_id=msg["user_id"],
-            text=msg["text"],
-        )
+        from shopee_core.whatsapp_service import handle_whatsapp_message
+        response = handle_whatsapp_message(msg)
     except Exception as e:
         log.error(f"/webhook/evolution ERRO no roteador: {e}\n{traceback.format_exc()}")
         return {
@@ -374,6 +360,15 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
             )
             log.info(f"[BG] Otimização agendada para user={msg['user_id']!r}")
 
+        elif task == "process_media":
+            background_tasks.add_task(
+                _run_media_bg,
+                user_id=response["user_id"],
+                msg=response["msg"],
+                action=response["action"],
+            )
+            log.info(f"[BG] Processamento de mídia agendado para user={msg['user_id']!r} action={response['action']!r}")
+
         else:
             log.warning(f"[BG] Tipo de background_task desconhecido: {task!r}")
 
@@ -408,6 +403,7 @@ def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
     Background task: carrega produtos da loja e envia a lista pelo WhatsApp.
     Roda fora do ciclo de request/response do FastAPI.
     """
+    from shopee_core.audit_service import load_shop_from_url
     log.info(f"[BG] Carregando loja: url={shop_url!r} user={user_id}")
 
     try:
@@ -458,6 +454,7 @@ def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
     log.info(f"[BG] Loja '{username}' carregada: {len(products)} produtos. user={user_id}")
 
     # Monta e envia a lista de produtos
+    from shopee_core.audit_service import list_products_summary
     from shopee_core.whatsapp_service import _product_list_message, MAX_PRODUCTS_LISTED
     product_list = _product_list_message(products)
     total = len(products)
@@ -485,6 +482,8 @@ def _run_optimization_bg(user_id: str, product: dict, segmento: str):
     log.info(f"[BG] Iniciando otimização: '{product_name}' user={user_id}")
 
     try:
+        from shopee_core.audit_service import generate_product_optimization
+        from shopee_core.whatsapp_service import format_optimization_result
         result = generate_product_optimization(product, segmento=segmento)
         message = format_optimization_result(result, product_name)
     except Exception as e:
@@ -506,6 +505,78 @@ def _run_optimization_bg(user_id: str, product: dict, segmento: str):
         log.error(f"[BG] Falha ao enviar resultado: {e}")
 
 
+
+# ══════════════════════════════════════════════════════════════════
+# BACKGROUND TASK — Processamento de Mídia
+# ══════════════════════════════════════════════════════════════════
+
+def _run_media_bg(user_id: str, msg: dict, action: str):
+    """
+    Background task: processa imagem recebida pelo WhatsApp e envia de volta.
+    Roda fora do ciclo de request/response do FastAPI.
+    """
+    import base64
+    from shopee_core.session_service import clear_session
+
+    log.info(f"[BG] Processamento de mídia: action={action!r} user={user_id}")
+
+    try:
+        base64_str = msg.get("base64_data", "")
+        if not base64_str:
+            log.error("[BG] base64_data vazio — Evolution API não enviou a imagem em base64.")
+            evo_send_text(user_id=user_id, text=(
+                "❌ Não consegui receber a imagem. Isso pode ser um problema temporário.\n"
+                "Tente reenviar a foto ou use */cancelar* para recomeçar."
+            ))
+            return
+
+        # Evolution API as vezes manda com prefixo "data:image/jpeg;base64,"
+        if "," in base64_str:
+            base64_str = base64_str.split(",", 1)[1]
+
+        image_bytes = base64.b64decode(base64_str)
+        caption = msg.get("caption", "")
+        log.info(f"[BG] Imagem decodificada: {len(image_bytes)} bytes. action={action!r}")
+
+        from shopee_core.media_service import remove_background, generate_product_scene, creative_edit, analyze_image
+        if action == "remove_background":
+            result = remove_background(image_bytes)
+            b64 = result.get("image_base64") or result.get("base64") or result.get("data", {}).get("image_base64", "")
+            if b64:
+                evo_send_media(user_id=user_id, base64_media=b64, mediatype="image", mimetype="image/png", caption="✅ Fundo removido!")
+            else:
+                evo_send_text(user_id=user_id, text="❌ Não foi possível remover o fundo. Tente outra imagem.")
+
+        elif action == "generate_scene":
+            result = generate_product_scene(image_bytes, segmento="E-commerce")
+            b64 = result.get("image_base64") or result.get("base64") or result.get("data", {}).get("image_base64", "")
+            if b64:
+                evo_send_media(user_id=user_id, base64_media=b64, mediatype="image", mimetype="image/png", caption="✅ Cenário gerado com IA!")
+            else:
+                evo_send_text(user_id=user_id, text="❌ Não foi possível gerar o cenário. Tente outra imagem.")
+
+        elif action == "analyze_image":
+            result = analyze_image(image_bytes, question=caption or "Analise esta imagem de produto.", product_context="", segmento="")
+            analysis = result.get("text") or result.get("analysis") or str(result)
+            evo_send_text(user_id=user_id, text=f"🔍 *Análise da Imagem:*\n\n{analysis}")
+
+        else:  # creative_edit
+            result = creative_edit(image_bytes, instruction=caption or "Melhore a imagem", full_context="", segmento="")
+            b64 = result.get("image_base64") or result.get("base64") or result.get("data", {}).get("image_base64", "")
+            if b64:
+                evo_send_media(user_id=user_id, base64_media=b64, mediatype="image", mimetype="image/png", caption="✅ Imagem editada!")
+            else:
+                text = result.get("text", "")
+                evo_send_text(user_id=user_id, text=text or "❌ Não foi possível editar a imagem. Tente outra instrução.")
+
+    except Exception as e:
+        log.error(f"[BG] Erro ao processar mídia: {e}\n{traceback.format_exc()}")
+        evo_send_text(user_id=user_id, text="❌ Ocorreu um erro ao processar sua imagem. Tente novamente ou use */cancelar*.")
+    finally:
+        clear_session(user_id)
+        log.info(f"[BG] Sessão 'processing_media' limpa para user={user_id}")
+
+
 # ══════════════════════════════════════════════════════════════════
 # MÍDIA — Operações de imagem via API
 # ══════════════════════════════════════════════════════════════════
@@ -519,6 +590,7 @@ async def media_remove_background(file: UploadFile = File(...)):
     Remove o fundo de uma imagem.
     Retorna a imagem processada em base64 (PNG).
     """
+    from shopee_core.media_service import remove_background, generate_product_scene, creative_edit, analyze_image
     log.info(f"/media/remove-background filename={file.filename!r}")
     try:
         image_bytes = await file.read()
@@ -539,6 +611,7 @@ async def media_generate_scene(
     """
     log.info(f"/media/generate-scene filename={file.filename!r} segmento={segmento!r}")
     try:
+        from shopee_core.media_service import generate_product_scene
         image_bytes = await file.read()
         return generate_product_scene(image_bytes, segmento)
     except Exception as e:
@@ -562,6 +635,7 @@ async def media_creative_edit(
         f"instruction={instruction[:60]!r}"
     )
     try:
+        from shopee_core.media_service import creative_edit
         image_bytes = await file.read()
         return creative_edit(image_bytes, instruction, full_context, segmento)
     except Exception as e:
@@ -585,6 +659,7 @@ async def media_analyze(
         f"question={question[:60]!r}"
     )
     try:
+        from shopee_core.media_service import analyze_image
         image_bytes = await file.read()
         return analyze_image(image_bytes, question, product_context, segmento)
     except Exception as e:

@@ -197,6 +197,52 @@ def _send_single_text(user_id: str, text: str) -> dict:
     return {"ok": False, "error": "Todos os formatos de envio falharam."}
 
 
+def send_media(
+    user_id: str,
+    base64_media: str,
+    mediatype: str = "image",
+    mimetype: str = "image/png",
+    caption: str = "",
+    filename: str = "shopeebooster.png",
+) -> dict:
+    """
+    Envia uma mídia (imagem, arquivo) para o usuário via Evolution API.
+    A API Evolution v2 mapeia isso no endpoint /message/sendMedia/{instance}.
+    """
+    number = normalize_whatsapp_number(user_id)
+    if not number:
+        return {"ok": False, "error": "Número/JID inválido ou vazio."}
+
+    url = f"{_base_url()}/message/sendMedia/{_instance()}"
+    log.info(f"[EVO] send_media → {url} number={number} type={mimetype}")
+
+    payload = {
+        "number": number,
+        "mediatype": mediatype,
+        "mimetype": mimetype,
+        "caption": caption,
+        "media": base64_media,
+        "fileName": filename,
+        "filename": filename  # Fallback property added to address known issue #2459
+    }
+
+    try:
+        r = requests.post(
+            url,
+            json=payload,
+            headers=_headers(),
+            timeout=30
+        )
+        if r.status_code in (200, 201):
+            return {"ok": True, "result": r.json()}
+        else:
+            log.error(f"[EVO] send_media error: {r.status_code} - {r.text}")
+            return {"ok": False, "error": f"HTTP {r.status_code}", "raw": r.text}
+    except Exception as e:
+        log.error(f"[EVO] send_media exception: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 # ══════════════════════════════════════════════════════════════════
 # CONFIGURAÇÃO DE WEBHOOK
 # ══════════════════════════════════════════════════════════════════
@@ -221,7 +267,8 @@ def set_webhook(webhook_url: str, events: list[str] | None = None) -> dict:
             "enabled": True,
             "url": webhook_url,
             "events": events,
-            "base64": True,
+            "webhookByEvents": False,
+            "webhookBase64": True,  # campo correto da Evolution API v2 para enviar mídia em base64
         }
     }
 
