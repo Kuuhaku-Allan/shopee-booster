@@ -58,6 +58,7 @@ from shopee_core.media_service import (
 from shopee_core.session_service import get_all_active_sessions, save_session, clear_session
 from shopee_core.evolution_client import (
     send_text as evo_send_text,
+    send_media as evo_send_media,
     set_webhook as evo_set_webhook,
     instance_status as evo_instance_status,
 )

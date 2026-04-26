@@ -105,6 +105,24 @@ def extract_evolution_message(payload: dict) -> dict:
     # Tenta extrair message_id para deduplicação (v2: data.key.id)
     message_id = key.get("id", "")
 
+    # Extração de base64 e metadados de mídia (Fase 4A)
+    base64_data = (
+        message.get("base64")
+        or data.get("base64")
+        or (message.get("imageMessage") or {}).get("base64")
+        or (message.get("videoMessage") or {}).get("base64")
+    )
+    
+    media_obj = message.get("imageMessage") or message.get("videoMessage") or message.get("documentMessage") or {}
+    caption = media_obj.get("caption", "")
+    mimetype = media_obj.get("mimetype", "")
+    
+    media_type = "unknown"
+    for k in MEDIA_TYPES:
+        if k in message:
+            media_type = k
+            break
+
     return {
         "event": event,
         "from_me": from_me,
@@ -112,6 +130,10 @@ def extract_evolution_message(payload: dict) -> dict:
         "text": text.strip(),
         "has_media": has_media,
         "message_id": message_id,
+        "base64": base64_data,
+        "caption": caption.strip(),
+        "mimetype": mimetype,
+        "media_type": media_type,
         "raw": payload,
     }
 
@@ -154,9 +176,19 @@ def _product_list_message(products: list) -> str:
 # ROTEADOR PRINCIPAL
 # ══════════════════════════════════════════════════════════════════
 
-def handle_whatsapp_text(user_id: str, text: str) -> dict:
+def classify_media_action(caption: str) -> str:
+    lower = caption.lower()
+    if "remov" in lower and "fundo" in lower:
+        return "remove_background"
+    if "cenário" in lower or "cenario" in lower or "fundo bonito" in lower:
+        return "generate_scene"
+    if "analise" in lower or "avali" in lower:
+        return "analyze_image"
+    return "creative_edit"
+
+def handle_whatsapp_message(msg: dict) -> dict:
     """
-    Roteador principal de mensagens de texto do WhatsApp.
+    Roteador principal de mensagens do WhatsApp (suporta texto e mídia).
 
     Carrega a sessão do usuário, decide qual ação executar com base
     no estado atual e no texto recebido, e retorna a resposta.
@@ -171,14 +203,19 @@ def handle_whatsapp_text(user_id: str, text: str) -> dict:
           segmento (str)  — segmento de mercado
           user_id  (str)  — JID para enviar o resultado depois
     """
+    user_id = msg.get("user_id", "")
+    text = msg.get("text", "")
     lower = text.lower().strip()
+    
     session = get_session(user_id)
     state = session["state"]
     data = session["data"]
 
-    log.info(f"[WA] user={user_id} state={state!r} text={text[:60]!r}")
+    log.info(f"[WA] user={user_id} state={state!r} has_media={msg.get('has_media')} text={text[:60]!r}")
 
     try:
+        if msg.get("has_media"):
+            return _handle_media_message(user_id, msg, state, data)
         return _route(user_id, text, lower, state, data)
     except Exception as e:
         log.error(f"[WA] Erro no roteador: {e}\n{traceback.format_exc()}")
@@ -449,3 +486,39 @@ def format_optimization_result(result: dict, product_name: str) -> str:
         "Quer otimizar outro produto? Envie */auditar*"
     )
     return header + body + footer
+
+def handle_whatsapp_text(user_id: str, text: str) -> dict:
+    return handle_whatsapp_message({"user_id": user_id, "text": text, "has_media": False})
+
+def _handle_media_message(user_id: str, msg: dict, state: str, data: dict) -> dict:
+    media_type = msg.get("media_type")
+    
+    if media_type != "imageMessage":
+        return _txt("⏳ Ainda não suporto envio de vídeos, áudios ou documentos. Por favor, envie apenas uma *imagem* para edição.")
+        
+    caption = msg.get("caption", "")
+    if not caption:
+        return _txt(
+            "🖼️ Recebi sua imagem! O que você quer fazer com ela?\n\n"
+            "Exemplos de legenda:\n"
+            "• remova o fundo\n"
+            "• gere um cenário de estúdio\n"
+            "• analise a imagem\n"
+            "• adicione um sticker de oferta"
+        )
+        
+    action = classify_media_action(caption)
+    
+    save_session(user_id, "processing_media", {
+        "action": action,
+        "caption": caption
+    })
+    
+    return {
+        "type": "background_task",
+        "task": "process_media",
+        "text": "⏳ Processando sua imagem... Isso pode levar alguns segundos.",
+        "user_id": user_id,
+        "msg": msg,
+        "action": action
+    }
