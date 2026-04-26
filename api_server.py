@@ -605,7 +605,7 @@ def _run_media_bg(user_id: str, msg: dict, plan: list[dict], job_id: str = ""):
                 log.info(f"[MEDIA] Job {job_id} cancelado durante etapa {step_idx}. Abortando.")
                 return
 
-            # ── Análise de imagem (retorna texto, não continua pipeline) ──
+            # ── Análise de imagem ─────────────────────────────────────
             if action == "analyze_image":
                 log.info(f"[MEDIA] Processando análise...")
                 result = process_media_with_timeout(
@@ -635,18 +635,29 @@ def _run_media_bg(user_id: str, msg: dict, plan: list[dict], job_id: str = ""):
                     ))
                     return
 
-                # Envia análise como texto
-                analysis = result.get("message", "")
-                log.info(f"[MEDIA] Enviando análise: {len(analysis)} chars")
-                evo_send_text(
-                    user_id=user_id,
-                    text=f"🔎 *Análise da Imagem:*\n\n{analysis}"
-                )
+                # Se análise é a ÚNICA ação, envia texto e termina
+                if len(plan) == 1:
+                    analysis = result.get("message", "")
+                    log.info(f"[MEDIA] Enviando análise: {len(analysis)} chars")
+                    evo_send_text(
+                        user_id=user_id,
+                        text=f"🔎 *Análise da Imagem:*\n\n{analysis}"
+                    )
+                    
+                    if job_id:
+                        finish_media_job(job_id, success=True)
+                    
+                    return  # Análise sozinha não continua o pipeline
                 
-                if job_id:
-                    finish_media_job(job_id, success=True)
-                
-                return  # Análise não continua o pipeline
+                # Se há mais ações depois da análise, envia texto e continua
+                else:
+                    analysis = result.get("message", "")
+                    log.info(f"[MEDIA] Enviando análise (etapa {step_idx}/{len(plan)}): {len(analysis)} chars")
+                    evo_send_text(
+                        user_id=user_id,
+                        text=f"🔎 *Análise da Imagem:*\n\n{analysis}\n\n⏳ _Continuando com as próximas etapas..._"
+                    )
+                    # Continua para próxima etapa (não faz return)
 
             # ── Remover fundo ──────────────────────────────────────────
             elif action == "remove_background":
@@ -782,17 +793,41 @@ def _run_media_bg(user_id: str, msg: dict, plan: list[dict], job_id: str = ""):
         
         final_image_b64 = base64.b64encode(current_image_bytes).decode("utf-8")
         
-        # Caption baseada na última ação
-        caption_map = {
-            "remove_background": "✅ Fundo removido!",
-            "generate_scene": "✅ Cenário gerado!",
-            "creative_edit": "✅ Imagem editada!",
-        }
-        
+        # Caption baseada nas etapas executadas
         if len(plan) > 1:
-            final_caption = "✅ Imagem processada com sucesso!"
+            # Múltiplas etapas - lista o que foi feito
+            completed_steps = []
+            step_names = {
+                "remove_background": "fundo removido",
+                "generate_scene": "cenário gerado",
+                "creative_edit": "imagem editada",
+            }
+            
+            for step in plan:
+                action = step.get("action", "")
+                if action in step_names:
+                    step_name = step_names[action]
+                    if action == "generate_scene":
+                        style = step.get("style_prompt", "")
+                        if "clean" in style.lower():
+                            step_name = "cenário clean gerado"
+                        elif "delicado" in style.lower():
+                            step_name = "cenário delicado gerado"
+                        elif "premium" in style.lower() or "luxuoso" in style.lower():
+                            step_name = "cenário premium gerado"
+                    completed_steps.append(step_name)
+            
+            steps_text = "\n".join(f"• {step}" for step in completed_steps)
+            final_caption = f"✅ *Imagem processada com sucesso!*\n\nEtapas concluídas:\n{steps_text}"
         else:
-            final_caption = caption_map.get(last_action, "✅ Imagem processada!")
+            # Uma única etapa
+            action = plan[0].get("action", "") if plan else ""
+            caption_map = {
+                "remove_background": "✅ Fundo removido!",
+                "generate_scene": "✅ Cenário gerado!",
+                "creative_edit": "✅ Imagem editada!",
+            }
+            final_caption = caption_map.get(action, "✅ Imagem processada!")
 
         send_result = evo_send_media(
             user_id=user_id,

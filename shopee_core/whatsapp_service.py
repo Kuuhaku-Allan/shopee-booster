@@ -261,6 +261,7 @@ def extract_media_plan(caption: str) -> list[dict]:
     
     Suporta comandos compostos como:
         "Remova o fundo e gere um cenário clean"
+        "Analise esta imagem e remova o fundo"
     
     Returns:
         Lista de dicts com {"action": str, ...params}
@@ -270,6 +271,10 @@ def extract_media_plan(caption: str) -> list[dict]:
         "Remova o fundo e gere um cenário clean" → [
             {"action": "remove_background"},
             {"action": "generate_scene", "style_prompt": "gere um cenário clean"}
+        ]
+        "Analise esta imagem e remova o fundo" → [
+            {"action": "analyze_image"},
+            {"action": "remove_background"}
         ]
     """
     text = normalize_intent_text(caption)
@@ -302,24 +307,38 @@ def extract_media_plan(caption: str) -> list[dict]:
         "esta boa",
     ])
     
-    # Regra: análise + edição = ambíguo, pedir esclarecimento
-    if wants_analysis and (wants_remove_bg or wants_scene):
+    # Detecta conectores que indicam sequência
+    has_sequence_words = any(connector in text for connector in [
+        " e ",
+        " depois ",
+        " entao ",
+        " então ",
+        " apos ",
+        " após ",
+        " em seguida",
+        " tambem ",
+        " também ",
+    ])
+    
+    # Regra: análise + edição SEM conectores = ambíguo
+    # Mas análise + edição COM conectores = sequência válida
+    if wants_analysis and (wants_remove_bg or wants_scene) and not has_sequence_words:
         plan.append({
             "action": "clarify",
             "message": (
                 "🤔 Posso fazer uma destas opções:\n\n"
                 "1️⃣ *Analisar* a imagem (retorna texto)\n"
                 "2️⃣ *Editar* a imagem (retorna imagem processada)\n\n"
-                "Para edição em cadeia, diga algo como:\n"
-                "_\"Remova o fundo e gere um cenário clean\"_"
+                "Para fazer ambos em sequência, use conectores como:\n"
+                "_\"Analise esta imagem e depois remova o fundo\"_\n"
+                "_\"Remova o fundo e então gere um cenário clean\"_"
             )
         })
         return plan
     
-    # Análise sozinha
-    if wants_analysis and not wants_remove_bg and not wants_scene:
+    # Sequência válida: análise primeiro, depois edição
+    if wants_analysis:
         plan.append({"action": "analyze_image"})
-        return plan
     
     # Cadeia de edição
     if wants_remove_bg:
@@ -332,7 +351,7 @@ def extract_media_plan(caption: str) -> list[dict]:
             "style_prompt": style_prompt,
         })
     
-    # Fallback: edição criativa
+    # Fallback: edição criativa (só se não há outras ações)
     if not plan:
         plan.append({
             "action": "creative_edit",
