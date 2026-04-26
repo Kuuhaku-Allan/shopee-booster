@@ -219,6 +219,7 @@ def format_sentinel_menu() -> str:
         "*/sentinela configurar* — cadastrar loja e preferências\n"
         "*/sentinela rodar* — fazer uma checagem agora\n"
         "*/sentinela status* — ver monitoramento atual\n"
+        "*/sentinela keywords* — atualizar palavras-chave\n"
         "*/sentinela pausar* — pausar alertas automáticos\n"
         "*/sentinela cancelar* — remover configuração atual\n\n"
         "_O Sentinela monitora concorrentes e te avisa sobre mudanças de preços e novos produtos._"

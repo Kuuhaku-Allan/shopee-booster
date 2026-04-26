@@ -531,7 +531,8 @@ def _run_optimization_bg(user_id: str, product: dict, segmento: str):
 
 def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
     """
-    Background task: carrega loja para configuração do Sentinela com fallback robusto.
+    Background task: carrega loja para configuração do Sentinela com fallback conversacional.
+    Se não conseguir produtos, pede keywords manuais.
     """
     from shopee_core.shop_loader_service import load_shop_with_fallback
     from shopee_core.sentinel_whatsapp_service import (
@@ -565,89 +566,105 @@ def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
     username = shop_data.get("username", "loja")
     products = shop_data.get("products", [])
     method_used = shop_data.get("method_used", "unknown")
+    shop_info = shop_data.get("shop", {})
+    shopid = shop_info.get("shopid") or shop_info.get("shop_id") or extract_shop_id_from_url(shop_url)
 
-    log.info(f"[BG] Loja carregada: username={username}, products={len(products)}, method={method_used}")
+    log.info(f"[BG] Loja carregada: username={username}, products={len(products)}, method={method_used}, shopid={shopid}")
 
-    if not products:
-        clear_session(user_id)
+    # ── Se conseguiu produtos, gera keywords automaticamente ──────────
+    if products:
+        keywords = generate_keywords_from_shop(shop_data)
+        
+        if not keywords:
+            # Produtos existem mas não geraram keywords válidas
+            _fallback_to_manual_keywords(user_id, shop_url, username, shopid, 
+                                       f"Encontrei {len(products)} produtos na loja *{username}*, mas não consegui gerar keywords automáticas.\n\nOs produtos podem ter nomes muito genéricos.")
+            return
+
+        # Salva dados na sessão para confirmação automática
+        save_session(
+            user_id,
+            "awaiting_sentinel_confirmation",
+            {
+                "shop_url": shop_url,
+                "username": username,
+                "shop_id": shopid,
+                "keywords": keywords,
+                "method_used": method_used,
+                "auto_generated": True,
+            },
+        )
+        
+        log.info(f"[BG] Keywords automáticas geradas: {len(keywords)} para {username}")
+
+        # Monta mensagem de confirmação automática
+        keywords_preview = keywords[:10]
+        keywords_text = "\n".join(f"• {kw}" for kw in keywords_preview)
+        if len(keywords) > 10:
+            keywords_text += f"\n• ... e mais {len(keywords) - 10} keywords"
+
+        method_info = ""
+        if method_used == "fallback":
+            method_info = "\n\n_ℹ️ Produtos carregados via método alternativo (API direta)_"
+        elif method_used == "intercept":
+            method_info = "\n\n_✅ Produtos carregados via método padrão_"
+
+        msg = (
+            f"✅ *Loja analisada!*\n\n"
+            f"🏪 Loja: *{username}*\n"
+            f"📦 Produtos encontrados: *{len(products)}*\n\n"
+            f"🔍 *Keywords geradas automaticamente ({len(keywords)}):*\n{keywords_text}\n\n"
+            f"Essas keywords serão usadas para monitorar concorrentes.\n\n"
+            f"*Confirmar* essa configuração?"
+            f"{method_info}"
+        )
+        
         try:
-            evo_send_text(
-                user_id=user_id,
-                text=(
-                    f"⚠️ A loja *{username}* foi encontrada, mas não consegui carregar os produtos.\n\n"
-                    "Isso pode ser:\n"
-                    "• Instabilidade temporária da Shopee\n"
-                    "• Loja sem produtos públicos\n"
-                    "• Bloqueio de carregamento\n\n"
-                    "Tente novamente em alguns minutos ou use */auditar* para testar a loja."
-                )
-            )
+            send_result = evo_send_text(user_id=user_id, text=msg)
+            log.info(f"[BG] Confirmação automática de Sentinela enviada: ok={send_result.get('ok')}")
         except Exception as e:
-            log.error(f"[BG] Falha ao enviar aviso de loja vazia para Sentinela: {e}")
+            log.error(f"[BG] Falha ao enviar confirmação automática: {e}")
         return
 
-    # Gera keywords automaticamente
-    keywords = generate_keywords_from_shop(shop_data)
-    shop_id = extract_shop_id_from_url(shop_url)
+    # ── Se não conseguiu produtos, fallback para keywords manuais ─────
+    log.warning(f"[BG] Nenhum produto encontrado para {username}. Iniciando fallback manual.")
+    
+    _fallback_to_manual_keywords(
+        user_id, shop_url, username, shopid,
+        f"⚠️ Encontrei a loja *{username}*, mas a Shopee não retornou os produtos nesta tentativa.\n\nIsso pode acontecer por instabilidade ou bloqueio temporário."
+    )
 
-    if not keywords:
-        clear_session(user_id)
-        try:
-            evo_send_text(
-                user_id=user_id,
-                text=(
-                    f"⚠️ Não consegui gerar keywords de monitoramento para a loja *{username}*.\n\n"
-                    "Os produtos podem ter nomes muito genéricos ou sem palavras-chave específicas.\n"
-                    "Tente uma loja com produtos mais específicos."
-                )
-            )
-        except Exception as e:
-            log.error(f"[BG] Falha ao enviar aviso de keywords vazias: {e}")
-        return
 
-    # Salva dados na sessão para confirmação
+def _fallback_to_manual_keywords(user_id: str, shop_url: str, username: str, shopid: str, reason: str):
+    """Helper para iniciar fallback de keywords manuais."""
+    # Salva dados na sessão para input manual
     save_session(
         user_id,
-        "awaiting_sentinel_confirmation",
+        "awaiting_sentinel_keywords_manual",
         {
             "shop_url": shop_url,
             "username": username,
-            "shop_id": shop_id,
-            "keywords": keywords,
-            "method_used": method_used,
+            "shop_id": shopid,
         },
     )
     
-    log.info(f"[BG] Loja '{username}' carregada para Sentinela: {len(keywords)} keywords geradas via {method_used}")
-
-    # Monta mensagem de confirmação
-    keywords_preview = keywords[:10]
-    keywords_text = "\n".join(f"• {kw}" for kw in keywords_preview)
-    if len(keywords) > 10:
-        keywords_text += f"\n• ... e mais {len(keywords) - 10} keywords"
-
-    # Adiciona info sobre método usado
-    method_info = ""
-    if method_used == "fallback":
-        method_info = "\n\n_ℹ️ Produtos carregados via método alternativo (API direta)_"
-    elif method_used == "intercept":
-        method_info = "\n\n_✅ Produtos carregados via método padrão_"
+    log.info(f"[BG] Fallback manual iniciado para {username}")
 
     msg = (
-        f"✅ *Loja analisada!*\n\n"
-        f"🏪 Loja: *{username}*\n"
-        f"📦 Produtos encontrados: *{len(products)}*\n\n"
-        f"🔍 *Keywords geradas ({len(keywords)}):*\n{keywords_text}\n\n"
-        f"Essas keywords serão usadas para monitorar concorrentes.\n\n"
-        f"*Confirmar* essa configuração?"
-        f"{method_info}"
+        f"{reason}\n\n"
+        f"Para continuar mesmo assim, me envie de *3 a 5 keywords* para monitorar, uma por linha.\n\n"
+        f"*Exemplo:*\n"
+        f"mochila infantil princesa\n"
+        f"mochila escolar rosa\n"
+        f"mochila infantil feminina\n\n"
+        f"_Ou envie */cancelar* para interromper._"
     )
     
     try:
         send_result = evo_send_text(user_id=user_id, text=msg)
-        log.info(f"[BG] Confirmação de Sentinela enviada: ok={send_result.get('ok')}")
+        log.info(f"[BG] Solicitação de keywords manuais enviada: ok={send_result.get('ok')}")
     except Exception as e:
-        log.error(f"[BG] Falha ao enviar confirmação de Sentinela: {e}")
+        log.error(f"[BG] Falha ao enviar solicitação de keywords manuais: {e}")
 
 
 def _run_sentinel_bg(user_id: str, config: dict):

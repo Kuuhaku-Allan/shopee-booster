@@ -547,6 +547,12 @@ def _route(
     if state == "awaiting_sentinel_confirmation":
         return _handle_sentinel_confirmation(user_id, lower, data)
 
+    if state == "awaiting_sentinel_keywords_manual":
+        return _handle_sentinel_keywords_manual(user_id, text, data)
+
+    if state == "awaiting_sentinel_keywords_update":
+        return _handle_sentinel_keywords_update(user_id, text, data)
+
     # ── Fallback: conversa geral com o chatbot ────────────────────
 
     return _handle_general_chat(user_id, text, data)
@@ -671,6 +677,33 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
             "O Sentinela foi desconfigurado.\n"
             "Use */sentinela configurar* para configurar novamente."
         )
+
+    # /sentinela keywords
+    if lower in {"/sentinela keywords", "/sentinela palavras"}:
+        config = get_sentinel_config(user_id)
+        if not config:
+            return _txt("❌ Sentinela não configurado.")
+        
+        clear_session(user_id)  # Limpa qualquer sessão anterior
+        save_session(user_id, "awaiting_sentinel_keywords_update", {
+            "config": config
+        })
+        
+        current_keywords = config.get("keywords", [])
+        current_text = "\n".join(f"• {kw}" for kw in current_keywords[:10])
+        if len(current_keywords) > 10:
+            current_text += f"\n• ... e mais {len(current_keywords) - 10} keywords"
+        
+        return _txt(
+            f"🔍 *Atualizar Keywords*\n\n"
+            f"Keywords atuais ({len(current_keywords)}):\n{current_text}\n\n"
+            f"Envie as novas keywords, uma por linha:\n\n"
+            f"*Exemplo:*\n"
+            f"mochila infantil princesa\n"
+            f"mochila escolar rosa\n"
+            f"mochila infantil feminina\n\n"
+            f"_Ou envie */cancelar* para manter as atuais._"
+        )
     
     # Comando não reconhecido
     return _txt(
@@ -707,6 +740,155 @@ def _handle_sentinel_shop_url(user_id: str, url: str) -> dict:
         "shop_url": url,
         "user_id": user_id,
     }
+
+
+def _handle_sentinel_keywords_manual(user_id: str, text: str, data: dict) -> dict:
+    """
+    Processa keywords manuais enviadas pelo usuário.
+    """
+    text = text.strip()
+    
+    if text.lower() in {"cancelar", "/cancelar", "sair", "parar"}:
+        clear_session(user_id)
+        return _txt(
+            "❌ Configuração do Sentinela cancelada.\n\n"
+            "Use */sentinela configurar* para tentar novamente."
+        )
+    
+    # Processa keywords enviadas
+    keywords = _parse_manual_keywords(text)
+    
+    if len(keywords) < 1:
+        return _txt(
+            "⚠️ Por favor, envie pelo menos *1 keyword* para monitoramento.\n\n"
+            "*Exemplo:*\n"
+            "mochila infantil princesa\n"
+            "mochila escolar rosa\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    if len(keywords) > 20:
+        return _txt(
+            f"⚠️ Muitas keywords ({len(keywords)}). Máximo permitido: *20*.\n\n"
+            "Envie de 3 a 5 keywords mais específicas."
+        )
+    
+    # Salva configuração final
+    from shopee_core.sentinel_whatsapp_service import save_sentinel_config
+    
+    shop_url = data.get("shop_url", "")
+    username = data.get("username", "")
+    shop_id = data.get("shop_id", "")
+    
+    save_sentinel_config(
+        user_id=user_id,
+        shop_url=shop_url,
+        username=username,
+        shop_id=shop_id,
+        keywords=keywords,
+        is_active=True,
+        interval_minutes=360,  # 6 horas padrão
+    )
+    
+    clear_session(user_id)
+    
+    keywords_text = "\n".join(f"• {kw}" for kw in keywords)
+    
+    return _txt(
+        f"✅ *Sentinela configurado!*\n\n"
+        f"🏪 Loja: *{username}*\n"
+        f"🔍 Keywords manuais ({len(keywords)}):\n{keywords_text}\n\n"
+        f"Use */sentinela rodar* para fazer a primeira checagem agora.\n"
+        f"Use */sentinela status* para ver o status completo.\n\n"
+        f"_💡 Dica: Use */sentinela keywords* para atualizar as keywords depois._"
+    )
+
+
+def _handle_sentinel_keywords_update(user_id: str, text: str, data: dict) -> dict:
+    """
+    Processa atualização de keywords existentes.
+    """
+    text = text.strip()
+    
+    if text.lower() in {"cancelar", "/cancelar", "sair", "parar"}:
+        clear_session(user_id)
+        return _txt(
+            "❌ Atualização cancelada.\n\n"
+            "Keywords mantidas como estavam."
+        )
+    
+    # Processa novas keywords
+    keywords = _parse_manual_keywords(text)
+    
+    if len(keywords) < 1:
+        return _txt(
+            "⚠️ Por favor, envie pelo menos *1 keyword*.\n\n"
+            "_Ou envie */cancelar* para manter as atuais._"
+        )
+    
+    if len(keywords) > 20:
+        return _txt(
+            f"⚠️ Muitas keywords ({len(keywords)}). Máximo: *20*.\n\n"
+            "Envie keywords mais específicas."
+        )
+    
+    # Atualiza configuração
+    config = data.get("config", {})
+    
+    from shopee_core.sentinel_whatsapp_service import save_sentinel_config
+    save_sentinel_config(
+        user_id=user_id,
+        shop_url=config.get("shop_url", ""),
+        username=config.get("username", ""),
+        shop_id=config.get("shop_id", ""),
+        keywords=keywords,
+        is_active=config.get("is_active", True),
+        interval_minutes=config.get("interval_minutes", 360),
+    )
+    
+    clear_session(user_id)
+    
+    keywords_text = "\n".join(f"• {kw}" for kw in keywords)
+    
+    return _txt(
+        f"✅ *Keywords atualizadas!*\n\n"
+        f"🔍 Novas keywords ({len(keywords)}):\n{keywords_text}\n\n"
+        f"Use */sentinela rodar* para testar com as novas keywords."
+    )
+
+
+def _parse_manual_keywords(text: str) -> list[str]:
+    """
+    Processa texto de keywords manuais.
+    Aceita separação por linhas ou vírgulas.
+    """
+    keywords = []
+    
+    # Tenta separar por linhas primeiro
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    
+    if len(lines) > 1:
+        # Múltiplas linhas - usa cada linha como keyword
+        keywords = lines
+    else:
+        # Uma linha - tenta separar por vírgulas
+        parts = [part.strip() for part in text.split(',') if part.strip()]
+        keywords = parts
+    
+    # Limpa e valida keywords
+    cleaned_keywords = []
+    for kw in keywords:
+        kw = kw.strip().lower()
+        # Remove caracteres especiais, mantém apenas letras, números e espaços
+        import re
+        kw = re.sub(r'[^\w\s]', '', kw)
+        kw = re.sub(r'\s+', ' ', kw)  # Remove espaços múltiplos
+        
+        # Filtra keywords válidas (mínimo 3 caracteres)
+        if len(kw) >= 3 and kw not in cleaned_keywords:
+            cleaned_keywords.append(kw)
+    
+    return cleaned_keywords[:20]  # Limita a 20 keywords
 
 
 def _handle_sentinel_confirmation(user_id: str, text: str, data: dict) -> dict:
