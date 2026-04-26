@@ -243,7 +243,16 @@ def _route(
             "Exemplo: https://shopee.com.br/nome_da_loja"
         )
 
-    # ── Guard: bloqueia nova mensagem enquanto auditoria está em andamento ──
+    # ── Guard: bloqueia nova mensagem enquanto carregando loja ──────────
+
+    if state == "processing_load_shop":
+        return _txt(
+            "⏳ Ainda estou carregando os produtos da sua loja.\n"
+            "Aguarde um instante! Envio a lista assim que terminar.\n\n"
+            "_Se quiser cancelar, envie_ */reset*"
+        )
+
+    # ── Guard: bloqueia nova mensagem enquanto otimizando produto ───
 
     if state == "processing":
         return _txt(
@@ -270,52 +279,40 @@ def _route(
 # ══════════════════════════════════════════════════════════════════
 
 def _handle_shop_url(user_id: str, url: str) -> dict:
-    """Carrega uma loja a partir da URL e transita para seleção de produto."""
-    loading_reply = (
-        "⏳ Carregando os dados da loja... Isso pode levar até 1 minuto "
-        "enquanto busco os produtos na Shopee."
-    )
-    # Nota: em produção, enviar loading_reply via Evolution API aqui antes de processar.
+    """
+    Valida a URL e delega o carregamento da loja para background (Fase 3D).
 
-    loaded = load_shop_from_url(url)
+    Retorna type="background_task", task="load_shop" para que o api_server.py:
+      1. Envie "\u23f3 Carregando sua loja..." imediatamente
+      2. Agende _run_load_shop_bg() via BackgroundTasks
+      3. Ao terminar: salve sessao awaiting_product_index e envie a lista
+    """
+    url = url.strip()
 
-    if not loaded["ok"]:
+    # Validacao rapida de URL antes de ocupar background
+    if not url.startswith("http"):
         return _txt(
-            f"❌ {loaded['message']}\n\n"
-            "Certifique-se de usar o formato:\n"
+            "❌ URL inválida. Use o formato:\n"
             "https://shopee.com.br/nome_da_loja"
         )
 
-    products = loaded["data"].get("products", [])
-    username = loaded["data"].get("username", "loja")
+    # Transita para 'processing_load_shop' — guard bloqueia duplicatas
+    save_session(user_id, "processing_load_shop", {"shop_url": url})
 
-    if not products:
-        return _txt(
-            f"⚠️ A loja *{username}* foi encontrada, mas não há produtos visíveis no momento."
-        )
+    log.info(f"[WA] Agendando carregamento de loja background: url={url!r} user={user_id}")
 
-    save_session(
-        user_id,
-        "awaiting_product_index",
-        {
-            "shop_url": url,
-            "username": username,
-            "products": products,
-            "segmento": DEFAULT_SEGMENTO,
-        },
-    )
-
-    product_list = _product_list_message(products)
-    total = len(products)
-    shown = min(total, MAX_PRODUCTS_LISTED)
-
-    return _txt(
-        f"✅ Loja *{username}* carregada com *{total}* produto(s).\n\n"
-        f"Escolha o número do produto que deseja otimizar "
-        f"{'(mostrando os primeiros ' + str(shown) + ')' if total > shown else ''}:\n\n"
-        f"{product_list}\n\n"
-        "Responda com o número. Ex: *0*"
-    )
+    return {
+        "type": "background_task",
+        "task": "load_shop",
+        "text": (
+            "⏳ *Carregando sua loja...*\n\n"
+            "Estou buscando os produtos na Shopee. Isso pode levar até 1 minuto.\n"
+            "Vou te enviar a lista assim que terminar!"
+        ),
+        "shop_url": url,
+        "user_id": user_id,
+        "segmento": DEFAULT_SEGMENTO,
+    }
 
 
 def _handle_product_selection(user_id: str, text: str, data: dict) -> dict:

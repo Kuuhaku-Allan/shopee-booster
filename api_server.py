@@ -55,8 +55,8 @@ from shopee_core.media_service import (
     creative_edit,
     analyze_image,
 )
-from shopee_core.session_service import get_all_active_sessions, clear_session
-from shopee_core.audit_service import generate_product_optimization
+from shopee_core.session_service import get_all_active_sessions, save_session, clear_session
+from shopee_core.audit_service import generate_product_optimization, load_shop_from_url
 from shopee_core.evolution_client import (
     send_text as evo_send_text,
     set_webhook as evo_set_webhook,
@@ -337,22 +337,36 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
     # ── Envia a resposta pelo WhatsApp ───────────────────────────
     send_result = None
 
-    if response.get("type") == "background_task" and response.get("task") == "optimize_product":
-        # 1. Envia a mensagem de "aguarde" imediatamente
+    if response.get("type") == "background_task":
+        task = response.get("task")
         wait_text = response.get("text", "⏳ Processando...")
+
+        # Envia a mensagem de "aguarde" imediatamente para o usuário
         try:
             send_result = evo_send_text(user_id=msg["user_id"], text=wait_text)
         except Exception as e:
             send_result = {"ok": False, "error": str(e)}
 
-        # 2. Agenda a otimização em background
-        background_tasks.add_task(
-            _run_optimization_bg,
-            user_id=response["user_id"],
-            product=response["product"],
-            segmento=response["segmento"],
-        )
-        log.info(f"[BG] Tarefa de otimização agendada para user={msg['user_id']!r}")
+        if task == "load_shop":
+            background_tasks.add_task(
+                _run_load_shop_bg,
+                user_id=response["user_id"],
+                shop_url=response["shop_url"],
+                segmento=response["segmento"],
+            )
+            log.info(f"[BG] Carregamento de loja agendado para user={msg['user_id']!r}")
+
+        elif task == "optimize_product":
+            background_tasks.add_task(
+                _run_optimization_bg,
+                user_id=response["user_id"],
+                product=response["product"],
+                segmento=response["segmento"],
+            )
+            log.info(f"[BG] Otimização agendada para user={msg['user_id']!r}")
+
+        else:
+            log.warning(f"[BG] Tipo de background_task desconhecido: {task!r}")
 
     elif response.get("type") == "text" and response.get("text"):
         try:
@@ -378,6 +392,79 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
         "response": {k: v for k, v in response.items() if k != "product"},  # omite dados grandes
         "send_result": send_result,
     }
+
+
+def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
+    """
+    Background task: carrega produtos da loja e envia a lista pelo WhatsApp.
+    Roda fora do ciclo de request/response do FastAPI.
+    """
+    log.info(f"[BG] Carregando loja: url={shop_url!r} user={user_id}")
+
+    try:
+        loaded = load_shop_from_url(shop_url)
+    except Exception as e:
+        log.error(f"[BG] Exceção ao carregar loja: {e}")
+        loaded = {"ok": False, "message": str(e)}
+
+    if not loaded.get("ok"):
+        clear_session(user_id)
+        msg = (
+            f"❌ Não consegui carregar a loja.\n"
+            f"Erro: {loaded.get('message', 'desconhecido')}\n\n"
+            "Certifique-se de usar o formato: https://shopee.com.br/nome_da_loja\n"
+            "Envie */auditar* para tentar novamente."
+        )
+        try:
+            evo_send_text(user_id=user_id, text=msg)
+        except Exception as e:
+            log.error(f"[BG] Falha ao enviar erro de loja: {e}")
+        return
+
+    products = loaded["data"].get("products", [])
+    username = loaded["data"].get("username", "loja")
+
+    if not products:
+        clear_session(user_id)
+        try:
+            evo_send_text(
+                user_id=user_id,
+                text=f"⚠️ A loja *{username}* foi encontrada, mas não há produtos visíveis no momento."
+            )
+        except Exception as e:
+            log.error(f"[BG] Falha ao enviar aviso de loja vazia: {e}")
+        return
+
+    # Salva sessao com produtos carregados
+    save_session(
+        user_id,
+        "awaiting_product_index",
+        {
+            "shop_url": shop_url,
+            "username": username,
+            "products": products,
+            "segmento": segmento,
+        },
+    )
+    log.info(f"[BG] Loja '{username}' carregada: {len(products)} produtos. user={user_id}")
+
+    # Monta e envia a lista de produtos
+    from shopee_core.whatsapp_service import _product_list_message, MAX_PRODUCTS_LISTED
+    product_list = _product_list_message(products)
+    total = len(products)
+    shown = min(total, MAX_PRODUCTS_LISTED)
+    suffix = f"(mostrando os primeiros {shown})" if total > shown else ""
+
+    msg = (
+        f"✅ Loja *{username}* carregada com *{total}* produto(s). {suffix}\n\n"
+        f"{product_list}\n\n"
+        "Escolha o número do produto que deseja otimizar. Ex: *0*"
+    )
+    try:
+        send_result = evo_send_text(user_id=user_id, text=msg)
+        log.info(f"[BG] Lista de produtos enviada: ok={send_result.get('ok')}")
+    except Exception as e:
+        log.error(f"[BG] Falha ao enviar lista de produtos: {e}")
 
 
 def _run_optimization_bg(user_id: str, product: dict, segmento: str):
