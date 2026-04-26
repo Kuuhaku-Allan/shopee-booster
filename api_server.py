@@ -55,6 +55,12 @@ from shopee_core.media_service import (
     analyze_image,
 )
 from shopee_core.session_service import get_all_active_sessions
+from shopee_core.evolution_client import (
+    send_text as evo_send_text,
+    set_webhook as evo_set_webhook,
+    instance_status as evo_instance_status,
+)
+from shopee_core.config import load_app_config
 
 # ── Configuração de logging ────────────────────────────────────────
 logging.basicConfig(
@@ -95,7 +101,7 @@ def health():
     return {
         "ok": True,
         "service": "shopee-booster-bot-api",
-        "version": "0.1.0",
+        "version": "0.2.0",
     }
 
 
@@ -279,14 +285,15 @@ def sentinel_status(loja_id: str, keyword: str, janela_execucao: str):
 @app.post("/webhook/evolution", tags=["WhatsApp"])
 def evolution_webhook(payload: dict):
     """
-    Recebe eventos da Evolution API (MESSAGES_UPSERT etc.).
+    Recebe eventos da Evolution API (MESSAGES_UPSERT etc.) e envia a resposta
+    de volta ao usuário via Evolution API (send_text).
 
-    Fluxo:
-      Evolution API → POST /webhook/evolution → whatsapp_service → resposta JSON
-
-    Na fase atual (3A), apenas retorna a resposta como JSON.
-    Na Fase 3B, este endpoint também chamará a Evolution API para
-    enviar a mensagem de volta ao usuário via Send Plain Text.
+    Fluxo completo (Fase 3B):
+      WhatsApp → Evolution API → POST /webhook/evolution
+        → extract_evolution_message()
+        → handle_whatsapp_text()      ← lógica do bot
+        → send_text()                 ← envia de volta via Evolution API
+        → retorna JSON com received + response + send_result
     """
     msg = extract_evolution_message(payload)
 
@@ -296,34 +303,52 @@ def evolution_webhook(payload: dict):
         f"text={msg['text'][:60]!r}"
     )
 
-    # Ignora mensagens enviadas pelo próprio bot (evita loops)
+    # Ignora mensagens enviadas pelo próprio bot (evita loops de auto-resposta)
     if msg["from_me"]:
         return {"ok": True, "ignored": True, "reason": "from_me"}
 
-    # Ignora eventos sem texto (ex: status, chamadas, stickers)
+    # Ignora eventos sem texto (stickers, chamadas, status etc.)
     if not msg["text"]:
         has_media = msg.get("has_media", False)
         reason = "media_not_supported_yet" if has_media else "empty_text"
         return {"ok": True, "ignored": True, "reason": reason}
 
-    # Roteamento principal
+    # ── Processa a mensagem e obtém a resposta do bot ─────────────
     try:
         response = handle_whatsapp_text(
             user_id=msg["user_id"],
             text=msg["text"],
         )
     except Exception as e:
-        log.error(f"/webhook/evolution ERRO: {e}\n{traceback.format_exc()}")
+        log.error(f"/webhook/evolution ERRO no roteador: {e}\n{traceback.format_exc()}")
         return {
             "ok": False,
             "error": str(e),
-            "received": msg,
+            "received": {"user_id": msg["user_id"], "text": msg["text"]},
         }
 
     log.info(
         f"/webhook/evolution resposta type={response.get('type')!r} "
         f"len={len(response.get('text', ''))}"
     )
+
+    # ── Envia a resposta pelo WhatsApp (Fase 3B) ──────────────────
+    # Se EVOLUTION_API_URL não estiver configurada, send_text() vai falhar
+    # graciosamente e retornar ok=False — não vai travar o endpoint.
+    send_result = None
+    if response.get("type") == "text" and response.get("text"):
+        try:
+            send_result = evo_send_text(
+                user_id=msg["user_id"],
+                text=response["text"],
+            )
+            if send_result.get("ok"):
+                log.info("[EVO] Mensagem enviada com sucesso")
+            else:
+                log.warning(f"[EVO] Falha no envio: {send_result}")
+        except Exception as e:
+            log.error(f"[EVO] Exceção ao enviar mensagem: {e}")
+            send_result = {"ok": False, "error": str(e)}
 
     return {
         "ok": True,
@@ -333,6 +358,7 @@ def evolution_webhook(payload: dict):
             "text": msg["text"],
         },
         "response": response,
+        "send_result": send_result,
     }
 
 
@@ -438,3 +464,74 @@ def sessions_active():
         "count": len(sessions),
         "sessions": sessions,
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# EVOLUTION API — Setup e diagnóstico
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/evolution/setup-webhook", tags=["WhatsApp"])
+def evolution_setup_webhook():
+    """
+    Configura a Evolution API para enviar eventos de mensagem para este servidor.
+
+    URL configurada: {SHOPEE_API_PUBLIC_URL}/webhook/evolution
+    Padrão de desenvolvimento: http://host.docker.internal:8787/webhook/evolution
+
+    Execute este endpoint UMA VEZ após subir o Docker da Evolution API.
+    """
+    cfg = load_app_config()
+    public_base = (
+        cfg.get("shopee_api_public_url")
+        or "http://host.docker.internal:8787"
+    )
+    webhook_url = public_base.rstrip("/") + "/webhook/evolution"
+
+    log.info(f"/evolution/setup-webhook → configurando para {webhook_url!r}")
+    try:
+        result = evo_set_webhook(webhook_url)
+    except ValueError as e:
+        return {"ok": False, "error": str(e), "hint": "Configure EVOLUTION_API_URL, EVOLUTION_API_KEY e WHATSAPP_INSTANCE no .shopee_config"}
+
+    return {
+        "ok": result.get("ok", False),
+        "webhook_url": webhook_url,
+        "result": result,
+    }
+
+
+@app.get("/evolution/instance-status", tags=["WhatsApp"])
+def evolution_instance_status_endpoint():
+    """
+    Verifica o status de conexão da instância WhatsApp.
+    Retorna 'open', 'connecting' ou 'close'.
+    Retorna error amigável se a Evolution API não estiver configurada/rodando.
+    """
+    try:
+        return evo_instance_status()
+    except ValueError as e:
+        return {"ok": False, "state": "not_configured", "error": str(e), "hint": "Configure EVOLUTION_API_URL, EVOLUTION_API_KEY e WHATSAPP_INSTANCE no .shopee_config"}
+
+
+@app.post("/evolution/test-send", tags=["WhatsApp"])
+def evolution_test_send(
+    number: str,
+    text: str = "Teste do ShopeeBooster — se você recebeu isso, está tudo funcionando! 🚀",
+):
+    """
+    Envia uma mensagem de texto diretamente para um número.
+    Use ANTES de testar o webhook completo, para confirmar que a
+    Evolution API está acessível e a instância está conectada.
+
+    Parâmetros (query string):
+        number — número com DDI, ex: 5511999999999
+        text   — texto a enviar (opcional)
+
+    Exemplo:
+        POST /evolution/test-send?number=5511999999999
+    """
+    log.info(f"/evolution/test-send number={number!r}")
+    try:
+        return evo_send_text(user_id=number, text=text)
+    except ValueError as e:
+        return {"ok": False, "error": str(e), "hint": "Configure EVOLUTION_API_URL, EVOLUTION_API_KEY e WHATSAPP_INSTANCE no .shopee_config"}

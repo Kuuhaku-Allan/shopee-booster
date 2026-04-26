@@ -39,10 +39,15 @@ def load_app_config() -> dict:
         "runtime_dir": os.getenv("SHOPEE_RUNTIME_DIR", config_dir),
         "config_dir": config_dir,
 
-        # Futuramente: credenciais da Evolution API / WhatsApp Bot
+        # Evolution API / WhatsApp Bot
         "evolution_api_url": os.getenv("EVOLUTION_API_URL", ""),
         "evolution_api_key": os.getenv("EVOLUTION_API_KEY", ""),
         "whatsapp_instance": os.getenv("WHATSAPP_INSTANCE", ""),
+
+        # URL pública deste servidor FastAPI (usado para auto-configurar webhook)
+        # Em desenvolvimento com Docker: http://host.docker.internal:8787
+        # Em produção: https://seu-dominio.com
+        "shopee_api_public_url": os.getenv("SHOPEE_API_PUBLIC_URL", ""),
     }
 
 
