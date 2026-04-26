@@ -1,0 +1,1589 @@
+[
+  {
+    "url": "https://shopee.com.br/api/v4/pages/is_short_url/?path=totalmenteseu",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d39d205ad1521e643700:0000006bc941a78d:0000000000000000",
+      "alt-svc": "",
+      "content-length": "44",
+      "date": "Sun, 26 Apr 2026 19:15:52 GMT",
+      "content-type": "application/json",
+      "server": "SGW"
+    },
+    "response_preview": "{'data': {'url': ''}, 'error': 0, 'error_msg': ''}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/account/cookie_get_preferences?version=1",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d3bd9430b82c65183200:00000085db7073fd:0000000000000000",
+      "alt-svc": "",
+      "content-length": "573",
+      "date": "Sun, 26 Apr 2026 19:15:54 GMT",
+      "content-type": "application/json",
+      "server": "nginx"
+    },
+    "response_preview": "{'error': 0, 'data': {'preferences': [{'category': 1, 'status': 0}, {'category': 2, 'status': 0}, {'category': 3, 'status': 0}, {'category': 4, 'status': 0}, {'category': 5, 'status': 0}], 'allowed_fe_set_cookies': ['UA', 'SPC_F', 'SPC_R_T_ID', 'SPC_R_T_IV', 'csrftoken', 'SPC_DID', 'SPC_RNBV', 'language', 'shopee_tob_token', 'shopee_token', 'SPC_CLIENTID', 'root_csrftoken', 'SPC_CDS', 'HAS_BEEN_REDIRECTED', 'AC_CERT_D', 'shopee_webUnique_ccd', 'shopee_app_version', 'shopee_rn_bundle_version', 's",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/account/subaccount",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d3cd9f5aab935187e400:000000921b12c82d:0000000000000000",
+      "alt-svc": "",
+      "content-length": "13",
+      "date": "Sun, 26 Apr 2026 19:15:55 GMT",
+      "content-type": "application/json",
+      "server": "nginx"
+    },
+    "response_preview": "{'data': 'OK'}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/account/basic/get_payment_info",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d3d0953be6e6d2ba3600:000000ee93b4a9c1:0000000000000000",
+      "alt-svc": "",
+      "content-length": "61",
+      "date": "Sun, 26 Apr 2026 19:15:55 GMT",
+      "content-type": "application/json; charset=utf-8",
+      "server": "nginx"
+    },
+    "response_preview": "{'data': None, 'error': 19, 'error_msg': 'Failed to authenticate'}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/abtest/traffic/get_web_experiments",
+    "status": 200,
+    "method": "POST",
+    "headers": {
+      "x-request-id": "b11ba3af5061d3dae83715afe6b2d000:00000044df1e63e7:0000000000000000",
+      "access-control-expose-headers": "X-Request-Id",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-methods": "OPTIONS, GET, POST, PUT, DELETE",
+      "access-control-allow-origin": "https://shopee.com.br",
+      "alt-svc": "",
+      "content-length": "66",
+      "date": "Sun, 26 Apr 2026 19:15:56 GMT",
+      "content-type": "application/json",
+      "server": "nginx",
+      "access-control-allow-headers": "Content-Type, Authorization, X-Requested-With, X-CSRFToken, If-None-Match-, X-API-SOURCE, X-Shopee-Language, X-App-Type, X-API-SRC-LIST, X-Cv-Id, X-Sap-Access-S, X-Sap-Access-T, X-Sap-Access-F, X-Track-Id, X-Request-Context, Country, X-Sz-Sdk-Version, Sz-Token, Af-Ac-Enc-Dat, X-Sap-Ri, Af-Ac-Enc-Sz-Token, X-Sap-Sec"
+    },
+    "response_preview": "{'data': [], 'error': None, 'error_msg': None, 'debug': None, 'retcode': 0}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/shop/get_shop_base_v2",
+    "status": 200,
+    "method": "POST",
+    "headers": {
+      "x-request-id": "b11ba3af5061d3e1f0e490f91b2dc900:00000048689e8934:0000000000000000",
+      "access-control-expose-headers": "X-Request-Id",
+      "content-encoding": "gzip",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-methods": "OPTIONS, GET, POST, PUT, DELETE",
+      "access-control-allow-origin": "https://shopee.com.br",
+      "alt-svc": "",
+      "date": "Sun, 26 Apr 2026 19:15:57 GMT",
+      "content-type": "application/json",
+      "vary": "Accept-Encoding",
+      "server": "nginx",
+      "access-control-allow-headers": "Content-Type, Authorization, X-Requested-With, X-CSRFToken, If-None-Match-, X-API-SOURCE, X-Shopee-Language, X-App-Type, X-API-SRC-LIST, X-Cv-Id, X-Sap-Access-S, X-Sap-Access-T, X-Sap-Access-F, X-Track-Id, X-Request-Context, Country, X-Sz-Sdk-Version, Sz-Token, Af-Ac-Enc-Dat, X-Sap-Ri, Af-Ac-Enc-Sz-Token, X-Sap-Sec"
+    },
+    "response_preview": "{'error': 0, 'error_msg': '', 'data': {'shopid': 1744033972, 'userid': 7800843726, 'name': 'totalmenteseu', 'follower_count': 3, 'is_official_shop': False, 'is_preferred_plus_seller': False, 'is_shopee_verified': False, 'chat_disabled': False, 'rating_star': 0, 'account': {'username': 'totalmenteseu', 'following_count': 1, 'portrait': 'br-11134004-81ztc-mkdw8k6hy1aa75', 'is_seller': True, 'phone_verified': True, 'email_verified': True, 'fbid': '', 'total_avg_star': 0, 'status': 1}, 'last_active_",
+    "likely_has_products": true,
+    "full_response": {
+      "error": 0,
+      "error_msg": "",
+      "data": {
+        "shopid": 1744033972,
+        "userid": 7800843726,
+        "name": "totalmenteseu",
+        "follower_count": 3,
+        "is_official_shop": false,
+        "is_preferred_plus_seller": false,
+        "is_shopee_verified": false,
+        "chat_disabled": false,
+        "rating_star": 0,
+        "account": {
+          "username": "totalmenteseu",
+          "following_count": 1,
+          "portrait": "br-11134004-81ztc-mkdw8k6hy1aa75",
+          "is_seller": true,
+          "phone_verified": true,
+          "email_verified": true,
+          "fbid": "",
+          "total_avg_star": 0,
+          "status": 1
+        },
+        "last_active_time": 1775308137,
+        "vacation": false,
+        "is_blocking_owner": false,
+        "followed": false,
+        "ab_test_info": {
+          "header_tabs_layout": "control",
+          "deep_discount_item_card": "default",
+          "item_card": "control",
+          "feeds_live_landing": "treatment",
+          "image_category": "new_image_cat",
+          "remove_item_count_on_category_tab": "default",
+          "default_component_improvement": "top_products",
+          "deep_discount_enhancement": "default",
+          "new_default_scp": "treatment_2",
+          "default_landing": "control",
+          "two_tier_category": "default",
+          "two_tier_category_for_layoutc": "default",
+          "live_stream_auto_play": "treatment",
+          "dd_item_card_2": "control",
+          "tier_shop_category": "treatment_new_layout",
+          "product_one_per_row": "control",
+          "fashion_shop_improvement": "current",
+          "shop_rfy_entrypoint": "treatment",
+          "voucher_popup_non_buyers": "control",
+          "category_ui_improvement_1": "new_category_ui",
+          "autoplay_highlight_video": "default",
+          "ads_shop_improvement": "control",
+          "non_deco_shop_homepage_personalization": "treatment_1",
+          "brand_day_overlap": "control",
+          "truncate_shop_item_card": "control",
+          "popup_new_design": "treatment_1",
+          "shop_entry_landing_redirection": "control_1",
+          "shop_live_stream_floating": "treatment_1",
+          "shop_voucher_ui_revamp": "control_1",
+          "remove_rfy_experiment_1": "treatment",
+          "remove_rfy_experiment_2": "treatment_5",
+          "remove_rfy_experiment_3": "control",
+          "brand_shop_revamp": "control",
+          "promotion_card_in_product_tab": "control",
+          "in_shop_notice": "control",
+          "new_arrival_zone": "control_1",
+          "scp_add_item_cards": "control",
+          "scp_add_atc_button": "control",
+          "lower_the_height_of_shop_header": "treatment",
+          "category_decoration_standard_layout_tier_1": "control",
+          "category_decoration_standard_layout_tier_2": "control",
+          "category_decoration_image_layout": "control",
+          "category_decoration_item_layout": "control",
+          "change_shop_header_background_image": "control",
+          "landing_tab_from_live_room": "treatment_2",
+          "remove_new_tag_in_product_tab": "control_1",
+          "in_shop_noti_item_collection_scenarios": "control_1",
+          "shop_voucher_component_optimisation": "control_1",
+          "floating_cart_in_shop": "Control_1",
+          "shop_add_sharing_button": "control",
+          "remove_refresh_screen": "control_1",
+          "auto_play_live_module": "control_1",
+          "item_card_ui_in_shop_product_tab": "control_1",
+          "revamp_live_event_card_ui": "treatment_1",
+          "review_tab_display_position": "control_1",
+          "live_exclusive_offer_in_shop": "control_1",
+          "remove_choice_tag": "show_all"
+        },
+        "description": "",
+        "item_count": 6,
+        "show_high_end_brand_style": false,
+        "video_entry": {},
+        "floating_cart": {
+          "is_show_floating_cart": false,
+          "floating_cart_switch_tab_refresh_interval": 5
+        },
+        "brand_day": {},
+        "tab_meta": {
+          "shop_tab": {
+            "shop_is_non_deco": true,
+            "shop_without_op_behavior": false,
+            "decoration_type": "default",
+            "is_high_end_brand_shop": false
+          },
+          "campaign_tab": {
+            "show_campaign_tab": false
+          },
+          "membership_tab": {
+            "show_membership_tab": false,
+            "has_join_membership": false
+          },
+          "live_tab": {
+            "show_live_tab": false
+          },
+          "content_tab": {
+            "show_content_tab": false
+          },
+          "review_tab": {
+            "show_review_tab": false
+          }
+        },
+        "toggles": {
+          "disable_chat_performance": false,
+          "deco_theme_color_compo_layout": false,
+          "show_deco_entry": false
+        },
+        "is_shopee_choice_shop": false,
+        "is_censored": false,
+        "is_show_instant_mart_shop": false,
+        "ctime": 1770310038,
+        "shop_rating": {
+          "rating_normal": 0,
+          "rating_bad": 0,
+          "rating_good": 0
+        },
+        "seller_metrics": {
+          "cancellation_visibility": 2,
+          "cancellation_warning": 10,
+          "cancellation_rate": 0
+        }
+      }
+    }
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/shop/get_categories?limit=20&offset=0&shopid=1744033972&two_tier_cate=1",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d3ef6ffd4fa2f8738500:00000043a9e9494c:0000000000000000",
+      "alt-svc": "",
+      "content-length": "575",
+      "date": "Sun, 26 Apr 2026 19:15:58 GMT",
+      "content-type": "application/json; charset=utf-8",
+      "server": "nginx"
+    },
+    "response_preview": "{'error': 0, 'error_msg': '', 'data': {'shop_categories': [{'shop_category_id': 11060339, 'display_name': 'Bolsas e Bagagens', 'image': 'br-11134207-81zua-ml59j3g4d2x20d', 'is_generated': True, 'category_type': 8, 'total': 5, 'is_adult': False}, {'shop_category_id': 11060234, 'display_name': 'Mochilas', 'image': 'br-11134207-820m3-ml6mjh2v203o97', 'is_generated': True, 'category_type': 8, 'total': 1, 'is_adult': False}], 'total': 2, 'has_more': False, 'all_products_cover': {'image': '', 'is_adul",
+    "likely_has_products": true,
+    "full_response": {
+      "error": 0,
+      "error_msg": "",
+      "data": {
+        "shop_categories": [
+          {
+            "shop_category_id": 11060339,
+            "display_name": "Bolsas e Bagagens",
+            "image": "br-11134207-81zua-ml59j3g4d2x20d",
+            "is_generated": true,
+            "category_type": 8,
+            "total": 5,
+            "is_adult": false
+          },
+          {
+            "shop_category_id": 11060234,
+            "display_name": "Mochilas",
+            "image": "br-11134207-820m3-ml6mjh2v203o97",
+            "is_generated": true,
+            "category_type": 8,
+            "total": 1,
+            "is_adult": false
+          }
+        ],
+        "total": 2,
+        "has_more": false,
+        "all_products_cover": {
+          "image": "",
+          "is_adult": false
+        },
+        "ab_test": {
+          "fashion_shop_improvement": "control"
+        },
+        "deco_layout": 1,
+        "tier": 1,
+        "dynamic_translation_status": 0
+      }
+    }
+  },
+  {
+    "url": "https://endpoint.mms.shopee.com.br/api/v1/configs",
+    "status": 200,
+    "method": "POST",
+    "headers": {
+      "access-control-expose-headers": "Content-Length,Access-Control-Allow-Origin,Access-Control-Allow-Headers,Content-Type",
+      "content-encoding": "gzip",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+      "access-control-allow-origin": "https://shopee.com.br",
+      "date": "Sun, 26 Apr 2026 19:15:59 GMT",
+      "content-type": "application/json; charset=utf-8",
+      "vary": "Accept-Encoding",
+      "server": "SGW",
+      "access-control-allow-headers": "Content-Type,AccessToken,X-CSRF-Token,Authorization,Token,Access-Control-Allow-Credentials,Biz"
+    },
+    "response_preview": "{'code': 0, 'msg': 'OK', 'data': {'core_player': {'status': 0, 'ab_test': '', 'data': {'disable_dmx_report_error_when_unexp_eof': True, 'disable_optimized_getserveriptask': True, 'enable_android_fix_live_float_window': True, 'enable_audio_decoder_opt': True, 'enable_low_level_event': True, 'enable_report_accel_size': 5, 'enable_rtl': False, 'enable_view_hw': False, 'hd_enable': {'H264': 1, 'H265': 1, 'default': 1}, 'mmc_disable_getserverip_task': True, 'mmc_enable_full_path_tracking': True, 'mms",
+    "likely_has_products": true,
+    "full_response": {
+      "code": 0,
+      "msg": "OK",
+      "data": {
+        "core_player": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "disable_dmx_report_error_when_unexp_eof": true,
+            "disable_optimized_getserveriptask": true,
+            "enable_android_fix_live_float_window": true,
+            "enable_audio_decoder_opt": true,
+            "enable_low_level_event": true,
+            "enable_report_accel_size": 5,
+            "enable_rtl": false,
+            "enable_view_hw": false,
+            "hd_enable": {
+              "H264": 1,
+              "H265": 1,
+              "default": 1
+            },
+            "mmc_disable_getserverip_task": true,
+            "mmc_enable_full_path_tracking": true,
+            "mms_match_config_ids": [
+              1
+            ],
+            "report_level": 3
+          }
+        },
+        "endpoint": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "mms_match_config_ids": [
+              174
+            ],
+            "report_device_info_event": false,
+            "report_no_fatal_log": false
+          }
+        },
+        "endpoint_cron": {
+          "ver": 11,
+          "ttl": 900000,
+          "pull_time": 1777230959,
+          "interval": 600000,
+          "fail_retry_period": 60000,
+          "max_retry_count": 2,
+          "network_switch_delay": 5000
+        },
+        "image_loader": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "mms_match_config_ids": []
+          }
+        },
+        "live_sdk": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "mms_match_config_ids": [
+              32
+            ],
+            "play_sdk_extend_android": {
+              "TransportSdkUserPercentage": {
+                "LasP2pStrategy": 0,
+                "P2P": 100,
+                "Slice": [
+                  {
+                    "play-spe.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "play-spe.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-spe-las.livetech.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "play-spe.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-ws.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-ws-src.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-ws-las.livetech.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-tx.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-tx.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-tx-src.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-tx.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-tx-las.livetech.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-tx.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-ws-ww.livestream.shopee.com": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.tw"
+                    }
+                  },
+                  {
+                    "play-ws-src-ww.livestream.shopee.com": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.tw"
+                    }
+                  }
+                ],
+                "Transport": 0,
+                "httpToP2PCacheTime": 4000,
+                "mmcPlayer": 0,
+                "p2pDANGERTime": 2000,
+                "p2pQuickOffset": 5000,
+                "stunServer": "stun.livetech.shopee.co.id:19302"
+              },
+              "blacklist": [
+                {
+                  "man": "OPPO",
+                  "model": "OPPO A37m"
+                },
+                {
+                  "man": "samsung",
+                  "model": "SM-N960U"
+                },
+                {
+                  "man": "samsung",
+                  "model": "SM-G6000"
+                },
+                {
+                  "man": "Xiaomi",
+                  "model": "Redmi Note 5"
+                }
+              ],
+              "liveplayerpoolMaxSize": 5
+            },
+            "play_sdk_extend_ios": {
+              "MMCPlayerHttpNativePercentage": {
+                "1.0": {
+                  "http": 0,
+                  "httpNative": 100
+                }
+              },
+              "MMCPlayerSdkPercentage": {
+                "1.0": {
+                  "mmc": 100,
+                  "sp": 0,
+                  "tx": 0
+                },
+                "1.1": [
+                  {
+                    "biz": 0,
+                    "mmc": 100,
+                    "sp": 0
+                  },
+                  {
+                    "biz": 101,
+                    "mmc": 100,
+                    "sp": 0
+                  },
+                  {
+                    "biz": 102,
+                    "mmc": 100,
+                    "sp": 0
+                  },
+                  {
+                    "biz": 2103,
+                    "mmc": 100,
+                    "sp": 0
+                  },
+                  {
+                    "biz": 2104,
+                    "mmc": 100,
+                    "sp": 0
+                  },
+                  {
+                    "biz": 2124,
+                    "mmc": 100,
+                    "sp": 0
+                  },
+                  {
+                    "biz": 2002,
+                    "mmc": 100,
+                    "sp": 0
+                  }
+                ]
+              },
+              "NetSpeedStatusTest": {
+                "NetSpeedBufferTime": 600,
+                "NetSpeedExpirationTime": 3600,
+                "NetSpeedPointTime": 30
+              },
+              "TransportSdkUseInfo": 100,
+              "TransportSdkUserPercentage": {
+                "LasP2pStrategy": 0,
+                "P2P": 0,
+                "Slice": [
+                  {
+                    "play-spe.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "play-spe.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-spe-las.livetech.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "play-spe.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-ws.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-ws-src.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-ws-las.livetech.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-tx.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-tx.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-tx-src.livestream.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-tx.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-tx-las.livetech.shopee.com.br": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-tx.livestream.shopee.com.br"
+                    }
+                  },
+                  {
+                    "play-ws-ww.livestream.shopee.com": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.tw"
+                    }
+                  },
+                  {
+                    "play-ws-src-ww.livestream.shopee.com": {
+                      "percentage": 100,
+                      "replaceDomain": "slice-ws.livestream.shopee.tw"
+                    }
+                  }
+                ],
+                "Transport": 0,
+                "httpToP2PCacheTime": 4000,
+                "mmcPlayer": 0,
+                "p2pDANGERTime": 2000,
+                "p2pQuickOffset": 5000,
+                "stunServer": "stun.livetech.shopee.co.id:19302"
+              },
+              "highDemuxer": 0,
+              "ldcatime": "0.2",
+              "ldtype": 2,
+              "liveplayerpoolMaxSize": 2,
+              "mdcatime": "1",
+              "mdtype": 2,
+              "swtype": 1,
+              "videoBlockThreshold": 500
+            },
+            "push_sdk_extend_android": {
+              "AgoraSwitch": {
+                "BR": 50,
+                "ID": 80,
+                "IR": 50,
+                "MM": 50,
+                "MY": 50,
+                "PH": 50,
+                "SG": 50,
+                "TH": 50,
+                "TW": 50,
+                "VN": 50
+              },
+              "HWEncodeAlignVersion": 31,
+              "OpenH264UseInfo": {
+                "BR": 100,
+                "ID": 0,
+                "IR": 100,
+                "MM": 100,
+                "MY": 90,
+                "PH": 100,
+                "SG": 70,
+                "TH": 30,
+                "TW": 40,
+                "VN": 60
+              },
+              "agcdata": {
+                "blacklist": [
+                  {
+                    "man": "samsung",
+                    "model": "SM-G935F"
+                  },
+                  {
+                    "man": "VIVO",
+                    "model": "V1921A"
+                  }
+                ]
+              },
+              "blacklist": [
+                {
+                  "man": "OPPO",
+                  "model": "OPPO A37m"
+                },
+                {
+                  "man": "Xiaomi",
+                  "model": "Redmi Note 5"
+                }
+              ],
+              "dropFrameStrategy": 1,
+              "s264Percentage": 30
+            },
+            "push_sdk_extend_ios": {
+              "arcatch": {
+                "kp": {
+                  "p": 100,
+                  "v": "2.83"
+                }
+              },
+              "espc": 1,
+              "rtlLevel": 5
+            },
+            "quicknet_config": {
+              "qn_log_level": 3,
+              "qn_options": {
+                "protocol.quic.cc_algo": 2,
+                "stream.send_buffer_size": 130000
+              }
+            },
+            "rtc_push": {
+              "quality_config": {
+                "video_bitrate_max": 1800,
+                "video_bitrate_min": 500,
+                "video_bitrate_pin": 1000,
+                "video_fps": 18,
+                "video_resolution": 2
+              }
+            },
+            "thread_stack_size": 256
+          }
+        },
+        "livelog": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "log_enabled": false,
+            "mms_match_config_ids": [
+              10
+            ],
+            "report_level": 4
+          }
+        },
+        "livestudio": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "mac-arm64": {
+              "buildTime": "2026-03-09T06:46:23.000Z",
+              "details": "mms 发布测试",
+              "downloadUrl": "https://mms.file.susercontent.com/api/v4/11195009/shopee-livestudio-client/shopee-livestudio-1.1.21-b243-yhc3vc.zip",
+              "fileChecksum": "3dbf9e1d104d3eb2cf12165ba8acd2961880b938a087d94de6ff43c251790c07e713ce539ed13bd0ef43b09a3f912ae5667b8020a7996fa4f3f1bbc755e6ea89",
+              "fileSize": 300894191,
+              "publishTime": "2026-03-11T10:03:39.811Z",
+              "rollout": {
+                "default": 100
+              },
+              "version": "1.1.19"
+            },
+            "mms_match_config_ids": [
+              1292,
+              1293
+            ],
+            "win": {
+              "buildTime": "2026-04-16T09:22:01.000Z",
+              "details": "1. 新增美颜功能\n2. 修复部分 bug\n3. 新增 tms 上报逻辑\nlive环境正式包 只支持live环境账号登录",
+              "downloadUrl": "https://mms.file.susercontent.com/api/v4/11195008/shopee-livestudio-client/shopee-livestudio-1.1.23-b867-19r4qp.exe",
+              "fileChecksum": "ce781562e4491814a2dd17db22156a10",
+              "fileSize": 204723869,
+              "publishTime": "2026-04-16T09:54:11.015Z",
+              "rollout": {
+                "default": 100
+              },
+              "version": "1.1.23"
+            }
+          }
+        },
+        "md5s": {
+          "core_player": "949300eb83acc3adc7067d48854d74e1",
+          "endpoint": "2c1689b79a9e3711c59bfad900d3da9a",
+          "image_loader": "7f4afb9e04cead46b691a86ac87f0807",
+          "live_sdk": "674708abb68bc110ee1028d69620d6bc",
+          "livelog": "dfe1105899b04e09295726803db874bf",
+          "livestudio": "48b5a67cfd0fae6a74c32b3941f1f92e",
+          "media_sdk": "8b7ccd6b25e700cd4aa72e0e2b3d8165",
+          "mms_detect": "7f4afb9e04cead46b691a86ac87f0807",
+          "mms_domainip": "cd559d0da48cc6d87b7ca213ac8ef1dc",
+          "mms_image": "acbeeb793cac6f336c1e07bf40b915be",
+          "mms_vod": "660185e2cb42574339e543788e40ea49",
+          "mmsplayer": "8375717d96a2a778b8832c1c1cec736b",
+          "rtc": "8c8eb3fc4ffc9a1951980c0209a24e22",
+          "sztracking": "7f4afb9e04cead46b691a86ac87f0807",
+          "upload": "c59af46db38aa36141755c2d2121f442",
+          "web_player": "4a7eff2c2202295b03fa723a33df48e4"
+        },
+        "media_sdk": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "beauty_config": [
+              {
+                "beauty_item": {
+                  "beauty_old": 50,
+                  "bright_eyes": 0,
+                  "enlarge_eye": 25,
+                  "eyebrow_slanted": 0,
+                  "eyebrow_thickness": 0,
+                  "face_smooth": 60,
+                  "mouth": 20,
+                  "nose": 40,
+                  "remove_eyes_dark_circles": 80,
+                  "remove_nasolabial_folds": 100,
+                  "shrink_face": 50,
+                  "small_head": 10,
+                  "tone_clear": 50,
+                  "white_teeth": 0,
+                  "whitten": 0
+                },
+                "id": "1006"
+              }
+            ],
+            "camera_record_button_v2_business_id_list": [
+              "1002",
+              "1003",
+              "1007",
+              "1008",
+              "1009",
+              "1010",
+              "1011"
+            ],
+            "camera_update_render_quality_config": {
+              "1001": {
+                "disable_update_render_quality": true
+              },
+              "1002": {
+                "disable_update_render_quality": true
+              },
+              "1003": {
+                "disable_update_render_quality": true
+              },
+              "1005": {
+                "disable_update_render_quality": true
+              },
+              "1006": {
+                "disable_update_render_quality": true
+              },
+              "1007": {
+                "disable_update_render_quality": true
+              },
+              "1008": {
+                "disable_update_render_quality": true
+              },
+              "1009": {
+                "disable_update_render_quality": true
+              },
+              "1010": {
+                "disable_update_render_quality": true
+              },
+              "1011": {
+                "disable_update_render_quality": true
+              }
+            },
+            "create_centor_url_config": {
+              "video_create_page_1": "https://sv.shopee.co.id/creator-center/inspiration/?prePage=video_create_page_1&type=hashtag",
+              "video_create_page_2": "https://sv.shopee.co.id/creator-center/inspiration/?prePage=video_create_page_2&type=hashtag"
+            },
+            "disable_async_video_decoder": true,
+            "disable_decoder_warmup_optim": true,
+            "disable_frame_lag_monitor": [
+              "1001",
+              "1002",
+              "1003",
+              "1005",
+              "1007",
+              "1008",
+              "1009",
+              "1010",
+              "1011"
+            ],
+            "disable_generate_thumbnail_by_cross_platform": [
+              "1002"
+            ],
+            "disable_ls_jank_detail_monitor": false,
+            "disable_ls_jank_summary_monitor": false,
+            "disable_optimize_iCloud_loading": true,
+            "disable_release_camera_config": true,
+            "enable_art_text": [
+              "1003"
+            ],
+            "enable_camera_api_lock": true,
+            "enable_camera_async_release": true,
+            "enable_camera_downgrade": true,
+            "enable_camera_face_tracking_focus": true,
+            "enable_cover_chooser_v3": true,
+            "enable_exif_rotation_fix": true,
+            "enable_fetching_uti_using_legacy_ph_image_manager_method": true,
+            "enable_filterAndEffectToVideoZone": [
+              "1003"
+            ],
+            "enable_fix_zip_load_fail": true,
+            "enable_glyph_text": [
+              "1003"
+            ],
+            "enable_hardware_buffer": [],
+            "enable_live_frame_object_cached": true,
+            "enable_livestream_datapool": true,
+            "enable_low_end_1080p": true,
+            "enable_mulTrimmerV2_customView": [
+              "1003"
+            ],
+            "enable_multiple_output": [],
+            "enable_multiple_pic_post": true,
+            "enable_music_v3": true,
+            "enable_music_v3_search": true,
+            "enable_new_effect_engine": true,
+            "enable_not_use_clone": true,
+            "enable_oes": [
+              "1001",
+              "1002",
+              "1003",
+              "1005",
+              "1006",
+              "1007",
+              "1008",
+              "1009",
+              "1010",
+              "1011"
+            ],
+            "enable_optimize_iCloud_loading": true,
+            "enable_partialUpdateTimeline": [
+              "1003"
+            ],
+            "enable_productSticker": [
+              "1003"
+            ],
+            "enable_productStickerProductName": [
+              "1003"
+            ],
+            "enable_release_exporter_in_work_thread": true,
+            "enable_render_chain_v2": true,
+            "enable_startup_optimise": true,
+            "enable_template_one_clip": true,
+            "enable_text_preset": true,
+            "enable_text_use_full_screen_render": true,
+            "enable_use_SSPRecord_config": [
+              "1001",
+              "1002",
+              "1003",
+              "1005",
+              "1007",
+              "1008",
+              "1009",
+              "1010",
+              "1011"
+            ],
+            "enable_use_mmc_new_ae_engine": true,
+            "enable_v_trace": [
+              "1006"
+            ],
+            "enabled_statistics_type": [
+              1,
+              2
+            ],
+            "export_config": [
+              {
+                "id": "1001",
+                "picture": {
+                  "maxLength": 1280,
+                  "quality": 80
+                }
+              },
+              {
+                "id": "1002",
+                "picture": {
+                  "maxLength": 1280,
+                  "quality": 80
+                }
+              },
+              {
+                "id": "1003",
+                "picture": {
+                  "multiPostMaxLength": 1280,
+                  "multiPostQuality": 80
+                }
+              },
+              {
+                "id": "1005",
+                "picture": {
+                  "maxLength": 1280,
+                  "quality": 80
+                }
+              },
+              {
+                "id": "1007",
+                "picture": {
+                  "maxLength": 1280,
+                  "quality": 80
+                }
+              },
+              {
+                "id": "1008",
+                "picture": {
+                  "maxLength": 1280,
+                  "quality": 80
+                }
+              },
+              {
+                "id": "1009",
+                "picture": {
+                  "maxLength": 1280,
+                  "quality": 80
+                }
+              },
+              {
+                "id": "1010",
+                "picture": {
+                  "maxLength": 1280,
+                  "quality": 80
+                }
+              },
+              {
+                "id": "1011",
+                "picture": {
+                  "maxLength": 1280,
+                  "quality": 80
+                }
+              }
+            ],
+            "fitting_room_detect_confidence": 0.2,
+            "frame_lag_threshold": 5,
+            "gpu_score_table": [
+              "Adreno (TM) 830=1502.11",
+              "ANGLE ((Samsung Xclipse 950) on Vulkan 1.3.279)=1050.53",
+              "ANGLE ((Samsung Xclipse 540) on Vulkan 1.3.279)=328.42",
+              "ANGLE (Samsung Xclipse 920) on Vulkan 1.1.179=635.79",
+              "ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.279)=808.42",
+              "ANGLE ((Samsung Xclipse 530) on Vulkan 1.3.279)=282.11"
+            ],
+            "live_frame_object_cached_size": 10,
+            "livestreaming_sharpen_filter_denoise_value": 0,
+            "mediasdk_android_cap_tex_pts_update": true,
+            "mediasdk_enable_live_event_upload_update": true,
+            "mediasdk_enable_painting_bezier_limit": true,
+            "min_resolution_threshold": 576,
+            "mms_match_config_ids": [
+              129,
+              1133
+            ],
+            "mms_watermark_config": {
+              "compute_grade": 3
+            },
+            "msdk_album_business_identifiers": {
+              "1002": "chat"
+            },
+            "msdk_album_loading_opt": "legacy",
+            "msdk_disable_device_state_collect": false,
+            "msdk_disable_fitting_room_change_face": true,
+            "msdk_enable_1080p_export_phase_two": true,
+            "msdk_enable_expand_screen_canvas": true,
+            "msdk_enable_face_detection": true,
+            "msdk_enable_nonblocking_audio_stop": true,
+            "msdk_enable_nonblocking_pause": true,
+            "msdk_enable_opengop_seek_opt": true,
+            "msdk_enable_realtime_calculate_pkt_duration": true,
+            "msdk_enable_video_decoder_v4": true,
+            "msdk_extend_config": "{\"blacklist\":[{\"man\":\"OPPO\",\"model\":\"OPPO A37m\"},{\"man\":\"Xiaomi\",\"model\":\"Redmi Note 5\"}],\"UploadVideoInfo\":{\"UseInfo\":{\"ID\":100,\"SG\":0,\"MY\":0,\"TW\":100,\"TH\":100,\"VN\":0,\"PH\":100,\"IR\":0,\"MM\":0,\"BR\":0},\"CodeInfo\":[2011],\"UserId\":[],\"fsizeMax\":40971520,\"isNeadWifi\":true,\"failFileSize\":0},\"OpenH264UseInfo\":{\"ID\":0,\"SG\":70,\"MY\":90,\"TW\":40,\"TH\":30,\"VN\":60,\"PH\":100,\"IR\":100,\"MM\":100,\"BR\":100}}",
+            "msdk_fittingroom_compress_target_length": 720,
+            "music_v3_search_max_word_count": 50,
+            "one_clip_backup_template_id": "284",
+            "report_version": "1",
+            "resolution_remind_config": {
+              "resolution_threshold_photo": 720,
+              "resolution_threshold_video": 1080
+            },
+            "show_upload_sticker_tab": true
+          }
+        },
+        "mms_detect": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "mms_match_config_ids": []
+          }
+        },
+        "mms_domainip": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "gray": [],
+            "mms_match_config_ids": [
+              409
+            ],
+            "rules": {},
+            "tolerance": 3
+          }
+        },
+        "mms_image": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "api_timeout": 10000,
+            "configs": {
+              "100": {
+                "endpoint": {
+                  "default_suffix": ".webp",
+                  "domains": [
+                    "down-bs-br.img.susercontent.com"
+                  ],
+                  "extend_suffix": ""
+                },
+                "upload": {
+                  "backoff_time": 50,
+                  "concurrency": 3,
+                  "retry_count": 2,
+                  "slice": 5242880
+                }
+              },
+              "4214": {
+                "endpoint": {
+                  "default_suffix": ".webp",
+                  "domains": [
+                    "img.ws.mms.shopee.com.br"
+                  ],
+                  "extend_suffix": ""
+                },
+                "upload": {
+                  "backoff_time": 50,
+                  "concurrency": 3,
+                  "retry_count": 2,
+                  "slice": 5242880
+                }
+              },
+              "4299": {
+                "endpoint": {
+                  "default_suffix": "",
+                  "domains": [
+                    "down-bs-br.img.susercontent.com"
+                  ],
+                  "extend_suffix": ""
+                },
+                "upload": {
+                  "backoff_time": 50,
+                  "concurrency": 3,
+                  "retry_count": 2,
+                  "slice": 5242880
+                }
+              }
+            },
+            "mms_match_config_ids": [
+              223,
+              118
+            ],
+            "url_combine_optimize_disable": true,
+            "ver": 1
+          }
+        },
+        "mms_vod": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "bandwidth_threshold": [
+              {
+                "max": 1499,
+                "max_bitrate": 350000,
+                "min": 0
+              },
+              {
+                "max": 2999,
+                "max_bitrate": 550000,
+                "min": 1500
+              },
+              {
+                "max": 4999,
+                "max_bitrate": 650000,
+                "min": 3000
+              },
+              {
+                "max": 999999,
+                "max_bitrate": 1500000,
+                "min": 5000
+              }
+            ],
+            "bandwidth_ver": "ori",
+            "decode_method": 0,
+            "endpoint": "https://down-aka-br.vod.susercontent.com",
+            "mms_match_config_ids": [
+              9,
+              1113
+            ],
+            "protocol": "http",
+            "ver": 4,
+            "video_codec": "H264",
+            "video_codec_config": {},
+            "video_codec_max_defn": "V720P"
+          }
+        },
+        "mmsplayer": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "mms_match_config_ids": [
+              462
+            ],
+            "toggle_use_surface_view": 0
+          }
+        },
+        "rtc": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "enable_rtl": false,
+            "mms_match_config_ids": [
+              8
+            ]
+          }
+        },
+        "sztracking": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "mms_match_config_ids": []
+          }
+        },
+        "upload": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "VOD": {
+              "services": {
+                "awscloud": {
+                  "protocol": "http",
+                  "upload_domain": ""
+                },
+                "shopeeuss": {
+                  "protocol": "http",
+                  "upload_domain": ""
+                },
+                "wscloud": {
+                  "protocol": "http",
+                  "upload_domain": ""
+                }
+              }
+            },
+            "mms_match_config_ids": [
+              12
+            ],
+            "protocol": {
+              "awscloud": "http",
+              "shopeeuss": "http",
+              "wscloud": "http"
+            }
+          }
+        },
+        "ver": 11,
+        "web_player": {
+          "status": 0,
+          "ab_test": "",
+          "data": {
+            "configs": {
+              "100": {
+                "switchPlayer": {
+                  "nativeToWasm": false,
+                  "nativeToWebcodec": false,
+                  "webcodecToNative": false
+                }
+              },
+              "2106": {
+                "switchPlayer": {
+                  "nativeToWasm": false,
+                  "nativeToWebcodec": true,
+                  "webcodecToNative": false
+                },
+                "webcodec": {
+                  "wasmDecoder": {
+                    "maxFps": 30,
+                    "maxResolution": 768,
+                    "needCpu": 4,
+                    "open": true,
+                    "restrictions": [
+                      {
+                        "maxFps": 30,
+                        "maxResolution": 768,
+                        "needCpu": 4
+                      },
+                      {
+                        "maxFps": 30,
+                        "maxResolution": 1088,
+                        "needCpu": 6
+                      },
+                      {
+                        "maxFps": 60,
+                        "maxResolution": 1088,
+                        "needCpu": 8
+                      }
+                    ]
+                  }
+                }
+              },
+              "2109": {
+                "switchPlayer": {
+                  "nativeErrorsToWebcodec": [
+                    "audio render error",
+                    "video decode error",
+                    "0x80070057",
+                    "Code=-12909",
+                    "The operation is not supported"
+                  ],
+                  "nativeToWasm": false,
+                  "nativeToWebcodec": true,
+                  "webcodecToNative": false
+                },
+                "webcodec": {
+                  "wasmDecoder": {
+                    "maxFps": 30,
+                    "maxResolution": 768,
+                    "needCpu": 4,
+                    "open": true,
+                    "restrictions": [
+                      {
+                        "maxFps": 30,
+                        "maxResolution": 768,
+                        "needCpu": 4
+                      },
+                      {
+                        "maxFps": 30,
+                        "maxResolution": 1088,
+                        "needCpu": 6
+                      },
+                      {
+                        "maxFps": 60,
+                        "maxResolution": 1088,
+                        "needCpu": 8
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "mms_match_config_ids": [
+              1100,
+              1138
+            ],
+            "ver": 0
+          }
+        }
+      }
+    }
+  },
+  {
+    "url": "https://shopee.com.br/api/v2/voucher_wallet/get_user_voucher_by_time?after_collection_time=1776021328",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d4034ea9c8e6e9578800:0000001c8df0562b:0000000000000000",
+      "alt-svc": "",
+      "content-length": "61",
+      "date": "Sun, 26 Apr 2026 19:15:59 GMT",
+      "content-type": "application/json; charset=utf-8",
+      "server": "nginx"
+    },
+    "response_preview": "{'data': None, 'error': 19, 'error_msg': 'Failed to authenticate'}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/shop/get_shop_seo?shopid=1744033972",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d407a1af1d977dd15c00:000000cf9d530f2b:0000000000000000",
+      "alt-svc": "",
+      "content-encoding": "gzip",
+      "date": "Sun, 26 Apr 2026 19:15:59 GMT",
+      "content-type": "application/json",
+      "vary": "Accept-Encoding",
+      "server": "nginx"
+    },
+    "response_preview": "{'error': 0, 'error_msg': '', 'data': {'footer': {'data': ''}, 'items': [{'itemid': 58255893973, 'shopid': 1744033972, 'name': 'Mochila Feminina Rosa Multifuncional com Porta-Moedas', 'label_ids': [844931064601283, 700065053, 1400065022, 822062091122182, 835343123222554, 595473041], 'image': 'br-11134207-820m3-ml6mjh2v203o97', 'images': ['br-11134207-820m3-ml6mjh2v203o97', 'br-11134207-820lt-ml6mjh2v3eo41e', 'br-11134207-820mh-ml6mjh2v4t8kbc'], 'currency': 'BRL', 'stock': 1, 'status': 1, 'ctime'",
+    "likely_has_products": true,
+    "full_response": {
+      "error": 0,
+      "error_msg": "",
+      "data": {
+        "footer": {
+          "data": ""
+        },
+        "items": [
+          {
+            "itemid": 58255893973,
+            "shopid": 1744033972,
+            "name": "Mochila Feminina Rosa Multifuncional com Porta-Moedas",
+            "label_ids": [
+              844931064601283,
+              700065053,
+              1400065022,
+              822062091122182,
+              835343123222554,
+              595473041
+            ],
+            "image": "br-11134207-820m3-ml6mjh2v203o97",
+            "images": [
+              "br-11134207-820m3-ml6mjh2v203o97",
+              "br-11134207-820lt-ml6mjh2v3eo41e",
+              "br-11134207-820mh-ml6mjh2v4t8kbc"
+            ],
+            "currency": "BRL",
+            "stock": 1,
+            "status": 1,
+            "ctime": 1772128007,
+            "sold": 0,
+            "historical_sold": 0,
+            "liked": false,
+            "liked_count": 1,
+            "catid": 100016,
+            "brand": "",
+            "cmt_count": 0,
+            "flag": 131072,
+            "cb_option": 0,
+            "item_status": "normal",
+            "price": 9800000,
+            "price_min": 9800000,
+            "price_max": 9800000,
+            "price_min_before_discount": 9800000,
+            "price_max_before_discount": 9800000,
+            "price_before_discount": 9800000,
+            "has_lowest_price_guarantee": false,
+            "show_discount": 0,
+            "raw_discount": 0,
+            "size_chart": "br-11134207-820lg-ml6mjh2v67t00c",
+            "tier_variations": [
+              {
+                "name": "",
+                "options": [
+                  ""
+                ],
+                "type": 0
+              }
+            ],
+            "item_rating": {
+              "rating_star": 0,
+              "rating_count": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "rcount_with_context": 0,
+              "rcount_with_image": 0
+            },
+            "item_type": 0,
+            "reference_item_id": "",
+            "transparent_background_image": "",
+            "is_adult": false,
+            "badge_icon_type": 0,
+            "shopee_verified": false,
+            "is_official_shop": false,
+            "show_official_shop_label": false,
+            "show_shopee_verified_label": false,
+            "show_official_shop_label_in_title": false,
+            "is_cc_installment_payment_eligible": false,
+            "is_non_cc_installment_payment_eligible": false,
+            "show_free_shipping": false,
+            "bundle_deal_id": 0,
+            "can_use_bundle_deal": false,
+            "welcome_package_type": 0,
+            "can_use_wholesale": false,
+            "is_preferred_plus_seller": false,
+            "shop_location": "São Paulo",
+            "has_model_with_available_shopee_stock": false,
+            "can_use_cod": false,
+            "is_on_flash_sale": false,
+            "is_service_by_shopee": false,
+            "flash_sale_ongoing_sold_count": 0,
+            "shop_name": "totalmenteseu",
+            "flash_sale_stock": 0,
+            "item_card_display_price": {
+              "item_id": 58255893973,
+              "model_id": 219186345254,
+              "promotion_type": 0,
+              "promotion_id": 0,
+              "price": 9310000,
+              "strikethrough_price": 9800000,
+              "discount": 5,
+              "original_price": 9800000,
+              "display_price_asset": {
+                "display_final_price_icon": false,
+                "final_price_hint_text": "no Pix"
+              },
+              "model_selection_logic": 3,
+              "pix_discount_info": {
+                "discount_id": 449032992535340,
+                "snapshot_id": 297606110720078,
+                "discount_amount": 490000
+              },
+              "applied_product_promo_price": 9800000
+            },
+            "need_kyc": false,
+            "is_shopee_choice": false,
+            "item_card_display_sold_count": {
+              "display_sold_count": 0,
+              "rounded_display_sold_count": 0,
+              "rounded_local_monthly_sold_count": 0,
+              "rounded_local_historical_sold_count": 0,
+              "rounded_global_historical_sold_count": 0
+            },
+            "global_cat": {
+              "catid": [
+                100016,
+                100089
+              ]
+            },
+            "is_mart": false
+          }
+        ]
+      }
+    }
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/shop/get_shop_tab",
+    "status": 200,
+    "method": "POST",
+    "headers": {
+      "cache-control": "no-store, max-age=0",
+      "alt-svc": "",
+      "content-encoding": "gzip",
+      "date": "Sun, 26 Apr 2026 19:15:59 GMT",
+      "content-type": "application/json",
+      "vary": "Accept-Encoding",
+      "server": "nginx"
+    },
+    "response_preview": "{'5': False, '2': False, '4': 2, '0': 3, '3': 90309999, 'error': 90309999, '1': '93b42a6451-df98-4338-98f0-b9728eb94b81'}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/search/search_suggestion?bundle=popsearch&limit=8&offset=0",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d40f9f3c3c8f49812400:00000054be33275f:0000000000000000",
+      "alt-svc": "",
+      "content-length": "195",
+      "date": "Sun, 26 Apr 2026 19:16:00 GMT",
+      "content-type": "application/json",
+      "server": "nginx"
+    },
+    "response_preview": "{'bff_meta': None, 'error': None, 'error_msg': None, 'data': {'queries': [], 'has_more': False, 'tracking': '', 'refresh_interval_sec': 0, 'ss_session_id': ''}, 'search_response_info': '', 'bff_response_info': '{}'}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/search/search_prefills",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d40de98e4b907cb63302:000000406d6800ae:0000000000000000",
+      "alt-svc": "",
+      "content-length": "187",
+      "date": "Sun, 26 Apr 2026 19:16:00 GMT",
+      "content-type": "application/json",
+      "server": "nginx"
+    },
+    "response_preview": "{'bff_meta': None, 'error': None, 'error_msg': None, 'be_error': None, 'data': {'items': [], 'ordered_prefills': [{'items': []}], 'campaign_index': 0}, 'search_response_info': '', 'bff_response_info': '{}'}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/pages/get_footer_layout",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d41865f9615e8b57c400:000000885c297d53:0000000000000000",
+      "alt-svc": "",
+      "content-encoding": "gzip",
+      "date": "Sun, 26 Apr 2026 19:16:00 GMT",
+      "content-type": "application/json",
+      "vary": "Accept-Encoding",
+      "server": "nginx"
+    },
+    "response_preview": "{'data': {'id': 1, 'name': 'Footer Nov 25', 'pc': [{'sections': [{'type': 0, 'title': 'ATENDIMENTO AO CLIENTE', 'simple_section': {'image': '', 'text': '', 'url': ''}, 'text_link': [{'text': 'Central de Ajuda', 'url': 'https://help.shopee.com.br/portal'}, {'text': 'Como Comprar', 'url': 'https://help.shopee.com.br/portal/article/76401-[No%c3%a7%c3%b5es-b%c3%a1sicas-do-comprador]-Como-fa%c3%a7o-uma-compra-na-Shopee%3F'}, {'text': 'Métodos de Pagamento', 'url': 'https://help.shopee.com.br/portal/a",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/shop/is_show?shopid=1744033972&show_type=3",
+    "status": 200,
+    "method": "GET",
+    "headers": {
+      "x-request-id": "b11ba3af5061d419fa6d4882dda79600:000000f1cc51fd86:0000000000000000",
+      "cache-control": "no-cache,no-store,must-revalidate,max-age=0",
+      "alt-svc": "",
+      "content-length": "65",
+      "date": "Sun, 26 Apr 2026 19:16:00 GMT",
+      "content-type": "application/json",
+      "server": "nginx"
+    },
+    "response_preview": "{'error': 0, 'error_msg': '', 'data': {'is_show': False, 'show_type': 3}}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://data-rep.livetech.shopee.com.br/dataapi/dataweb/event/reportPB",
+    "status": 200,
+    "method": "POST",
+    "headers": {
+      "access-control-allow-origin": "*",
+      "content-length": "36",
+      "date": "Sun, 26 Apr 2026 19:16:01 GMT",
+      "content-type": "application/json; charset=utf-8",
+      "server": "SGW",
+      "access-control-allow-headers": "*"
+    },
+    "response_preview": "{'code': 0, 'msg': 'success', 'data': {}}",
+    "likely_has_products": false
+  },
+  {
+    "url": "https://shopee.com.br/api/v4/account/cookie_accept_all",
+    "status": 200,
+    "method": "POST",
+    "headers": {
+      "x-request-id": "b11ba3af5061d45f1a533abce3e7ec00:0000003b7aee41c0:0000000000000000",
+      "access-control-expose-headers": "X-Request-Id",
+      "content-encoding": "gzip",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-methods": "OPTIONS, GET, POST, PUT, DELETE",
+      "access-control-allow-origin": "https://shopee.com.br",
+      "alt-svc": "",
+      "date": "Sun, 26 Apr 2026 19:16:05 GMT",
+      "content-type": "application/json",
+      "vary": "Accept-Encoding",
+      "server": "nginx",
+      "access-control-allow-headers": "Content-Type, Authorization, X-Requested-With, X-CSRFToken, If-None-Match-, X-API-SOURCE, X-Shopee-Language, X-App-Type, X-API-SRC-LIST, X-Cv-Id, X-Sap-Access-S, X-Sap-Access-T, X-Sap-Access-F, X-Track-Id, X-Request-Context, Country, X-Sz-Sdk-Version, Sz-Token, Af-Ac-Enc-Dat, X-Sap-Ri, Af-Ac-Enc-Sz-Token, X-Sap-Sec"
+    },
+    "response_preview": "{'error': 0, 'data': {'preferences': [{'category': 1, 'status': 1, 'update_time': 1777230965}, {'category': 2, 'status': 1, 'update_time': 1777230965}, {'category': 3, 'status': 1, 'update_time': 1777230965}, {'category': 4, 'status': 1, 'update_time': 1777230965}, {'category': 5, 'status': 1, 'update_time': 1777230965}], 'allowed_fe_set_cookies': ['UA', 'SPC_F', 'SPC_R_T_ID', 'SPC_R_T_IV', 'csrftoken', 'SPC_DID', 'SPC_RNBV', 'language', 'shopee_tob_token', 'shopee_token', 'SPC_CLIENTID', 'root_",
+    "likely_has_products": false
+  }
+]
