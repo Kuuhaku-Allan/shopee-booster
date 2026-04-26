@@ -133,7 +133,7 @@ def _menu_message() -> dict:
         "💬 */chat* — Tirar dúvidas sobre e-commerce\n"
         "🖼️ */imagem* — Editar imagem de produto\n"
         "📋 */status* — Ver sessão atual\n"
-        "🔄 */reset* — Cancelar e recomeçar\n\n"
+        "🔄 */cancelar* — Cancelar e recomeçar\n\n"
         "_Ou me mande qualquer pergunta diretamente!_"
     )
 
@@ -183,7 +183,7 @@ def handle_whatsapp_text(user_id: str, text: str) -> dict:
     except Exception as e:
         log.error(f"[WA] Erro no roteador: {e}\n{traceback.format_exc()}")
         return _txt(
-            "⚠️ Ocorreu um erro interno. Tente novamente ou envie */reset* para recomeçar."
+            "⚠️ Ocorreu um erro interno. Tente novamente ou envie */cancelar* para recomeçar."
         )
 
 
@@ -200,17 +200,40 @@ def _route(
 
     if lower in {"/reset", "resetar", "cancelar", "/cancelar"}:
         clear_session(user_id)
-        return _txt("✅ Sessão reiniciada. Pode me mandar uma nova tarefa.")
+        return _txt("✅ Operação cancelada e sessão reiniciada com segurança. Pode me mandar uma nova tarefa quando quiser!")
 
-    if lower in {"/start", "start", "menu", "/menu", "ajuda", "/ajuda", "oi", "olá", "ola"}:
+    if lower in {"/start", "start", "menu", "/menu", "oi", "olá", "ola"}:
         return _menu_message()
+
+    if lower in {"ajuda", "/ajuda"}:
+        return _txt(
+            "💡 *Como usar o ShopeeBooster no WhatsApp*\n\n"
+            "Eu sou um assistente treinado para te ajudar a vender mais.\n\n"
+            "🔹 *Comandos Principais:*\n"
+            "*/auditar* — Analisa concorrentes e reescreve títulos/descrições\n"
+            "*/chat* — Conversa livre para tirar dúvidas de e-commerce\n"
+            "*/status* — Veja o que estou processando no momento\n"
+            "*/cancelar* — Interrompe qualquer análise travada\n\n"
+            "🔹 *Dica rápida:*\n"
+            "Basta me perguntar 'qual o melhor título para um vestido?' que eu te respondo na hora!"
+        )
 
     if lower in {"/status"}:
         if state == "idle":
-            return _txt("Você não tem nenhum fluxo ativo no momento.")
+            return _txt("Você não tem nenhum fluxo ativo no momento. Tudo livre! Envie */menu* para ver o que fazer.")
+        
+        status_map = {
+            "awaiting_shop_url": "Aguardando você me enviar o link da sua loja.",
+            "processing_load_shop": "Carregando a sua loja e listando os produtos... ⏳",
+            "awaiting_product_index": "Aguardando você escolher o número do produto da lista.",
+            "processing": "Estou processando dados com IA neste momento (pode levar até 2 min)... ⏳"
+        }
+        human_state = status_map.get(state, state)
+        
         return _txt(
-            f"📌 *Estado atual:* `{state}`\n"
-            f"Envie */reset* para cancelar ou continue o fluxo."
+            f"📌 *Status da sua sessão:*\n"
+            f"_{human_state}_\n\n"
+            f"Se algo parece travado, envie */cancelar*."
         )
 
     if lower in {"/chat"}:
@@ -253,7 +276,7 @@ def _route(
         return _txt(
             "⏳ Ainda estou carregando os produtos da sua loja.\n"
             "Aguarde um instante! Envio a lista assim que terminar.\n\n"
-            "_Se quiser cancelar, envie_ */reset*"
+            "_Se quiser cancelar, envie_ */cancelar*"
         )
 
     # ── Guard: bloqueia nova mensagem enquanto otimizando produto ───
@@ -262,7 +285,7 @@ def _route(
         return _txt(
             "⏳ Ainda estou processando a auditoria anterior.\n"
             "Por favor, aguarde. Envio o resultado assim que terminar.\n\n"
-            "_Se quiser cancelar, envie_ */reset*"
+            "_Se quiser cancelar, envie_ */cancelar*"
         )
 
     # ── Estados do fluxo de auditoria ────────────────────────────
@@ -294,7 +317,7 @@ def _handle_shop_url(user_id: str, url: str) -> dict:
     url = url.strip()
 
     # Validacao rapida de URL antes de ocupar background
-    if not url.startswith("http"):
+    if not url.startswith("http") or "shopee.com.br" not in url:
         return _txt(
             "❌ URL inválida. Use o formato:\n"
             "https://shopee.com.br/nome_da_loja"
@@ -334,7 +357,7 @@ def _handle_product_selection(user_id: str, text: str, data: dict) -> dict:
         return _txt(
             "⚠️ Por favor, envie apenas o *número* do produto.\n"
             "Exemplo: *0*, *1*, *2*...\n\n"
-            "Envie */reset* para cancelar."
+            "Envie */cancelar* para interromper."
         )
 
     products = data.get("products", [])
@@ -343,7 +366,7 @@ def _handle_product_selection(user_id: str, text: str, data: dict) -> dict:
     if index < 0 or index >= len(products):
         return _txt(
             f"❌ Número inválido. Escolha entre *0* e *{len(products) - 1}*.\n"
-            "Envie */reset* para cancelar."
+            "Envie */cancelar* para interromper."
         )
 
     product = products[index]
@@ -380,6 +403,7 @@ def _handle_general_chat(user_id: str, text: str, data: dict) -> dict:
         segmento=segmento,
         chat_history=[],
         full_context="",
+        channel="whatsapp",
     )
 
     response_text = result.get("text", "")

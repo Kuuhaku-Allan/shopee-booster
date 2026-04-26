@@ -217,10 +217,12 @@ def set_webhook(webhook_url: str, events: list[str] | None = None) -> dict:
 
     url = f"{_base_url()}/webhook/set/{_instance()}"
     payload = {
-        "enabled": True,
-        "url": webhook_url,
-        "events": events,
-        "base64": True,
+        "webhook": {
+            "enabled": True,
+            "url": webhook_url,
+            "events": events,
+            "base64": True,
+        }
     }
 
     log.info(f"[EVO] set_webhook → {url} webhook_url={webhook_url} events={events}")

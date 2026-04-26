@@ -24,6 +24,7 @@ def run_chatbot_turn(
     full_context: str = "",
     attachments: list | None = None,
     attachment_types: list[str] | None = None,
+    channel: str = "desktop",
     **kwargs: Any,
 ) -> dict:
     """
@@ -53,6 +54,7 @@ def run_chatbot_turn(
         chat_history=chat_history or [],
         full_context=full_context,
         segmento=segmento,
+        channel=channel,
         **kwargs,
     )
 
