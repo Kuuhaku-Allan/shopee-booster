@@ -219,6 +219,8 @@ def _process_analyze_image(image_bytes: bytes, question: str, product_context: s
         from backend_core import analyze_product_image_vision
 
         img = _load_image_from_bytes(image_bytes).convert("RGB")
+        
+        # analyze_product_image_vision espera: img, user_message, product_context, segmento
         feedback = analyze_product_image_vision(img, question, product_context, segmento)
 
         elapsed = time.time() - start

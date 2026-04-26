@@ -205,14 +205,72 @@ def _product_list_message(products: list) -> str:
 # ROTEADOR PRINCIPAL
 # ══════════════════════════════════════════════════════════════════
 
+def normalize_intent_text(text: str) -> str:
+    """
+    Normaliza texto para classificação de intenção.
+    Remove acentos, converte para minúsculas e remove espaços extras.
+    
+    Exemplo:
+        "Análise esta imagem" → "analise esta imagem"
+    """
+    import unicodedata
+    
+    text = text.lower().strip()
+    # Normaliza para NFD (decompõe caracteres acentuados)
+    text = unicodedata.normalize("NFD", text)
+    # Remove marcas diacríticas (acentos)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    return text
+
+
 def classify_media_action(caption: str) -> str:
-    lower = caption.lower()
+    """
+    Classifica a ação de mídia baseada na legenda.
+    
+    Ordem de prioridade:
+    1. analyze_image - análise, avaliação, feedback
+    2. remove_background - remover fundo
+    3. generate_scene - gerar cenário
+    4. creative_edit - fallback para edições criativas
+    """
+    lower = normalize_intent_text(caption)
+    
+    # Análise precisa vir ANTES do fallback de edição criativa
+    if any(term in lower for term in [
+        "analise",
+        "analisar",
+        "analisa",
+        "avaliar",
+        "avalia",
+        "avaliacao",
+        "feedback",
+        "opiniao",
+        "o que acha",
+        "imagem esta boa",
+        "essa imagem esta boa",
+        "melhorar imagem",
+        "como esta",
+        "ta boa",
+        "esta boa",
+    ]):
+        return "analyze_image"
+    
+    # Remover fundo
     if "remov" in lower and "fundo" in lower:
         return "remove_background"
-    if "cenário" in lower or "cenario" in lower or "fundo bonito" in lower:
+    
+    # Gerar cenário
+    if any(term in lower for term in [
+        "cenario",
+        "fundo bonito",
+        "fundo profissional",
+        "fundo de estudio",
+        "ambiente",
+        "backdrop",
+    ]):
         return "generate_scene"
-    if "analise" in lower or "avali" in lower:
-        return "analyze_image"
+    
+    # Fallback: edição criativa
     return "creative_edit"
 
 def handle_whatsapp_message(msg: dict) -> dict:

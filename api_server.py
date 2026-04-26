@@ -629,24 +629,39 @@ def _run_media_bg(user_id: str, msg: dict, action: str, job_id: str = ""):
             evo_send_text(user_id=user_id, text=f"❌ {error_msg}")
             return
 
-        # Sucesso - envia imagem ou texto
-        image_b64 = result.get("image_b64", "")
-
+        # ── Análise retorna TEXTO, não imagem ─────────────────────
         if action == "analyze_image":
-            # Análise retorna texto
             analysis = result.get("message", "")
             log.info(f"[MEDIA] Enviando análise: {len(analysis)} chars")
-            send_result = evo_send_text(user_id=user_id, text=f"🔍 *Análise da Imagem:*\n\n{analysis}")
-            log.info(f"[MEDIA] send_text ok={send_result.get('ok')}")
+            
+            if analysis:
+                send_result = evo_send_text(
+                    user_id=user_id,
+                    text=f"🔎 *Análise da Imagem:*\n\n{analysis}"
+                )
+                log.info(f"[MEDIA] send_text ok={send_result.get('ok')}")
+            else:
+                evo_send_text(
+                    user_id=user_id,
+                    text="❌ Não consegui analisar a imagem agora. Tente novamente."
+                )
+            
+            if job_id:
+                finish_media_job(job_id, success=True)
+            
+            return
 
-        elif image_b64:
+        # ── Outras ações retornam IMAGEM ──────────────────────────
+        image_b64 = result.get("image_b64", "")
+
+        if image_b64:
             # Ações que retornam imagem
             log.info(f"[MEDIA] Enviando imagem processada via Evolution API...")
             log.info(f"[MEDIA] image_b64 len={len(image_b64)}")
 
             caption_map = {
                 "remove_background": "✅ Fundo removido!",
-                "generate_scene": "✅ Cenário gerado com IA!",
+                "generate_scene": "✅ Cenário gerado!",
                 "creative_edit": "✅ Imagem editada!",
             }
             send_caption = caption_map.get(action, "✅ Imagem processada!")
