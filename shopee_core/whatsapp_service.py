@@ -183,6 +183,7 @@ def _menu_message() -> dict:
         "🔍 */auditar* — Auditar e otimizar um produto da sua loja\n"
         "💬 */chat* — Tirar dúvidas sobre e-commerce\n"
         "🖼️ */imagem* — Editar imagem de produto\n"
+        "🛡️ */sentinela* — Monitorar concorrentes automaticamente\n"
         "📋 */status* — Ver sessão atual\n"
         "🔄 */cancelar* — Cancelar e recomeçar\n\n"
         "_Ou me mande qualquer pergunta diretamente!_"
@@ -448,11 +449,17 @@ def _route(
             "🔹 *Comandos Principais:*\n"
             "*/auditar* — Analisa concorrentes e reescreve títulos/descrições\n"
             "*/chat* — Conversa livre para tirar dúvidas de e-commerce\n"
+            "*/sentinela* — Monitora concorrentes automaticamente\n"
             "*/status* — Veja o que estou processando no momento\n"
             "*/cancelar* — Interrompe qualquer análise travada\n\n"
             "🔹 *Dica rápida:*\n"
             "Basta me perguntar 'qual o melhor título para um vestido?' que eu te respondo na hora!"
         )
+
+    # ── Comandos do Sentinela ─────────────────────────────────────
+
+    if lower.startswith("/sentinela"):
+        return _handle_sentinel_command(user_id, text, lower, state, data)
 
     if lower in {"/status"}:
         if state == "idle":
@@ -532,14 +539,229 @@ def _route(
     if state == "awaiting_product_index":
         return _handle_product_selection(user_id, lower, data)
 
+    # ── Estados do fluxo do Sentinela ─────────────────────────────
+
+    if state == "awaiting_sentinel_shop_url":
+        return _handle_sentinel_shop_url(user_id, text)
+
+    if state == "awaiting_sentinel_confirmation":
+        return _handle_sentinel_confirmation(user_id, lower, data)
+
     # ── Fallback: conversa geral com o chatbot ────────────────────
 
     return _handle_general_chat(user_id, text, data)
 
 
 # ══════════════════════════════════════════════════════════════════
-# HANDLERS DE FLUXO
+# HANDLERS DO SENTINELA
 # ══════════════════════════════════════════════════════════════════
+
+def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, data: dict) -> dict:
+    """Roteador de comandos do Sentinela."""
+    from shopee_core.sentinel_whatsapp_service import (
+        get_sentinel_config,
+        format_sentinel_menu,
+        format_sentinel_status,
+        delete_sentinel_config,
+    )
+    
+    # Comando base: /sentinela
+    if lower == "/sentinela":
+        return _txt(format_sentinel_menu())
+    
+    # /sentinela status
+    if lower in {"/sentinela status", "/sentinela ver"}:
+        config = get_sentinel_config(user_id)
+        return _txt(format_sentinel_status(config))
+    
+    # /sentinela configurar
+    if lower in {"/sentinela configurar", "/sentinela config"}:
+        clear_session(user_id)  # Limpa qualquer sessão anterior
+        save_session(user_id, "awaiting_sentinel_shop_url", {})
+        return _txt(
+            "🛡️ *Configuração do Sentinela*\n\n"
+            "Me envie a URL da sua loja na Shopee.\n\n"
+            "Exemplo: https://shopee.com.br/nome_da_loja\n\n"
+            "_Vou analisar seus produtos e gerar keywords automaticamente para monitoramento._"
+        )
+    
+    # /sentinela rodar
+    if lower in {"/sentinela rodar", "/sentinela executar", "/sentinela agora"}:
+        config = get_sentinel_config(user_id)
+        if not config:
+            return _txt(
+                "❌ Sentinela não configurado.\n\n"
+                "Use */sentinela configurar* primeiro para cadastrar sua loja."
+            )
+        
+        if not config["is_active"]:
+            return _txt(
+                "⏸️ Sentinela está pausado.\n\n"
+                "Use */sentinela ativar* para reativar o monitoramento."
+            )
+        
+        # Agenda execução em background
+        return {
+            "type": "background_task",
+            "task": "run_sentinel",
+            "text": (
+                "⏳ *Rodando o Sentinela agora...*\n\n"
+                "Vou buscar concorrentes, comparar com o histórico e te avisar se encontrar novidades.\n\n"
+                "_Isso pode levar alguns minutos._"
+            ),
+            "user_id": user_id,
+            "config": config,
+        }
+    
+    # /sentinela pausar
+    if lower in {"/sentinela pausar", "/sentinela parar"}:
+        config = get_sentinel_config(user_id)
+        if not config:
+            return _txt("❌ Sentinela não configurado.")
+        
+        from shopee_core.sentinel_whatsapp_service import save_sentinel_config
+        save_sentinel_config(
+            user_id=user_id,
+            shop_url=config["shop_url"],
+            username=config["username"],
+            shop_id=config["shop_id"],
+            keywords=config["keywords"],
+            is_active=False,
+            interval_minutes=config["interval_minutes"],
+        )
+        
+        return _txt(
+            "⏸️ *Sentinela pausado*\n\n"
+            "O monitoramento automático foi desativado.\n"
+            "Use */sentinela ativar* para reativar."
+        )
+    
+    # /sentinela ativar
+    if lower in {"/sentinela ativar", "/sentinela ativo"}:
+        config = get_sentinel_config(user_id)
+        if not config:
+            return _txt("❌ Sentinela não configurado.")
+        
+        from shopee_core.sentinel_whatsapp_service import save_sentinel_config
+        save_sentinel_config(
+            user_id=user_id,
+            shop_url=config["shop_url"],
+            username=config["username"],
+            shop_id=config["shop_id"],
+            keywords=config["keywords"],
+            is_active=True,
+            interval_minutes=config["interval_minutes"],
+        )
+        
+        return _txt(
+            "🟢 *Sentinela ativado*\n\n"
+            "O monitoramento automático foi reativado.\n"
+            "Use */sentinela rodar* para fazer uma checagem agora."
+        )
+    
+    # /sentinela cancelar
+    if lower in {"/sentinela cancelar", "/sentinela remover", "/sentinela deletar"}:
+        config = get_sentinel_config(user_id)
+        if not config:
+            return _txt("❌ Sentinela não configurado.")
+        
+        delete_sentinel_config(user_id)
+        return _txt(
+            "🗑️ *Configuração removida*\n\n"
+            "O Sentinela foi desconfigurado.\n"
+            "Use */sentinela configurar* para configurar novamente."
+        )
+    
+    # Comando não reconhecido
+    return _txt(
+        "❓ Comando não reconhecido.\n\n"
+        "Use */sentinela* para ver os comandos disponíveis."
+    )
+
+def _handle_sentinel_shop_url(user_id: str, url: str) -> dict:
+    """
+    Valida a URL da loja para configuração do Sentinela.
+    """
+    url = url.strip()
+
+    # Validação rápida de URL
+    if not url.startswith("http") or "shopee.com.br" not in url:
+        return _txt(
+            "❌ URL inválida. Use o formato:\n"
+            "https://shopee.com.br/nome_da_loja"
+        )
+
+    # Agenda carregamento da loja em background
+    save_session(user_id, "processing_sentinel_load_shop", {"shop_url": url})
+
+    log.info(f"[WA] Agendando carregamento de loja para Sentinela: url={url!r} user={user_id}")
+
+    return {
+        "type": "background_task",
+        "task": "load_shop_for_sentinel",
+        "text": (
+            "⏳ *Carregando sua loja...*\n\n"
+            "Estou analisando os produtos para gerar keywords de monitoramento.\n"
+            "Vou te mostrar as keywords em instantes!"
+        ),
+        "shop_url": url,
+        "user_id": user_id,
+    }
+
+
+def _handle_sentinel_confirmation(user_id: str, text: str, data: dict) -> dict:
+    """
+    Processa a confirmação das keywords do Sentinela.
+    """
+    lower = text.lower().strip()
+    
+    if lower in {"confirmar", "sim", "ok", "confirma", "aceitar"}:
+        # Salva configuração final
+        from shopee_core.sentinel_whatsapp_service import save_sentinel_config
+        
+        shop_url = data.get("shop_url", "")
+        username = data.get("username", "")
+        shop_id = data.get("shop_id", "")
+        keywords = data.get("keywords", [])
+        
+        save_sentinel_config(
+            user_id=user_id,
+            shop_url=shop_url,
+            username=username,
+            shop_id=shop_id,
+            keywords=keywords,
+            is_active=True,
+            interval_minutes=360,  # 6 horas padrão
+        )
+        
+        clear_session(user_id)
+        
+        keywords_text = "\n".join(f"• {kw}" for kw in keywords[:10])
+        if len(keywords) > 10:
+            keywords_text += f"\n• ... e mais {len(keywords) - 10} keywords"
+        
+        return _txt(
+            f"✅ *Sentinela configurado!*\n\n"
+            f"🏪 Loja: *{username}*\n"
+            f"🔍 Keywords monitoradas ({len(keywords)}):\n{keywords_text}\n\n"
+            f"Use */sentinela rodar* para fazer a primeira checagem agora.\n"
+            f"Use */sentinela status* para ver o status completo."
+        )
+    
+    elif lower in {"cancelar", "não", "nao", "recusar"}:
+        clear_session(user_id)
+        return _txt(
+            "❌ Configuração cancelada.\n\n"
+            "Use */sentinela configurar* para tentar novamente."
+        )
+    
+    else:
+        return _txt(
+            "Por favor, responda:\n"
+            "• *Confirmar* - para aceitar as keywords\n"
+            "• *Cancelar* - para cancelar a configuração"
+        )
+
 
 def _handle_shop_url(user_id: str, url: str) -> dict:
     """

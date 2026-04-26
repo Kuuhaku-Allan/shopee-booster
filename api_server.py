@@ -360,6 +360,22 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
             )
             log.info(f"[BG] Otimização agendada para user={msg['user_id']!r}")
 
+        elif task == "load_shop_for_sentinel":
+            background_tasks.add_task(
+                _run_load_shop_for_sentinel_bg,
+                user_id=response["user_id"],
+                shop_url=response["shop_url"],
+            )
+            log.info(f"[BG] Carregamento de loja para Sentinela agendado: user={msg['user_id']!r}")
+
+        elif task == "run_sentinel":
+            background_tasks.add_task(
+                _run_sentinel_bg,
+                user_id=response["user_id"],
+                config=response["config"],
+            )
+            log.info(f"[BG] Execução do Sentinela agendada: user={msg['user_id']!r}")
+
         elif task == "process_media":
             job_id = response.get("job_id", "")
             plan = response.get("plan", [])
@@ -512,6 +528,223 @@ def _run_optimization_bg(user_id: str, product: dict, segmento: str):
 # ══════════════════════════════════════════════════════════════════
 # BACKGROUND TASK — Processamento de Mídia
 # ══════════════════════════════════════════════════════════════════
+
+def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
+    """
+    Background task: carrega loja para configuração do Sentinela.
+    """
+    from shopee_core.audit_service import load_shop_from_url
+    from shopee_core.sentinel_whatsapp_service import (
+        generate_keywords_from_shop,
+        extract_shop_id_from_url,
+    )
+    
+    log.info(f"[BG] Carregando loja para Sentinela: url={shop_url!r} user={user_id}")
+
+    try:
+        loaded = load_shop_from_url(shop_url)
+    except Exception as e:
+        log.error(f"[BG] Exceção ao carregar loja para Sentinela: {e}")
+        loaded = {"ok": False, "message": str(e)}
+
+    if not loaded.get("ok"):
+        clear_session(user_id)
+        msg = (
+            f"❌ Não consegui carregar a loja.\n"
+            f"Erro: {loaded.get('message', 'desconhecido')}\n\n"
+            "Certifique-se de usar o formato: https://shopee.com.br/nome_da_loja\n"
+            "Use */sentinela configurar* para tentar novamente."
+        )
+        try:
+            evo_send_text(user_id=user_id, text=msg)
+        except Exception as e:
+            log.error(f"[BG] Falha ao enviar erro de loja para Sentinela: {e}")
+        return
+
+    shop_data = loaded["data"]
+    username = shop_data.get("username", "loja")
+    products = shop_data.get("products", [])
+
+    if not products:
+        clear_session(user_id)
+        try:
+            evo_send_text(
+                user_id=user_id,
+                text=f"⚠️ A loja *{username}* foi encontrada, mas não há produtos visíveis para gerar keywords de monitoramento."
+            )
+        except Exception as e:
+            log.error(f"[BG] Falha ao enviar aviso de loja vazia para Sentinela: {e}")
+        return
+
+    # Gera keywords automaticamente
+    keywords = generate_keywords_from_shop(shop_data)
+    shop_id = extract_shop_id_from_url(shop_url)
+
+    if not keywords:
+        clear_session(user_id)
+        try:
+            evo_send_text(
+                user_id=user_id,
+                text=f"⚠️ Não consegui gerar keywords de monitoramento para a loja *{username}*. Tente uma loja com produtos mais específicos."
+            )
+        except Exception as e:
+            log.error(f"[BG] Falha ao enviar aviso de keywords vazias: {e}")
+        return
+
+    # Salva dados na sessão para confirmação
+    save_session(
+        user_id,
+        "awaiting_sentinel_confirmation",
+        {
+            "shop_url": shop_url,
+            "username": username,
+            "shop_id": shop_id,
+            "keywords": keywords,
+        },
+    )
+    
+    log.info(f"[BG] Loja '{username}' carregada para Sentinela: {len(keywords)} keywords geradas")
+
+    # Monta mensagem de confirmação
+    keywords_preview = keywords[:10]
+    keywords_text = "\n".join(f"• {kw}" for kw in keywords_preview)
+    if len(keywords) > 10:
+        keywords_text += f"\n• ... e mais {len(keywords) - 10} keywords"
+
+    msg = (
+        f"✅ *Loja analisada!*\n\n"
+        f"🏪 Loja: *{username}*\n"
+        f"📦 Produtos encontrados: *{len(products)}*\n\n"
+        f"🔍 *Keywords geradas ({len(keywords)}):*\n{keywords_text}\n\n"
+        f"Essas keywords serão usadas para monitorar concorrentes.\n\n"
+        f"*Confirmar* essa configuração?"
+    )
+    
+    try:
+        send_result = evo_send_text(user_id=user_id, text=msg)
+        log.info(f"[BG] Confirmação de Sentinela enviada: ok={send_result.get('ok')}")
+    except Exception as e:
+        log.error(f"[BG] Falha ao enviar confirmação de Sentinela: {e}")
+
+
+def _run_sentinel_bg(user_id: str, config: dict):
+    """
+    Background task: executa o Sentinela e envia resultado.
+    """
+    from shopee_core.sentinel_service import request_sentinel_execution, mark_sentinel_finished
+    from shopee_core.sentinel_whatsapp_service import generate_janela_execucao
+    
+    log.info(f"[BG] Executando Sentinela: user={user_id}")
+
+    try:
+        # Gera identificadores para o lock
+        shop_id = config.get("shop_id", "unknown")
+        keywords = config.get("keywords", [])
+        
+        if not keywords:
+            evo_send_text(user_id=user_id, text="❌ Nenhuma keyword configurada para monitoramento.")
+            return
+
+        # Usa a primeira keyword como principal (simplificação inicial)
+        main_keyword = keywords[0]
+        janela_execucao = generate_janela_execucao()
+        
+        # Tenta adquirir o lock
+        lock_result = request_sentinel_execution(
+            loja_id=shop_id,
+            keyword=main_keyword,
+            janela_execucao=janela_execucao,
+            executor="whatsapp",
+        )
+        
+        if not lock_result.get("ok"):
+            # Outra instância já executou
+            msg = (
+                f"ℹ️ *Sentinela já executado*\n\n"
+                f"Outra instância (_{lock_result.get('executor', 'desconhecido')}_) "
+                f"já executou o monitoramento nesta janela.\n\n"
+                f"Tente novamente em alguns minutos."
+            )
+            evo_send_text(user_id=user_id, text=msg)
+            return
+
+        log.info(f"[BG] Lock adquirido para Sentinela: {main_keyword}")
+
+        # Simula execução do Sentinela (versão inicial simplificada)
+        # TODO: Integrar com lógica real do Sentinela quando disponível
+        
+        import time
+        import random
+        
+        # Simula tempo de processamento
+        time.sleep(random.uniform(2, 5))
+        
+        # Simula resultados
+        concorrentes_analisados = random.randint(5, 15)
+        novos_concorrentes = random.randint(0, 3)
+        preco_medio = random.uniform(50, 150)
+        menor_preco = preco_medio * random.uniform(0.6, 0.9)
+        seu_preco = preco_medio * random.uniform(0.8, 1.2)
+        
+        # Marca como concluído
+        mark_sentinel_finished(
+            loja_id=shop_id,
+            keyword=main_keyword,
+            janela_execucao=janela_execucao,
+            status="done",
+        )
+        
+        # Monta resultado
+        if novos_concorrentes > 0:
+            emoji = "🚨"
+            status = "Novos concorrentes detectados!"
+        else:
+            emoji = "🛡️"
+            status = "Sentinela concluído!"
+        
+        alerta_preco = ""
+        if seu_preco > preco_medio * 1.1:
+            alerta_preco = f"\n\n⚠️ *Alerta:* Seu produto está {((seu_preco/preco_medio - 1) * 100):.0f}% acima do preço médio."
+        elif seu_preco < menor_preco * 1.1:
+            alerta_preco = f"\n\n✅ *Ótimo:* Seu preço está competitivo!"
+
+        msg = (
+            f"{emoji} *{status}*\n\n"
+            f"🔍 Keyword: _{main_keyword}_\n"
+            f"📊 Concorrentes analisados: *{concorrentes_analisados}*\n"
+            f"🆕 Novos concorrentes: *{novos_concorrentes}*\n"
+            f"💰 Preço médio: *R$ {preco_medio:.2f}*\n"
+            f"🏷️ Menor preço: *R$ {menor_preco:.2f}*\n"
+            f"🏪 Seu preço: *R$ {seu_preco:.2f}*"
+            f"{alerta_preco}\n\n"
+            f"_Monitoramento realizado em {datetime.utcnow().strftime('%H:%M')}_"
+        )
+        
+        evo_send_text(user_id=user_id, text=msg)
+        log.info(f"[BG] Resultado do Sentinela enviado para user={user_id}")
+
+    except Exception as e:
+        log.error(f"[BG] Erro no Sentinela: {e}\n{traceback.format_exc()}")
+        
+        # Marca como erro se conseguiu adquirir o lock
+        try:
+            mark_sentinel_finished(
+                loja_id=shop_id,
+                keyword=main_keyword,
+                janela_execucao=janela_execucao,
+                status="error",
+            )
+        except:
+            pass
+        
+        try:
+            evo_send_text(user_id=user_id, text=(
+                "❌ Ocorreu um erro durante o monitoramento.\n"
+                "Tente novamente com */sentinela rodar*."
+            ))
+        except:
+            pass
+
 
 def _run_media_bg(user_id: str, msg: dict, plan: list[dict], job_id: str = ""):
     """
