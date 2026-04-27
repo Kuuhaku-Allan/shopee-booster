@@ -25,7 +25,7 @@ services:
 
   # Evolution API
   evolution_api:
-    image: atendai/evolution-api:latest
+    image: atendai/evolution-api:v2.1.1
     container_name: shopee_evolution
     restart: unless-stopped
     ports:
@@ -113,7 +113,6 @@ services:
     volumes:
       - ./data:/app/data
       - ./uploads:/app/uploads
-      - ./.shopee_config:/app/.shopee_config
     networks:
       - shopee_network
     depends_on:

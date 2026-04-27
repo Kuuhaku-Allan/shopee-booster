@@ -103,22 +103,29 @@ cd ~/shopee-booster
 git checkout feature/whatsapp-bot-core
 ```
 
-### 5. Testar Build Localmente (Opcional mas Recomendado)
+### 5. Testar Build Localmente (OBRIGATÓRIO)
 
-Antes de fazer deploy na Oracle, você pode testar localmente:
+**IMPORTANTE:** Teste localmente ANTES de criar a VM Oracle para evitar descobrir erros na nuvem.
 
 ```bash
-# Testar build do Dockerfile
+# 1. Validar sintaxe do docker-compose
+docker compose -f docker-compose.prod.yml config
+
+# 2. Testar build do Dockerfile
+docker compose -f docker-compose.prod.yml build shopee_api
+
+# 3. (Opcional) Testar docker-compose completo
 chmod +x deploy/oracle/test-local-build.sh
 ./deploy/oracle/test-local-build.sh
 
-# Testar docker-compose completo
 chmod +x deploy/oracle/test-local-compose.sh
 ./deploy/oracle/test-local-compose.sh
 
-# Se tudo passou, parar serviços locais
+# 4. Se tudo passou, parar serviços locais
 docker compose -f docker-compose.prod.yml down
 ```
+
+**Se o build local falhar, NÃO prossiga para a Oracle. Corrija os erros primeiro.**
 
 Veja [deploy/oracle/README.md](deploy/oracle/README.md) para mais detalhes sobre os scripts de teste.
 
