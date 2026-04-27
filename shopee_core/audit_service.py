@@ -100,16 +100,12 @@ def generate_product_optimization(product: dict, segmento: str, api_key: str = N
     item_id = str(product.get("itemid", ""))
     shop_id = str(product.get("shopid", ""))
 
-    # 1. Concorrentes via competitor_service (U8.1)
-    log.info(f"[AUDIT] Buscando concorrentes via competitor_service: keyword={keyword}")
+    # 1. Concorrentes via competitor_service (U8.2)
+    log.info(f"[AUDIT] Buscando concorrentes via search_competitors_safe: keyword={keyword}")
     
-    from shopee_core.competitor_service import search_competitors
+    from shopee_core.competitor_service import search_competitors_safe
     
-    competitors = search_competitors(
-        keyword=keyword,
-        providers=["mercadolivre", "shopee"],  # ML primeiro (mais confiável)
-        limit=10,
-    )
+    competitors = search_competitors_safe(keyword=keyword, limit=10)
     
     log.info(f"[AUDIT] Concorrentes encontrados: {len(competitors)}")
     if competitors:

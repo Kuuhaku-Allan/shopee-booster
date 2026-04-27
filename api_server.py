@@ -1052,7 +1052,7 @@ def _run_sentinel_bg(user_id: str, config: dict):
     try:
         # ── Etapa 1: Import do competitor_service ──────────────────
         log.info("[SENTINELA] Etapa 1/6: importando competitor_service...")
-        from shopee_core.competitor_service import fetch_competitors
+        from shopee_core.competitor_service import search_competitors_safe
         log.info("[SENTINELA] Etapa 1/6 OK: competitor_service importado")
 
         # ── Etapa 2: Leitura de config ─────────────────────────────
@@ -1117,7 +1117,7 @@ def _run_sentinel_bg(user_id: str, config: dict):
 
         # ── Etapa 6: Pronto para executar ──────────────────────────
         log.info("[SENTINELA] Etapa 6/6: pronto para executar keywords")
-        # Nota: fetch_competitors já tem timeout interno via subprocess
+        # Nota: search_competitors_safe já tem timeout interno via subprocess
         log.info("[SENTINELA] Etapa 6/6 OK: sistema pronto")
         
         log.info(f"[SENTINELA] Iniciando loop de {total_keywords} keywords...")
@@ -1162,22 +1162,22 @@ def _run_sentinel_bg(user_id: str, config: dict):
 
             # ── Executa scraping com timeout real via subprocess ───────
             try:
-                concorrentes_raw = fetch_competitors(kw, timeout_seconds=TIMEOUT_PER_KEYWORD) or []
+                concorrentes_raw = search_competitors_safe(kw, limit=10) or []
                 
                 concorrentes = []
                 for i, c in enumerate(concorrentes_raw[:10]):
                     concorrentes.append(
                         {
                             "ranking": i + 1,
-                            "titulo": c.get("nome", ""),
+                            "titulo": c.get("titulo") or c.get("nome", ""),
                             "preco": float(c.get("preco", 0) or 0),
-                            "loja": str(c.get("shop_id") or ""),
+                            "loja": str(c.get("shop_id") or c.get("loja", "")),
                             "url": c.get("url", ""),  # U7.8: Adicionar URL
                             "is_new": False,
                             "keyword": kw,
                             "item_id": c.get("item_id"),
                             "shop_id": c.get("shop_id"),
-                            "source": "shopee",  # U7.8: Adicionar source
+                            "source": c.get("source", ""),  # U7.8: Adicionar source
                         }
                     )
 

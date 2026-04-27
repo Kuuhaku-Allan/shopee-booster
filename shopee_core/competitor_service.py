@@ -284,3 +284,54 @@ def fetch_competitors(keyword: str, timeout_seconds: int = 120) -> list:
         })
     
     return legacy_format
+
+
+# ══════════════════════════════════════════════════════════════════
+# FUNÇÃO UNIFICADA E SEGURA (U8.2)
+# ══════════════════════════════════════════════════════════════════
+
+def search_competitors_safe(keyword: str, limit: int = 10) -> List[Dict]:
+    """
+    Função unificada e segura para buscar concorrentes.
+    Usada por Auditoria e Sentinela.
+    
+    Args:
+        keyword: Palavra-chave para buscar
+        limit: Número máximo de resultados (padrão: 10)
+    
+    Returns:
+        Lista de concorrentes normalizados
+    
+    Comportamento:
+        1. Tenta Mercado Livre primeiro (mais confiável)
+        2. Se ML retornar resultados, retorna imediatamente
+        3. Se ML falhar, tenta Shopee como fallback
+        4. Nunca trava (cada provider tem timeout)
+        5. Logs detalhados de cada tentativa
+    
+    Exemplo:
+        >>> competitors = search_competitors_safe("mochila roxa")
+        >>> print(f"Encontrados {len(competitors)} concorrentes")
+    """
+    log.info(f"[COMPETITOR] search_competitors_safe: keyword={keyword!r}, limit={limit}")
+    
+    # Tenta Mercado Livre primeiro
+    log.info(f"[COMPETITOR] Tentando ML...")
+    ml_results = search_competitors_mercadolivre(keyword, limit=limit)
+    
+    if ml_results:
+        log.info(f"[COMPETITOR] ML retornou {len(ml_results)} resultados - usando")
+        return ml_results[:limit]
+    
+    log.warning(f"[COMPETITOR] ML não retornou resultados - tentando Shopee")
+    
+    # Fallback para Shopee
+    log.info(f"[COMPETITOR] Tentando Shopee...")
+    shopee_results = search_competitors_shopee(keyword, limit=limit, timeout_seconds=60)
+    
+    if shopee_results:
+        log.info(f"[COMPETITOR] Shopee retornou {len(shopee_results)} resultados - usando")
+        return shopee_results[:limit]
+    
+    log.error(f"[COMPETITOR] Nenhum provider retornou resultados para: {keyword!r}")
+    return []
