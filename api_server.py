@@ -377,10 +377,33 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
             log.info(f"[BG] Carregamento de loja para Sentinela agendado: user={msg['user_id']!r}")
 
         elif task == "run_sentinel":
+            # ── U7.2: Salva sessão ANTES de agendar background ─────────
+            config = dict(response["config"])
+            keywords_raw = config.get("keywords") or []
+            keywords_to_run = [k for k in keywords_raw if isinstance(k, str) and k.strip()][:3]
+            
+            config["keywords"] = keywords_to_run
+            
+            save_session(
+                response["user_id"],
+                "processing_sentinel",
+                {
+                    "shop_uid": config.get("shop_uid", ""),
+                    "username": config.get("username", "loja"),
+                    "keywords": keywords_to_run,
+                    "started_at": datetime.utcnow().isoformat(),
+                    "status": "queued",
+                    "current_keyword": "preparando...",
+                    "completed_keywords": 0,
+                    "total_keywords": len(keywords_to_run),
+                },
+            )
+            log.info(f"[WEBHOOK] Sessão processing_sentinel salva: user={msg['user_id']!r}")
+            
             background_tasks.add_task(
                 _run_sentinel_bg,
                 user_id=response["user_id"],
-                config=response["config"],
+                config=config,
             )
             log.info(f"[BG] Execução do Sentinela agendada: user={msg['user_id']!r}")
 
@@ -1012,55 +1035,48 @@ def _run_sentinel_bg(user_id: str, config: dict):
     """
     Background task: executa o Sentinela e envia resultado.
     
-    U7.1 — Observabilidade e estabilidade:
-      - Salva sessão como processing_sentinel
-      - Atualiza progresso durante execução
-      - Limita a 3 keywords por execução (MVP)
-      - Timeout de 90s por keyword
+    U7.2 — Correções de observabilidade:
+      - Sessão já foi salva no webhook como "queued"
+      - Atualiza status para "running" ao iniciar
+      - Timeout real com ThreadPoolExecutor
       - Sempre envia mensagem final
-      - Garante clear_session no finally
+      - Salva resultado antes de limpar sessão
     """
     from shopee_core.sentinel_service import request_sentinel_execution, mark_sentinel_finished
     from shopee_core.sentinel_whatsapp_service import generate_janela_execucao
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
     
     log.info("[SENTINELA] ════════════════════════════════════════════════════")
     log.info(f"[SENTINELA] Início da execução: user={user_id}")
 
     # ── Constantes de controle ────────────────────────────────────
-    MAX_SENTINEL_KEYWORDS_PER_RUN = 3
     TIMEOUT_PER_KEYWORD = 90  # segundos
 
     try:
         from backend_core import fetch_competitors_intercept
-        import signal
-        from contextlib import contextmanager
 
         shop_uid = config.get("shop_uid") or ""
         shop_id = config.get("shop_id", "unknown")  # legado / compat
         username = config.get("username", "loja")
-        keywords_raw = [k.strip() for k in (config.get("keywords") or []) if isinstance(k, str) and k.strip()]
+        keywords = config.get("keywords") or []
+        total_keywords = len(keywords)
 
         if not shop_uid:
             evo_send_text(
                 user_id=user_id,
                 text="❌ Erro: não encontrei a loja ativa (shop_uid) para executar o Sentinela.",
             )
+            clear_session(user_id)
             return
 
-        if not keywords_raw:
+        if not keywords:
             evo_send_text(user_id=user_id, text="❌ Nenhuma keyword configurada para monitoramento.")
+            clear_session(user_id)
             return
-
-        # ── Limita a 3 keywords por execução (MVP) ─────────────────
-        keywords = keywords_raw[:MAX_SENTINEL_KEYWORDS_PER_RUN]
-        total_keywords = len(keywords)
-        
-        if len(keywords_raw) > MAX_SENTINEL_KEYWORDS_PER_RUN:
-            log.info(f"[SENTINELA] Limitando execução: {len(keywords_raw)} → {MAX_SENTINEL_KEYWORDS_PER_RUN} keywords")
 
         janela_execucao = generate_janela_execucao()
 
-        # ── 1. Salva sessão como processing_sentinel ───────────────
+        # ── 1. Atualiza status para "running" ──────────────────────
         save_session(
             user_id,
             "processing_sentinel",
@@ -1076,7 +1092,7 @@ def _run_sentinel_bg(user_id: str, config: dict):
                 "janela_execucao": janela_execucao,
             },
         )
-        log.info(f"[SENTINELA] Sessão salva: processing_sentinel")
+        log.info(f"[SENTINELA] Status atualizado para 'running'")
 
         keywords_executadas: list[str] = []
         keywords_com_erro: list[str] = []
@@ -1084,27 +1100,13 @@ def _run_sentinel_bg(user_id: str, config: dict):
         all_concorrentes: list[dict] = []
         first_lock_block: dict | None = None
 
-        # ── Timeout handler (Windows-compatible) ───────────────────
-        @contextmanager
-        def timeout_context(seconds):
-            """Context manager para timeout (fallback sem signal no Windows)."""
-            import threading
-            
-            timer = None
-            timed_out = [False]
-            
-            def timeout_handler():
-                timed_out[0] = True
-            
-            try:
-                timer = threading.Timer(seconds, timeout_handler)
-                timer.start()
-                yield timed_out
-            finally:
-                if timer:
-                    timer.cancel()
-
-        # ── 2. Processa cada keyword com timeout ───────────────────
+        # ── 2. Processa cada keyword com timeout real ──────────────
+        def fetch_with_timeout(keyword: str) -> list:
+            """Executa fetch com timeout real usando ThreadPoolExecutor."""
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(fetch_competitors_intercept, keyword)
+                return future.result(timeout=TIMEOUT_PER_KEYWORD)
+        
         for idx, kw in enumerate(keywords, 1):
             # ── Atualiza progresso antes de cada keyword ───────────
             save_session(
@@ -1139,13 +1141,9 @@ def _run_sentinel_bg(user_id: str, config: dict):
                     first_lock_block = lock_result
                 continue
 
-            # ── Executa scraping com timeout ───────────────────────
+            # ── Executa scraping com timeout real ──────────────────
             try:
-                with timeout_context(TIMEOUT_PER_KEYWORD) as timed_out:
-                    concorrentes_raw = fetch_competitors_intercept(kw) or []
-                    
-                    if timed_out[0]:
-                        raise TimeoutError(f"Timeout de {TIMEOUT_PER_KEYWORD}s excedido")
+                concorrentes_raw = fetch_with_timeout(kw) or []
                 
                 concorrentes = []
                 for i, c in enumerate(concorrentes_raw[:10]):
@@ -1193,8 +1191,8 @@ def _run_sentinel_bg(user_id: str, config: dict):
                     status="done",
                 )
                 
-            except TimeoutError as e:
-                log.error(f"[SENTINELA] Timeout na keyword={kw!r}: {e}")
+            except FutureTimeoutError as e:
+                log.error(f"[SENTINELA] Timeout na keyword={kw!r}: {TIMEOUT_PER_KEYWORD}s excedido")
                 keywords_timeout.append(kw)
                 try:
                     mark_sentinel_finished(
