@@ -1399,6 +1399,7 @@ def _run_sentinel_bg(user_id: str, config: dict):
                     resultado=resultado,
                     chart_path=chart_path,
                     table_path=table_csv_path,
+                    table_png_path=table_png_path,  # U7.9: Adicionar tabela PNG
                 )
                 sent_to_telegram = True
                 log.info("[SENTINELA] Relatório enviado ao Telegram com sucesso")

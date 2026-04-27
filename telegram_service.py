@@ -206,7 +206,8 @@ class TelegramSentinela:
         self,
         resultado: dict,
         chart_path: Optional[str] = None,
-        table_path: Optional[str] = None
+        table_path: Optional[str] = None,
+        table_png_path: Optional[str] = None  # U7.9: Adicionar tabela PNG
     ) -> bool:
         """
         Envia relatório completo do Sentinela.
@@ -215,6 +216,7 @@ class TelegramSentinela:
             resultado: Dados estruturados do Sentinela
             chart_path: Caminho do gráfico PNG (opcional)
             table_path: Caminho da tabela CSV (opcional)
+            table_png_path: Caminho da tabela PNG (opcional) - U7.9
         
         Returns:
             True se enviou com sucesso
@@ -231,19 +233,26 @@ class TelegramSentinela:
             if not success_msg:
                 log.warning("[TELEGRAM] Falha ao enviar mensagem do relatório")
             
-            # 2. Envia gráfico se disponível
+            # 2. Envia gráfico de preços se disponível
             if chart_path and Path(chart_path).exists():
                 caption = "📊 <b>Gráfico de Preços</b>"
                 success_chart = self.enviar_foto(chart_path, caption)
                 if not success_chart:
                     log.warning("[TELEGRAM] Falha ao enviar gráfico")
             
-            # 3. Envia tabela se disponível
+            # 3. Envia tabela PNG se disponível (U7.9 - prioridade sobre CSV)
+            if table_png_path and Path(table_png_path).exists():
+                caption = "📋 <b>Tabela de Concorrentes</b>"
+                success_table_png = self.enviar_foto(table_png_path, caption)
+                if not success_table_png:
+                    log.warning("[TELEGRAM] Falha ao enviar tabela PNG")
+            
+            # 4. Envia CSV como documento (para exportação/análise)
             if table_path and Path(table_path).exists():
-                caption = "📄 <b>Tabela de Concorrentes</b>"
+                caption = "📄 <b>Dados para Exportação (CSV)</b>"
                 success_table = self.enviar_documento(table_path, caption)
                 if not success_table:
-                    log.warning("[TELEGRAM] Falha ao enviar tabela")
+                    log.warning("[TELEGRAM] Falha ao enviar CSV")
             
             return success_msg
             

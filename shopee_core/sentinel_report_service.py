@@ -198,7 +198,7 @@ def generate_competitor_table_csv(df: pd.DataFrame, output_path: str) -> str:
 
 def generate_competitor_table_png(df: pd.DataFrame, output_path: str) -> str:
     """
-    Gera imagem PNG da tabela de concorrentes (opcional).
+    Gera imagem PNG da tabela de concorrentes com formatação profissional.
     
     Args:
         df: DataFrame com dados dos concorrentes
@@ -212,53 +212,92 @@ def generate_competitor_table_png(df: pd.DataFrame, output_path: str) -> str:
         return ""
     
     try:
-        # Limita a 15 linhas para caber na imagem
+        import textwrap
+        
+        # Limita a top 15 para legibilidade (U7.9)
         df_display = df.head(15).copy()
         
-        # Formata preços
+        # Renomeia colunas para ficarem mais curtas (U7.9)
+        df_display = df_display.rename(columns={
+            "Ranking": "Rank",
+            "Título": "Produto",
+            "Preço": "Preço",
+            "Loja": "Loja",
+            "Novo": "Novo"
+        })
+        
+        # Formata preços (U7.9)
         df_display["Preço"] = df_display["Preço"].apply(lambda x: f"R$ {x:.2f}")
         
-        # Configura figura
-        fig, ax = plt.subplots(figsize=(12, len(df_display) * 0.5 + 1))
-        ax.axis('tight')
-        ax.axis('off')
+        # Quebra de linha em títulos longos (U7.9)
+        df_display["Produto"] = df_display["Produto"].apply(
+            lambda x: "\n".join(textwrap.wrap(str(x), width=28))
+        )
         
-        # Cria tabela
+        # Quebra de linha em lojas longas (U7.9)
+        df_display["Loja"] = df_display["Loja"].apply(
+            lambda x: "\n".join(textwrap.wrap(str(x), width=18))
+        )
+        
+        # Calcula altura da figura baseado no número de linhas (U7.9)
+        nrows = len(df_display)
+        fig_height = max(4, nrows * 0.65 + 1.6)
+        
+        # Configura figura com tamanho adequado (U7.9)
+        fig, ax = plt.subplots(figsize=(14, fig_height))
+        ax.axis("off")
+        
+        # Cria tabela com larguras otimizadas (U7.9)
         table = ax.table(
             cellText=df_display.values,
             colLabels=df_display.columns,
-            cellLoc='left',
-            loc='center',
-            colWidths=[0.1, 0.4, 0.15, 0.25, 0.1]
+            cellLoc="left",
+            colLoc="center",
+            loc="center",
+            bbox=[0, 0, 1, 1],
+            colWidths=[0.08, 0.42, 0.14, 0.24, 0.12],  # Rank, Produto, Preço, Loja, Novo
         )
         
-        # Estiliza
+        # Configurações de fonte (U7.9)
         table.auto_set_font_size(False)
         table.set_fontsize(9)
-        table.scale(1, 2)
+        table.scale(1, 1.6)  # Altura de linha aumentada
         
-        # Header em negrito
-        for i in range(len(df_display.columns)):
-            cell = table[(0, i)]
-            cell.set_facecolor('#2E86AB')
-            cell.set_text_props(weight='bold', color='white')
-        
-        # Alterna cores das linhas
-        for i in range(1, len(df_display) + 1):
-            for j in range(len(df_display.columns)):
-                cell = table[(i, j)]
-                if i % 2 == 0:
-                    cell.set_facecolor('#F0F0F0')
+        # Estilo profissional com bordas visíveis (U7.9)
+        for (row, col), cell in table.get_celld().items():
+            # Bordas em todas as células
+            cell.set_edgecolor("#B8B8B8")
+            cell.set_linewidth(0.8)
+            
+            if row == 0:
+                # Cabeçalho destacado
+                cell.set_facecolor("#2E86AB")
+                cell.set_text_props(weight="bold", color="white", ha="center", va="center")
+                cell.set_linewidth(1.2)
+                cell.set_edgecolor("#7A7A7A")
+            else:
+                # Zebra striping para melhor leitura
+                cell.set_facecolor("#F7F7F7" if row % 2 == 0 else "white")
+                
+                # Destaca novos concorrentes com fundo verde-claro (U7.9)
+                if col == 4 and df_display.iloc[row - 1]["Novo"] == "✓":
+                    cell.set_facecolor("#D4EDDA")
+                
+                # Alinhamento por coluna (U7.9)
+                if col in [0, 2, 4]:  # Rank, Preço, Novo
+                    cell.set_text_props(ha="center", va="center")
+                else:  # Produto, Loja
+                    cell.set_text_props(ha="left", va="center")
         
         plt.tight_layout()
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=180, bbox_inches="tight", pad_inches=0.15)
         plt.close()
         
         log.info(f"[REPORT] PNG da tabela salvo: {output_path}")
         return output_path
         
     except Exception as e:
-        log.error(f"[REPORT] Erro ao gerar PNG da tabela: {e}")
+        log.error(f"[REPORT] Erro ao gerar PNG da tabela: {e}", exc_info=True)
         plt.close()
         return ""
 

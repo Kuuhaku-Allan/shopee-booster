@@ -2186,17 +2186,9 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
                 resultado=resultado,
                 chart_path=chart_path if chart_exists or chart_path else None,
                 table_path=csv_path if csv_exists or csv_path else None,
+                table_png_path=table_png_path if table_png_exists or table_png_path else None,  # U7.9
             )
             log.info("[TELEGRAM] Resumo e arquivos enviados")
-            
-            # Envia tabela PNG se existir
-            if table_png_exists and table_png_path:
-                try:
-                    log.info("[TELEGRAM] Enviando tabela PNG...")
-                    telegram.enviar_foto(table_png_path, caption="📊 Tabela de Concorrentes")
-                    log.info("[TELEGRAM] Tabela PNG enviada")
-                except Exception as e:
-                    log.error(f"[TELEGRAM] Erro ao enviar tabela PNG: {e}")
             
             # Marca como enviado
             mark_sentinel_run_telegram_sent(last_run["run_id"])
