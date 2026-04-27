@@ -41,8 +41,10 @@ services:
       DATABASE_SAVE_DATA_INSTANCE: "true"
       DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
       DATABASE_SAVE_MESSAGE_UPDATE: "true"
-      DATABASE_SAVE_DATA_CONTACTS: "true"
-      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
       
       # Autenticação
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
@@ -66,6 +68,14 @@ services:
       # Configurações
       CONFIG_SESSION_PHONE_CLIENT: "ShopeeBooster"
       CONFIG_SESSION_PHONE_NAME: "Chrome"
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1033773198"
+      
+      # Cache (workaround para QR Code)
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      
+      # LID Mode (desabilitar para usar JID tradicional)
+      WPP_LID_MODE: "false"
       
     volumes:
       - ./evolution_instances:/evolution/instances
@@ -75,11 +85,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   # ShopeeBooster API
   shopee_api:
@@ -116,24 +121,23 @@ services:
     networks:
       - shopee_network
     depends_on:
-      evolution_api:
-        condition: service_healthy
+      - evolution_api
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8787/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  # Cloudflare Tunnel
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: shopee_cloudflared
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
-    networks:
-      - shopee_network
-    depends_on:
-      - shopee_api
+  # Cloudflare Tunnel (comentado - usar tunnel manual temporário)
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: shopee_cloudflared
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+  #   networks:
+  #     - shopee_network
+  #   depends_on:
+  #     - shopee_api
 
 networks:
   shopee_network:

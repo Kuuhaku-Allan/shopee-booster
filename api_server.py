@@ -2226,6 +2226,212 @@ def evolution_instance_status_endpoint():
         return {"ok": False, "state": "not_configured", "error": str(e), "hint": "Configure EVOLUTION_API_URL, EVOLUTION_API_KEY e WHATSAPP_INSTANCE no .shopee_config"}
 
 
+@app.get("/evolution/qrcode", tags=["WhatsApp"])
+def evolution_qrcode_endpoint():
+    """
+    Gera e retorna o QR Code para conectar o WhatsApp.
+    Retorna uma página HTML com o QR Code em imagem.
+    
+    Acesse no navegador: http://localhost:8787/evolution/qrcode
+    """
+    import requests
+    from shopee_core.config import load_app_config
+    
+    try:
+        cfg = load_app_config()
+        
+        # Validar configurações
+        missing = []
+        if not cfg.get("evolution_api_url"):
+            missing.append("EVOLUTION_API_URL")
+        if not cfg.get("evolution_api_key"):
+            missing.append("EVOLUTION_API_KEY")
+        if not cfg.get("whatsapp_instance"):
+            missing.append("WHATSAPP_INSTANCE")
+        
+        if missing:
+            return {
+                "ok": False,
+                "error": f"Configurações ausentes: {', '.join(missing)}",
+                "hint": "Configure no .env.local ou .shopee_config"
+            }
+        
+        # Chamar Evolution API
+        url = f"{cfg['evolution_api_url'].rstrip('/')}/instance/connect/{cfg['whatsapp_instance']}"
+        headers = {
+            "apikey": cfg["evolution_api_key"]
+        }
+        
+        log.info(f"[QR] Buscando QR Code → {url}")
+        
+        r = requests.get(url, headers=headers, timeout=30)
+        
+        if not r.ok:
+            log.error(f"[QR] Erro ao buscar QR Code: {r.status_code} - {r.text}")
+            return {
+                "ok": False,
+                "error": f"Evolution API retornou erro: {r.status_code}",
+                "details": r.text[:500]
+            }
+        
+        data = r.json()
+        
+        # Verificar se tem QR code
+        if not data.get("code"):
+            return {
+                "ok": False,
+                "error": "QR Code não disponível",
+                "hint": "A instância pode já estar conectada. Verifique /evolution/instance-status",
+                "data": data
+            }
+        
+        # Retornar HTML com QR Code
+        qr_base64 = data["code"]
+        pairing_code = data.get("pairingCode", "")
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>ShopeeBooster - QR Code WhatsApp</title>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                    margin: 0;
+                    padding: 20px;
+                }}
+                .container {{
+                    background: white;
+                    border-radius: 20px;
+                    padding: 40px;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                    text-align: center;
+                    max-width: 500px;
+                }}
+                h1 {{
+                    color: #333;
+                    margin-bottom: 10px;
+                }}
+                .subtitle {{
+                    color: #666;
+                    margin-bottom: 30px;
+                }}
+                .qr-container {{
+                    background: white;
+                    padding: 20px;
+                    border-radius: 10px;
+                    display: inline-block;
+                    margin: 20px 0;
+                }}
+                img {{
+                    max-width: 100%;
+                    height: auto;
+                }}
+                .pairing-code {{
+                    background: #f0f0f0;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin: 20px 0;
+                    font-size: 24px;
+                    font-weight: bold;
+                    letter-spacing: 2px;
+                    color: #333;
+                }}
+                .instructions {{
+                    text-align: left;
+                    background: #f8f9fa;
+                    padding: 20px;
+                    border-radius: 10px;
+                    margin-top: 20px;
+                }}
+                .instructions ol {{
+                    margin: 10px 0;
+                    padding-left: 20px;
+                }}
+                .instructions li {{
+                    margin: 8px 0;
+                    color: #555;
+                }}
+                .status {{
+                    margin-top: 20px;
+                    padding: 10px;
+                    background: #e3f2fd;
+                    border-radius: 5px;
+                    color: #1976d2;
+                }}
+                .refresh-btn {{
+                    background: #667eea;
+                    color: white;
+                    border: none;
+                    padding: 12px 30px;
+                    border-radius: 25px;
+                    font-size: 16px;
+                    cursor: pointer;
+                    margin-top: 20px;
+                    transition: background 0.3s;
+                }}
+                .refresh-btn:hover {{
+                    background: #5568d3;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🚀 ShopeeBooster</h1>
+                <p class="subtitle">Conectar WhatsApp</p>
+                
+                <div class="qr-container">
+                    <img src="data:image/png;base64,{qr_base64}" alt="QR Code WhatsApp">
+                </div>
+                
+                {f'<div class="pairing-code">Código: {pairing_code}</div>' if pairing_code else ''}
+                
+                <div class="instructions">
+                    <strong>📱 Como conectar:</strong>
+                    <ol>
+                        <li>Abra o WhatsApp no seu celular</li>
+                        <li>Toque em <strong>Mais opções</strong> (⋮) ou <strong>Configurações</strong></li>
+                        <li>Toque em <strong>Aparelhos conectados</strong></li>
+                        <li>Toque em <strong>Conectar um aparelho</strong></li>
+                        <li>Aponte a câmera para este QR Code</li>
+                    </ol>
+                </div>
+                
+                <div class="status">
+                    ⏳ Aguardando conexão...
+                </div>
+                
+                <button class="refresh-btn" onclick="location.reload()">
+                    🔄 Atualizar QR Code
+                </button>
+                
+                <script>
+                    // Auto-refresh a cada 30 segundos
+                    setTimeout(() => location.reload(), 30000);
+                </script>
+            </div>
+        </body>
+        </html>
+        """
+        
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(content=html)
+        
+    except Exception as e:
+        log.error(f"[QR] Exceção ao buscar QR Code: {e}")
+        return {
+            "ok": False,
+            "error": str(e)
+        }
+
+
 @app.post("/evolution/test-send", tags=["WhatsApp"])
 def evolution_test_send(
     number: str,

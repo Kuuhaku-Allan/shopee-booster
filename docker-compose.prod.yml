@@ -41,8 +41,10 @@ services:
       DATABASE_SAVE_DATA_INSTANCE: "true"
       DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
       DATABASE_SAVE_MESSAGE_UPDATE: "true"
-      DATABASE_SAVE_DATA_CONTACTS: "true"
-      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
       
       # Autenticação
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
@@ -66,6 +68,14 @@ services:
       # Configurações
       CONFIG_SESSION_PHONE_CLIENT: "ShopeeBooster"
       CONFIG_SESSION_PHONE_NAME: "Chrome"
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1033773198"
+      
+      # Cache (workaround para QR Code)
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      
+      # LID Mode (desabilitar para usar JID tradicional)
+      WPP_LID_MODE: "false"
       
     volumes:
       - evolution_instances:/evolution/instances

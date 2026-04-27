@@ -140,75 +140,62 @@ def _send_single_text(user_id: str, text: str) -> dict:
     if not number:
         return {"ok": False, "error": "Número/JID inválido ou vazio."}
 
-    url_with_instance = f"{_base_url()}/message/sendText/{_instance()}"
-    url_no_instance = f"{_base_url()}/message/sendText"
+    # Formato oficial da Evolution API v2.1.1
+    # Documentação: https://docs.evoapicloud.com/api-reference/message-controller/send-text
+    url = f"{_base_url()}/message/sendText/{_instance()}"
+    
+    # Payload conforme documentação oficial
+    payload = {
+        "number": number,
+        "text": text
+    }
 
-    # Evolution API varia bastante entre versões/forks:
-    # - algumas usam instância na URL
-    # - outras exigem "instance" no payload
-    # - algumas aceitam "text", outras exigem "textMessage.text"
-    attempts: list[tuple[str, dict]] = [
-        # Sem options
-        (url_with_instance, {"number": number, "text": text}),
-        (url_with_instance, {"number": number, "textMessage": {"text": text}}),
-        # Alguns forks exigem "options" (mesmo vazio)
-        (url_with_instance, {"number": number, "options": {}, "text": text}),
-        (url_with_instance, {"number": number, "options": {}, "textMessage": {"text": text}}),
-        # Instância no payload (algumas versões)
-        (url_no_instance, {"instance": _instance(), "number": number, "text": text}),
-        (url_no_instance, {"instance": _instance(), "number": number, "textMessage": {"text": text}}),
-        (url_no_instance, {"instance": _instance(), "number": number, "options": {}, "text": text}),
-        (url_no_instance, {"instance": _instance(), "number": number, "options": {}, "textMessage": {"text": text}}),
-    ]
+    log.info(f"[EVO] _send_single_text → {url} number={number} text_len={len(text)}")
 
-    for attempt, (url, payload) in enumerate(attempts, start=1):
-        try:
-            r = requests.post(
-                url,
-                json=payload,
-                headers=_headers(),
-                timeout=30,
-            )
-            log.info(
-                f"[EVO] _send_single_text attempt={attempt} "
-                f"status={r.status_code} ok={r.ok}"
-            )
+    try:
+        r = requests.post(
+            url,
+            json=payload,
+            headers=_headers(),
+            timeout=30,
+        )
+        
+        log.info(f"[EVO] _send_single_text status={r.status_code} ok={r.ok}")
 
-            # Sucesso
-            if r.ok:
-                return {
-                    "ok": True,
-                    "status_code": r.status_code,
-                    "data": r.json() if r.content else {},
-                }
-
-            # Tenta próximos formatos/URLs
-            if r.status_code in (400, 401, 403, 404, 422):
-                # Só loga detalhes no último attempt para evitar spam
-                if attempt < len(attempts):
-                    continue
-
+        # Sucesso
+        if r.ok:
             return {
-                "ok": False,
+                "ok": True,
                 "status_code": r.status_code,
                 "data": r.json() if r.content else {},
-                "raw": r.text[:500],
             }
 
-        except requests.exceptions.ConnectionError:
-            log.error("[EVO] _send_single_text — Evolution API inacessível (ConnectionError)")
-            return {
-                "ok": False,
-                "error": (
-                    "Não foi possível conectar à Evolution API. "
-                    "Verifique se o Docker está rodando e EVOLUTION_API_URL está correto."
-                ),
-            }
-        except Exception as e:
-            log.error(f"[EVO] _send_single_text — exceção inesperada: {e}")
-            return {"ok": False, "error": str(e)}
+        # Falha - loga detalhes completos
+        error_data = r.json() if r.content else {}
+        log.error(
+            f"[EVO] _send_single_text FALHOU: "
+            f"status={r.status_code} response={r.text[:500]}"
+        )
+        
+        return {
+            "ok": False,
+            "status_code": r.status_code,
+            "data": error_data,
+            "raw": r.text[:500],
+        }
 
-    return {"ok": False, "error": "Todos os formatos de envio falharam."}
+    except requests.exceptions.ConnectionError:
+        log.error("[EVO] _send_single_text — Evolution API inacessível (ConnectionError)")
+        return {
+            "ok": False,
+            "error": (
+                "Não foi possível conectar à Evolution API. "
+                "Verifique se o Docker está rodando e EVOLUTION_API_URL está correto."
+            ),
+        }
+    except Exception as e:
+        log.error(f"[EVO] _send_single_text — exceção inesperada: {e}")
+        return {"ok": False, "error": str(e)}
 
 
 def send_media(
