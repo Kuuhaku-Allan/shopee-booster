@@ -2044,6 +2044,48 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
             "config": config,
         }
     
+    # /sentinela destravar (U7.5)
+    if lower in {"/sentinela destravar", "/sentinela limpar", "/sentinela limpar-lock"}:
+        active_shop = get_active_shop(user_id)
+        if not active_shop:
+            return _txt(
+                "Você ainda não tem uma loja ativa.\n\n"
+                "Use */loja adicionar* para cadastrar uma loja primeiro."
+            )
+
+        config = get_sentinel_config(user_id, active_shop.get("shop_uid"))
+        if not config:
+            return _txt(
+                "❌ Sentinela não configurado.\n\n"
+                "Use */sentinela configurar* primeiro."
+            )
+        
+        # Limpa locks retryable (timeout/error/failed/cancelled)
+        from shopee_core.bot_state import clear_retryable_sentinel_locks
+        from shopee_core.sentinel_whatsapp_service import generate_janela_execucao
+        
+        janela = generate_janela_execucao()
+        count = clear_retryable_sentinel_locks(
+            user_id=user_id,
+            shop_uid=active_shop.get("shop_uid"),
+            janela_execucao=janela,
+        )
+        
+        if count > 0:
+            return _txt(
+                f"🧹 *Locks removidos: {count}*\n\n"
+                f"Locks antigos com status *timeout/error* foram removidos.\n\n"
+                f"Agora você pode rodar:\n"
+                f"*/sentinela rodar*"
+            )
+        else:
+            return _txt(
+                "✅ *Nenhum lock para remover*\n\n"
+                "Não há locks antigos bloqueando a execução.\n\n"
+                "Você pode rodar:\n"
+                "*/sentinela rodar*"
+            )
+    
     # /sentinela pausar
     if lower in {"/sentinela pausar", "/sentinela parar"}:
         active_shop = get_active_shop(user_id)

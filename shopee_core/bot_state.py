@@ -135,6 +135,10 @@ def init_bot_state_db():
 # SENTINELA — Lock de execução único
 # ══════════════════════════════════════════════════════════════
 
+# Status que permitem retry (não bloqueiam nova execução)
+RETRYABLE_STATUSES = {"timeout", "error", "failed", "cancelled"}
+
+
 def try_acquire_sentinel_lock(
     loja_id: str,
     keyword: str,
@@ -147,7 +151,10 @@ def try_acquire_sentinel_lock(
     Tenta adquirir o lock para a janela de execução.
 
     Retorna True se o lock foi adquirido (executor pode rodar).
-    Retorna False se já existe um lock nessa janela (outro executor já rodou/está rodando).
+    Retorna False se já existe um lock nessa janela com status 'running' ou 'done'.
+
+    Se existe lock com status retryable (timeout/error/failed/cancelled),
+    reaproveita o lock e atualiza para 'running'.
 
     O campo UNIQUE garante atomicidade via SQLite.
     
@@ -160,8 +167,73 @@ def try_acquire_sentinel_lock(
         shop_uid: UID da loja (U7)
     """
     init_bot_state_db()
-    try:
-        with get_conn() as conn:
+    
+    with get_conn() as conn:
+        # Verifica se já existe lock
+        existing = get_sentinel_lock_status(
+            loja_id=loja_id,
+            keyword=keyword,
+            janela_execucao=janela_execucao,
+            user_id=user_id,
+            shop_uid=shop_uid,
+        )
+        
+        if existing:
+            status = existing.get("status")
+            
+            # Se status é retryable, reaproveita o lock
+            if status in RETRYABLE_STATUSES:
+                if user_id and shop_uid:
+                    # Novo formato (U7)
+                    conn.execute(
+                        """
+                        UPDATE sentinela_locks
+                        SET executor = ?,
+                            status = 'running',
+                            started_at = ?,
+                            finished_at = NULL
+                        WHERE user_id = ?
+                          AND shop_uid = ?
+                          AND keyword = ?
+                          AND janela_execucao = ?
+                        """,
+                        (
+                            executor,
+                            datetime.utcnow().isoformat(),
+                            user_id,
+                            shop_uid,
+                            keyword,
+                            janela_execucao,
+                        ),
+                    )
+                else:
+                    # Formato legado
+                    conn.execute(
+                        """
+                        UPDATE sentinela_locks
+                        SET executor = ?,
+                            status = 'running',
+                            started_at = ?,
+                            finished_at = NULL
+                        WHERE loja_id = ?
+                          AND keyword = ?
+                          AND janela_execucao = ?
+                        """,
+                        (
+                            executor,
+                            datetime.utcnow().isoformat(),
+                            loja_id,
+                            keyword,
+                            janela_execucao,
+                        ),
+                    )
+                return True
+            
+            # Status 'running' ou 'done' → bloqueia
+            return False
+        
+        # Não existe lock → cria novo
+        try:
             conn.execute(
                 """
                 INSERT INTO sentinela_locks
@@ -171,10 +243,10 @@ def try_acquire_sentinel_lock(
                 (user_id, shop_uid, loja_id, keyword, janela_execucao, executor,
                  datetime.utcnow().isoformat()),
             )
-        return True
-    except sqlite3.IntegrityError:
-        # Violação de UNIQUE → lock já existe
-        return False
+            return True
+        except sqlite3.IntegrityError:
+            # Race condition: outro processo criou o lock entre o SELECT e o INSERT
+            return False
 
 
 def finish_sentinel_lock(
@@ -260,6 +332,69 @@ def get_sentinel_lock_status(
                 (loja_id, keyword, janela_execucao),
             ).fetchone()
     return dict(row) if row else None
+
+
+def clear_retryable_sentinel_locks(
+    user_id: str = None,
+    shop_uid: str = None,
+    loja_id: str = None,
+    janela_execucao: str = None,
+) -> int:
+    """
+    Remove locks com status retryable (timeout/error/failed/cancelled).
+    
+    Args:
+        user_id: JID do WhatsApp (U7)
+        shop_uid: UID da loja (U7)
+        loja_id: ID da loja (legado)
+        janela_execucao: Janela específica (None = janela atual)
+    
+    Returns:
+        Número de locks removidos
+    """
+    init_bot_state_db()
+    
+    if janela_execucao is None:
+        from shopee_core.sentinel_whatsapp_service import generate_janela_execucao
+        janela_execucao = generate_janela_execucao()
+    
+    with get_conn() as conn:
+        if user_id and shop_uid:
+            # Novo formato (U7)
+            cur = conn.execute(
+                """
+                DELETE FROM sentinela_locks
+                WHERE user_id = ?
+                  AND shop_uid = ?
+                  AND janela_execucao = ?
+                  AND status IN ('timeout', 'error', 'failed', 'cancelled')
+                """,
+                (user_id, shop_uid, janela_execucao),
+            )
+        elif loja_id:
+            # Formato legado
+            cur = conn.execute(
+                """
+                DELETE FROM sentinela_locks
+                WHERE loja_id = ?
+                  AND janela_execucao = ?
+                  AND status IN ('timeout', 'error', 'failed', 'cancelled')
+                """,
+                (loja_id, janela_execucao),
+            )
+        else:
+            # Remove todos os locks retryable da janela
+            cur = conn.execute(
+                """
+                DELETE FROM sentinela_locks
+                WHERE janela_execucao = ?
+                  AND status IN ('timeout', 'error', 'failed', 'cancelled')
+                """,
+                (janela_execucao,),
+            )
+        
+        conn.commit()
+        return cur.rowcount
 
 
 # ══════════════════════════════════════════════════════════════
