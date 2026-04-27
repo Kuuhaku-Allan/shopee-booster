@@ -206,7 +206,7 @@ def search_competitors(
     
     Args:
         keyword: Palavra-chave para buscar
-        providers: Lista de providers a usar (padrão: ["shopee", "mercadolivre"])
+        providers: Lista de providers a usar (padrão: ["mercadolivre", "shopee"])
         limit: Número máximo de resultados por provider (padrão: 10)
     
     Returns:
@@ -217,9 +217,9 @@ def search_competitors(
         >>> print(f"Encontrados {len(competitors)} concorrentes")
     """
     if providers is None:
-        # Shopee como principal (funciona via subprocess isolado)
-        # Mercado Livre como fallback
-        providers = ["shopee", "mercadolivre"]
+        # Mercado Livre como principal (API pública, mais confiável)
+        # Shopee como fallback (subprocess isolado)
+        providers = ["mercadolivre", "shopee"]
     
     log.info(f"[COMPETITOR] Buscando concorrentes para: {keyword!r}")
     log.info(f"[COMPETITOR] Providers configurados: {providers}")
@@ -227,22 +227,31 @@ def search_competitors(
     all_results = []
     
     for provider in providers:
+        log.info(f"[COMPETITOR] Tentando provider: {provider}")
+        
         if provider == "mercadolivre":
             results = search_competitors_mercadolivre(keyword, limit=limit)
             if results:
                 all_results.extend(results)
-                log.info(f"[COMPETITOR] Provider ML retornou resultados")
-                break
+                log.info(f"[COMPETITOR] Provider ML retornou {len(results)} resultados - usando")
+                break  # Sucesso, não precisa tentar outros
+            else:
+                log.warning(f"[COMPETITOR] Provider ML não retornou resultados - tentando próximo")
         
         elif provider == "shopee":
             results = search_competitors_shopee(keyword, limit=limit, timeout_seconds=60)
             if results:
                 all_results.extend(results)
-                log.info(f"[COMPETITOR] Provider Shopee retornou resultados")
-                break
+                log.info(f"[COMPETITOR] Provider Shopee retornou {len(results)} resultados - usando")
+                break  # Sucesso, não precisa tentar outros
+            else:
+                log.warning(f"[COMPETITOR] Provider Shopee não retornou resultados - tentando próximo")
         
         else:
             log.warning(f"[COMPETITOR] Provider desconhecido: {provider!r}")
+    
+    if not all_results:
+        log.warning(f"[COMPETITOR] Nenhum provider retornou resultados para: {keyword!r}")
     
     log.info(f"[COMPETITOR] Resultado final: {len(all_results)} concorrentes")
     return all_results[:limit]
