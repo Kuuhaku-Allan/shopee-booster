@@ -1,0 +1,4 @@
+INFO:     127.0.0.1:13458 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:6703 - "POST /webhook/evolution HTTP/1.1" 200 OK
+INFO:     127.0.0.1:13694 - "POST /webhook/evolution HTTP/1.1" 200 OK
+INFO:     127.0.0.1:3148 - "POST /webhook/evolution HTTP/1.1" 200 OK

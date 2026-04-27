@@ -1,0 +1,9 @@
+C:\Users\Defal\AppData\Roaming\Python\Python313\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (6.0.0.post1)/charset_normalizer (3.4.5) doesn't match a supported version!
+  warnings.warn(
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://192.168.15.143:8501
+  External URL: http://189.110.68.157:8501
+

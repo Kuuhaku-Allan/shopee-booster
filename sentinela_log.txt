@@ -1,0 +1,78 @@
+[2026-04-26 17:18:22] [Main] Iniciando Shopee Booster v4.0.0
+[2026-04-26 17:18:22] [Main] RUNTIME_DIR=C:\Users\Defal\Documents\Faculdade\Projeto Shopee
+[2026-04-26 17:18:22] [Main] frozen=False
+[2026-04-26 17:18:26] [Playwright] Iniciando instalação do Chromium...
+[2026-04-26 17:18:26] [Playwright] Chromium não encontrado. Instalando...
+[2026-04-26 17:18:37] [Playwright] Chromium instalado com sucesso.
+[2026-04-26 17:18:39] [Main] PLAYWRIGHT_BROWSERS_PATH=C:\Users\Defal\Documents\Faculdade\Projeto Shopee\pw-browsers
+[2026-04-26 17:18:39] [Main] Iniciando Streamlit...
+[2026-04-26 17:18:41] [Main] Aguardando Streamlit subir...
+[2026-04-26 17:18:41] Sentinela thread iniciada. RUNTIME_DIR=C:\Users\Defal\Documents\Faculdade\Projeto Shopee | DB=C:\Users\Defal\Documents\Faculdade\Projeto Shopee\data\sentinela.db
+[2026-04-26 17:18:44] [Main] Streamlit OK. Iniciando janela...
+[2026-04-26 17:18:46] [Main] Abrindo janela nativa...
+[2026-04-26 17:18:53] Iniciando ciclo — 7 keywords: ['mochilas', 'mochila', 'infantil', 'rosa', 'escolar', 'feminina', 'lilas']
+[2026-04-26 17:18:53] [headless] Iniciando busca 'mochilas' | exe=C:\Python313\python.exe | PLAYWRIGHT_BROWSERS_PATH=C:\Users\Defal\Documents\Faculdade\Projeto Shopee\pw-browsers
+[2026-04-26 17:18:55] [headless] EXCEÇÃO para 'mochilas': 'NoneType' object has no attribute 'strip'
+Traceback (most recent call last):
+  File "C:\Users\Defal\Documents\Faculdade\Projeto Shopee\launcher.py", line 606, in _fetch_competitors_headless
+    f"stderr={result.stderr.strip()[:500] if result.stderr.strip() else '<vazio>'}"
+                                             ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'strip'
+
+[2026-04-26 17:18:55] Sem resultados para 'mochilas' — veja log acima.
+[2026-04-26 17:18:55] [headless] Iniciando busca 'mochila' | exe=C:\Python313\python.exe | PLAYWRIGHT_BROWSERS_PATH=C:\Users\Defal\Documents\Faculdade\Projeto Shopee\pw-browsers
+[2026-04-26 17:18:57] [headless] EXCEÇÃO para 'mochila': 'NoneType' object has no attribute 'strip'
+Traceback (most recent call last):
+  File "C:\Users\Defal\Documents\Faculdade\Projeto Shopee\launcher.py", line 606, in _fetch_competitors_headless
+    f"stderr={result.stderr.strip()[:500] if result.stderr.strip() else '<vazio>'}"
+                                             ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'strip'
+
+[2026-04-26 17:18:57] Sem resultados para 'mochila' — veja log acima.
+[2026-04-26 17:18:57] [headless] Iniciando busca 'infantil' | exe=C:\Python313\python.exe | PLAYWRIGHT_BROWSERS_PATH=C:\Users\Defal\Documents\Faculdade\Projeto Shopee\pw-browsers
+[2026-04-26 17:18:59] [headless] EXCEÇÃO para 'infantil': 'NoneType' object has no attribute 'strip'
+Traceback (most recent call last):
+  File "C:\Users\Defal\Documents\Faculdade\Projeto Shopee\launcher.py", line 606, in _fetch_competitors_headless
+    f"stderr={result.stderr.strip()[:500] if result.stderr.strip() else '<vazio>'}"
+                                             ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'strip'
+
+[2026-04-26 17:18:59] Sem resultados para 'infantil' — veja log acima.
+[2026-04-26 17:18:59] [headless] Iniciando busca 'rosa' | exe=C:\Python313\python.exe | PLAYWRIGHT_BROWSERS_PATH=C:\Users\Defal\Documents\Faculdade\Projeto Shopee\pw-browsers
+[2026-04-26 17:19:01] [headless] EXCEÇÃO para 'rosa': 'NoneType' object has no attribute 'strip'
+Traceback (most recent call last):
+  File "C:\Users\Defal\Documents\Faculdade\Projeto Shopee\launcher.py", line 606, in _fetch_competitors_headless
+    f"stderr={result.stderr.strip()[:500] if result.stderr.strip() else '<vazio>'}"
+                                             ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'strip'
+
+[2026-04-26 17:19:01] Sem resultados para 'rosa' — veja log acima.
+[2026-04-26 17:19:01] [headless] Iniciando busca 'escolar' | exe=C:\Python313\python.exe | PLAYWRIGHT_BROWSERS_PATH=C:\Users\Defal\Documents\Faculdade\Projeto Shopee\pw-browsers
+[2026-04-26 17:19:04] [headless] EXCEÇÃO para 'escolar': 'NoneType' object has no attribute 'strip'
+Traceback (most recent call last):
+  File "C:\Users\Defal\Documents\Faculdade\Projeto Shopee\launcher.py", line 606, in _fetch_competitors_headless
+    f"stderr={result.stderr.strip()[:500] if result.stderr.strip() else '<vazio>'}"
+                                             ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'strip'
+
+[2026-04-26 17:19:04] Sem resultados para 'escolar' — veja log acima.
+[2026-04-26 17:19:04] [headless] Iniciando busca 'feminina' | exe=C:\Python313\python.exe | PLAYWRIGHT_BROWSERS_PATH=C:\Users\Defal\Documents\Faculdade\Projeto Shopee\pw-browsers
+[2026-04-26 17:19:10] [headless] EXCEÇÃO para 'feminina': 'NoneType' object has no attribute 'strip'
+Traceback (most recent call last):
+  File "C:\Users\Defal\Documents\Faculdade\Projeto Shopee\launcher.py", line 606, in _fetch_competitors_headless
+    f"stderr={result.stderr.strip()[:500] if result.stderr.strip() else '<vazio>'}"
+                                             ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'strip'
+
+[2026-04-26 17:19:10] Sem resultados para 'feminina' — veja log acima.
+[2026-04-26 17:19:10] [headless] Iniciando busca 'lilas' | exe=C:\Python313\python.exe | PLAYWRIGHT_BROWSERS_PATH=C:\Users\Defal\Documents\Faculdade\Projeto Shopee\pw-browsers
+[2026-04-26 17:19:14] [headless] EXCEÇÃO para 'lilas': 'NoneType' object has no attribute 'strip'
+Traceback (most recent call last):
+  File "C:\Users\Defal\Documents\Faculdade\Projeto Shopee\launcher.py", line 606, in _fetch_competitors_headless
+    f"stderr={result.stderr.strip()[:500] if result.stderr.strip() else '<vazio>'}"
+                                             ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'strip'
+
+[2026-04-26 17:19:14] Sem resultados para 'lilas' — veja log acima.
+[2026-04-26 17:19:14] Ciclo concluído. Próximo em 4h.
+[2026-04-26 17:21:19] [Main] Janela fechada. Aguardando tray...

@@ -348,6 +348,8 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
                 user_id=response["user_id"],
                 shop_url=response["shop_url"],
                 segmento=response["segmento"],
+                from_active_shop=response.get("from_active_shop", False),
+                shop_name=response.get("shop_name", ""),
             )
             log.info(f"[BG] Carregamento de loja agendado para user={msg['user_id']!r}")
 
@@ -388,6 +390,18 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
             )
             log.info(f"[BG] Processamento de mídia agendado para user={msg['user_id']!r} plan={plan} job_id={job_id!r}")
 
+        elif task == "import_catalog":
+            background_tasks.add_task(
+                _run_import_catalog_bg,
+                user_id=response["user_id"],
+                shop_uid=response["shop_uid"],
+                shop_url=response["shop_url"],
+                username=response["username"],
+                base64_data=response["base64_data"],
+                mimetype=response["mimetype"],
+            )
+            log.info(f"[BG] Importação de catálogo agendada: user={msg['user_id']!r} shop={response['username']}")
+
         else:
             log.warning(f"[BG] Tipo de background_task desconhecido: {task!r}")
 
@@ -417,13 +431,21 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
     }
 
 
-def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
+def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str, from_active_shop: bool = False, shop_name: str = ""):
     """
     Background task: carrega produtos da loja e envia a lista pelo WhatsApp.
     Roda fora do ciclo de request/response do FastAPI.
+    
+    Estratégia (U6):
+    1. Tentar scraping público
+    2. Se falhar, buscar catálogo importado da loja ativa
+    3. Se não houver catálogo, orientar importação
     """
     from shopee_core.audit_service import load_shop_from_url
-    log.info(f"[BG] Carregando loja: url={shop_url!r} user={user_id}")
+    from shopee_core.user_config_service import get_active_shop
+    from shopee_core.catalog_service import get_catalog, get_catalog_products
+    
+    log.info(f"[BG] Carregando loja: url={shop_url!r} user={user_id} from_active={from_active_shop}")
 
     try:
         loaded = load_shop_from_url(shop_url)
@@ -431,32 +453,67 @@ def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
         log.error(f"[BG] Exceção ao carregar loja: {e}")
         loaded = {"ok": False, "message": str(e)}
 
-    if not loaded.get("ok"):
+    products = []
+    username = ""
+    source = ""
+    shop_uid = ""
+    
+    # Tenta scraping primeiro
+    if loaded.get("ok"):
+        products = loaded["data"].get("products", [])
+        username = loaded["data"].get("username", "loja")
+        shop_data = loaded["data"].get("shop", {})
+        shop_uid = shop_data.get("shopid") or shop_data.get("shop_id") or ""
+        
+        if products:
+            source = "scraping"
+            log.info(f"[BG] Scraping bem-sucedido: {len(products)} produtos")
+    
+    # Se scraping falhou ou não retornou produtos, tenta catálogo
+    if not products and from_active_shop:
+        log.info(f"[BG] Scraping falhou, tentando catálogo da loja ativa...")
+        
+        active_shop = get_active_shop(user_id)
+        
+        if active_shop:
+            shop_uid = active_shop.get("shop_uid")
+            username = active_shop.get("display_name") or active_shop.get("username")
+            
+            catalog = get_catalog(user_id, shop_uid)
+            
+            if catalog:
+                catalog_id = catalog["catalog_id"]
+                products = get_catalog_products(catalog_id)
+                source = "catalog"
+                log.info(f"[BG] Catálogo encontrado: {len(products)} produtos")
+    
+    # Se ainda não tem produtos, falha
+    if not products:
         clear_session(user_id)
-        msg = (
-            f"❌ Não consegui carregar a loja.\n"
-            f"Erro: {loaded.get('message', 'desconhecido')}\n\n"
-            "Certifique-se de usar o formato: https://shopee.com.br/nome_da_loja\n"
-            "Envie */auditar* para tentar novamente."
-        )
+        
+        if from_active_shop:
+            # Orienta importar catálogo
+            msg = (
+                f"⚠️ A loja *{shop_name or username}* foi encontrada, mas não consegui carregar os produtos.\n\n"
+                f"💡 *Solução:* Importe o catálogo do Seller Center:\n"
+                f"1. Use */catalogo importar*\n"
+                f"2. Envie o arquivo XLSX/CSV da sua loja\n"
+                f"3. Depois use */auditar* novamente\n\n"
+                f"_Ou tente novamente mais tarde (pode ser instabilidade da Shopee)._"
+            )
+        else:
+            # URL inline - não tem catálogo disponível
+            msg = (
+                f"❌ Não consegui carregar a loja.\n"
+                f"Erro: {loaded.get('message', 'desconhecido')}\n\n"
+                "Certifique-se de usar o formato: https://shopee.com.br/nome_da_loja\n"
+                "Envie */auditar* para tentar novamente."
+            )
+        
         try:
             evo_send_text(user_id=user_id, text=msg)
         except Exception as e:
             log.error(f"[BG] Falha ao enviar erro de loja: {e}")
-        return
-
-    products = loaded["data"].get("products", [])
-    username = loaded["data"].get("username", "loja")
-
-    if not products:
-        clear_session(user_id)
-        try:
-            evo_send_text(
-                user_id=user_id,
-                text=f"⚠️ A loja *{username}* foi encontrada, mas não há produtos visíveis no momento."
-            )
-        except Exception as e:
-            log.error(f"[BG] Falha ao enviar aviso de loja vazia: {e}")
         return
 
     # Salva sessao com produtos carregados
@@ -468,9 +525,11 @@ def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
             "username": username,
             "products": products,
             "segmento": segmento,
+            "source": source,
+            "shop_uid": shop_uid,
         },
     )
-    log.info(f"[BG] Loja '{username}' carregada: {len(products)} produtos. user={user_id}")
+    log.info(f"[BG] Loja '{username}' carregada: {len(products)} produtos source={source} user={user_id}")
 
     # Monta e envia a lista de produtos
     from shopee_core.audit_service import list_products_summary
@@ -479,9 +538,23 @@ def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
     total = len(products)
     shown = min(total, MAX_PRODUCTS_LISTED)
     suffix = f"(mostrando os primeiros {shown})" if total > shown else ""
+    
+    # Indica a fonte dos produtos
+    source_emoji = {
+        "scraping": "🌐",
+        "catalog": "📦",
+    }
+    source_text = {
+        "scraping": "scraping público",
+        "catalog": "catálogo importado",
+    }
+    
+    emoji = source_emoji.get(source, "✅")
+    source_label = source_text.get(source, "")
+    source_line = f"\n📄 Fonte: {source_label}" if source_label else ""
 
     msg = (
-        f"✅ Loja *{username}* carregada com *{total}* produto(s). {suffix}\n\n"
+        f"✅ Loja *{username}* carregada com *{total}* produto(s). {suffix}{source_line}\n\n"
         f"{product_list}\n\n"
         "Escolha o número do produto que deseja otimizar. Ex: *0*"
     )
@@ -546,6 +619,228 @@ def _run_optimization_bg(user_id: str, product: dict, segmento: str):
     except Exception as e:
         log.error(f"[BG] Falha ao enviar resultado: {e}")
 
+
+def _run_import_catalog_bg(
+    user_id: str,
+    shop_uid: str,
+    shop_url: str,
+    username: str,
+    base64_data: str,
+    mimetype: str
+):
+    """
+    Background task: importa catálogo de arquivo XLSX/XLS/CSV.
+    Processa o arquivo, extrai produtos e salva no banco vinculado à loja.
+    """
+    import base64
+    import io
+    from shopee_core.catalog_service import save_catalog
+    
+    log.info(f"[CATALOG] Iniciando importação: user={user_id} shop={username} mimetype={mimetype}")
+    
+    try:
+        # Decodifica base64
+        if "," in base64_data:
+            base64_data = base64_data.split(",", 1)[1]
+        
+        file_bytes = base64.b64decode(base64_data)
+        log.info(f"[CATALOG] Arquivo decodificado: {len(file_bytes)} bytes")
+        
+        # Processa arquivo baseado no mimetype
+        products = []
+        
+        if mimetype in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"]:
+            # Excel (.xlsx ou .xls)
+            try:
+                import pandas as pd
+                
+                df = pd.read_excel(io.BytesIO(file_bytes))
+                log.info(f"[CATALOG] Excel lido: {len(df)} linhas")
+                
+                # Normaliza nomes de colunas (case-insensitive)
+                df.columns = df.columns.str.strip().str.lower()
+                
+                # Mapeia colunas comuns do Seller Center
+                column_mapping = {
+                    "nome do produto": "name",
+                    "product name": "name",
+                    "nome": "name",
+                    "name": "name",
+                    "preço": "price",
+                    "preco": "price",
+                    "price": "price",
+                    "estoque": "stock",
+                    "stock": "stock",
+                    "quantidade": "stock",
+                    "categoria": "category",
+                    "category": "category",
+                    "descrição": "description",
+                    "descricao": "description",
+                    "description": "description",
+                    "sku": "sku",
+                    "item id": "itemid",
+                    "itemid": "itemid",
+                }
+                
+                # Renomeia colunas
+                df = df.rename(columns=column_mapping)
+                
+                # Extrai produtos
+                for _, row in df.iterrows():
+                    product = {
+                        "name": str(row.get("name", "")).strip(),
+                        "price": float(row.get("price", 0)) if pd.notna(row.get("price")) else 0,
+                        "stock": int(row.get("stock", 0)) if pd.notna(row.get("stock")) else 0,
+                        "category": str(row.get("category", "")).strip() if pd.notna(row.get("category")) else "",
+                        "description": str(row.get("description", "")).strip() if pd.notna(row.get("description")) else "",
+                        "sku": str(row.get("sku", "")).strip() if pd.notna(row.get("sku")) else "",
+                        "itemid": str(row.get("itemid", "")).strip() if pd.notna(row.get("itemid")) else "",
+                    }
+                    
+                    # Filtra produtos válidos (precisa ter nome)
+                    if product["name"] and product["name"] != "nan":
+                        products.append(product)
+                
+                log.info(f"[CATALOG] Produtos extraídos do Excel: {len(products)}")
+                
+            except Exception as e:
+                log.error(f"[CATALOG] Erro ao processar Excel: {e}")
+                clear_session(user_id)
+                evo_send_text(user_id=user_id, text=(
+                    f"❌ Erro ao processar arquivo Excel:\n{str(e)}\n\n"
+                    "Certifique-se de que o arquivo está no formato correto."
+                ))
+                return
+        
+        elif mimetype in ["text/csv", "application/csv"]:
+            # CSV
+            try:
+                import pandas as pd
+                
+                # Tenta múltiplos delimitadores
+                for delimiter in [",", ";", "\t"]:
+                    try:
+                        df = pd.read_csv(io.BytesIO(file_bytes), delimiter=delimiter, encoding="utf-8")
+                        if len(df.columns) > 1:
+                            break
+                    except:
+                        continue
+                
+                log.info(f"[CATALOG] CSV lido: {len(df)} linhas")
+                
+                # Normaliza e processa igual ao Excel
+                df.columns = df.columns.str.strip().str.lower()
+                
+                column_mapping = {
+                    "nome do produto": "name",
+                    "product name": "name",
+                    "nome": "name",
+                    "name": "name",
+                    "preço": "price",
+                    "preco": "price",
+                    "price": "price",
+                    "estoque": "stock",
+                    "stock": "stock",
+                    "quantidade": "stock",
+                    "categoria": "category",
+                    "category": "category",
+                    "descrição": "description",
+                    "descricao": "description",
+                    "description": "description",
+                    "sku": "sku",
+                    "item id": "itemid",
+                    "itemid": "itemid",
+                }
+                
+                df = df.rename(columns=column_mapping)
+                
+                for _, row in df.iterrows():
+                    product = {
+                        "name": str(row.get("name", "")).strip(),
+                        "price": float(row.get("price", 0)) if pd.notna(row.get("price")) else 0,
+                        "stock": int(row.get("stock", 0)) if pd.notna(row.get("stock")) else 0,
+                        "category": str(row.get("category", "")).strip() if pd.notna(row.get("category")) else "",
+                        "description": str(row.get("description", "")).strip() if pd.notna(row.get("description")) else "",
+                        "sku": str(row.get("sku", "")).strip() if pd.notna(row.get("sku")) else "",
+                        "itemid": str(row.get("itemid", "")).strip() if pd.notna(row.get("itemid")) else "",
+                    }
+                    
+                    if product["name"] and product["name"] != "nan":
+                        products.append(product)
+                
+                log.info(f"[CATALOG] Produtos extraídos do CSV: {len(products)}")
+                
+            except Exception as e:
+                log.error(f"[CATALOG] Erro ao processar CSV: {e}")
+                clear_session(user_id)
+                evo_send_text(user_id=user_id, text=(
+                    f"❌ Erro ao processar arquivo CSV:\n{str(e)}\n\n"
+                    "Certifique-se de que o arquivo está no formato correto."
+                ))
+                return
+        
+        # Valida se encontrou produtos
+        if not products:
+            clear_session(user_id)
+            evo_send_text(user_id=user_id, text=(
+                "⚠️ Nenhum produto válido encontrado no arquivo.\n\n"
+                "Certifique-se de que o arquivo contém:\n"
+                "• Coluna com nome do produto\n"
+                "• Pelo menos 1 produto com nome preenchido\n\n"
+                "Use */catalogo importar* para tentar novamente."
+            ))
+            return
+        
+        # Salva catálogo no banco
+        result = save_catalog(
+            user_id=user_id,
+            shop_uid=shop_uid,
+            shop_url=shop_url,
+            username=username,
+            products=products,
+            source_type="seller_center"
+        )
+        
+        log.info(f"[CATALOG] Catálogo salvo: catalog_id={result['catalog_id']} products={result['products_count']}")
+        
+        # Limpa sessão
+        clear_session(user_id)
+        
+        # Monta preview dos primeiros produtos
+        preview_products = products[:5]
+        preview_lines = []
+        for i, p in enumerate(preview_products, 1):
+            name = p["name"][:40] + "..." if len(p["name"]) > 40 else p["name"]
+            price = p.get("price", 0)
+            preview_lines.append(f"{i}. {name} - R$ {price:.2f}")
+        
+        preview_text = "\n".join(preview_lines)
+        if len(products) > 5:
+            preview_text += f"\n... e mais {len(products) - 5} produtos"
+        
+        # Envia confirmação
+        message = (
+            f"✅ *Catálogo importado com sucesso!*\n\n"
+            f"🏪 Loja: *{username}*\n"
+            f"📦 Produtos salvos: *{len(products)}*\n\n"
+            f"*Preview:*\n{preview_text}\n\n"
+            f"Use */catalogo status* para ver detalhes ou */auditar* para usar o catálogo."
+        )
+        
+        evo_send_text(user_id=user_id, text=message)
+        log.info(f"[CATALOG] Importação concluída com sucesso: user={user_id} shop={username}")
+        
+    except Exception as e:
+        log.error(f"[CATALOG] Erro crítico na importação: {e}\n{traceback.format_exc()}")
+        clear_session(user_id)
+        
+        try:
+            evo_send_text(user_id=user_id, text=(
+                "❌ Ocorreu um erro ao importar o catálogo.\n\n"
+                "Tente novamente com */catalogo importar*."
+            ))
+        except:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -184,6 +184,7 @@ def _menu_message() -> dict:
         "🏪 */loja* — Gerenciar suas lojas cadastradas\n"
         "🤖 */ia* — Configurar sua chave de IA (Gemini)\n"
         "📢 */telegram* — Configurar alertas do Telegram\n"
+        "📦 */catalogo* — Importar catálogo do Seller Center\n"
         "🔍 */auditar* — Auditar e otimizar um produto da sua loja\n"
         "💬 */chat* — Tirar dúvidas sobre e-commerce\n"
         "🖼️ */imagem* — Editar imagem de produto\n"
@@ -498,6 +499,11 @@ def _route(
     if lower.startswith("/telegram"):
         return _handle_telegram_command(user_id, text, lower, state, data)
 
+    # ── Comandos de Catálogo (U6) ────────────────────────────────
+
+    if lower.startswith("/catalogo"):
+        return _handle_catalogo_command(user_id, text, lower, state, data)
+
     if lower in {"/chat"}:
         clear_session(user_id)
         return _txt(
@@ -613,6 +619,18 @@ def _route(
     if state == "awaiting_telegram_remove_confirm":
         return _handle_telegram_remove_confirm(user_id, text)
 
+    # ── Estados do fluxo de Catálogo (U6) ────────────────────────
+
+    if state == "awaiting_catalog_file":
+        return _txt(
+            "⏳ Aguardando arquivo...\n\n"
+            "Por favor, envie o arquivo XLSX, XLS ou CSV do Seller Center.\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+
+    if state == "awaiting_catalog_remove_confirm":
+        return _handle_catalogo_remove_confirm(user_id, text, data)
+
     # ── Estados do fluxo do Sentinela ─────────────────────────────
 
     if state == "awaiting_sentinel_shop_url":
@@ -630,6 +648,241 @@ def _route(
     # ── Fallback: conversa geral com o chatbot ────────────────────
 
     return _handle_general_chat(user_id, text, data)
+
+
+# ══════════════════════════════════════════════════════════════════
+# HANDLERS DE CATÁLOGO (U6)
+# ══════════════════════════════════════════════════════════════════
+
+def _handle_catalogo_command(user_id: str, text: str, lower: str, state: str, data: dict) -> dict:
+    """Roteador de comandos de catálogo."""
+    from shopee_core.user_config_service import get_active_shop
+    from shopee_core.catalog_service import has_catalog, get_catalog_summary
+    
+    # Verifica se tem loja ativa
+    active_shop = get_active_shop(user_id)
+    
+    if not active_shop:
+        return _txt(
+            "📦 *Catálogo*\n\n"
+            "Você ainda não tem uma loja ativa.\n\n"
+            "Use */loja adicionar* para cadastrar uma loja primeiro."
+        )
+    
+    shop_uid = active_shop.get("shop_uid")
+    shop_name = active_shop.get("display_name") or active_shop.get("username")
+    
+    # Comando base: /catalogo ou /catalogo status
+    if lower in {"/catalogo", "/catalogo status"}:
+        has_cat = has_catalog(user_id, shop_uid)
+        
+        if has_cat:
+            summary = get_catalog_summary(user_id, shop_uid)
+            
+            # Formata data
+            imported_at = summary.get("imported_at", "")
+            if imported_at:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(imported_at)
+                    date_str = dt.strftime("%d/%m/%Y %H:%M")
+                except:
+                    date_str = imported_at
+            else:
+                date_str = "desconhecida"
+            
+            return _txt(
+                f"📦 *Catálogo da loja {shop_name}*\n\n"
+                f"✅ Status: catálogo importado\n"
+                f"📦 Produtos salvos: *{summary.get('products_count', 0)}*\n"
+                f"📄 Fonte: Seller Center XLSX/CSV\n"
+                f"🕐 Última atualização: {date_str}\n\n"
+                f"*Comandos:*\n"
+                f"• */catalogo importar* — atualizar catálogo\n"
+                f"• */catalogo remover* — remover catálogo"
+            )
+        else:
+            return _txt(
+                f"📦 *Catálogo da loja {shop_name}*\n\n"
+                f"⚠️ Status: nenhum catálogo importado.\n\n"
+                f"Envie */catalogo importar* para adicionar um arquivo."
+            )
+    
+    # /catalogo importar
+    if lower in {"/catalogo importar", "/catalogo import"}:
+        clear_session(user_id)
+        save_session(user_id, "awaiting_catalog_file", {
+            "shop_uid": shop_uid,
+            "shop_url": active_shop.get("shop_url"),
+            "username": active_shop.get("username"),
+        })
+        
+        return _txt(
+            f"📦 *Importar catálogo*\n\n"
+            f"Envie agora o arquivo XLSX, XLS ou CSV da loja *{shop_name}*.\n\n"
+            f"*Formatos aceitos:*\n"
+            f"• .xlsx (Excel)\n"
+            f"• .xls (Excel antigo)\n"
+            f"• .csv (separado por vírgula)\n\n"
+            f"_Ou envie */cancelar* para interromper._"
+        )
+    
+    # /catalogo remover
+    if lower in {"/catalogo remover", "/catalogo deletar", "/catalogo apagar"}:
+        has_cat = has_catalog(user_id, shop_uid)
+        
+        if not has_cat:
+            return _txt(
+                f"⚠️ A loja *{shop_name}* não tem catálogo importado.\n\n"
+                f"Use */catalogo importar* para adicionar."
+            )
+        
+        clear_session(user_id)
+        save_session(user_id, "awaiting_catalog_remove_confirm", {
+            "shop_uid": shop_uid,
+            "shop_name": shop_name,
+        })
+        
+        return _txt(
+            f"⚠️ *Tem certeza que deseja remover o catálogo importado da loja {shop_name}?*\n\n"
+            f"Esta ação não pode ser desfeita.\n\n"
+            f"Digite *CONFIRMAR* para remover.\n"
+            f"_Ou envie */cancelar* para manter._"
+        )
+    
+    # Comando não reconhecido
+    return _txt(
+        "❓ Comando não reconhecido.\n\n"
+        "Use */catalogo* para ver os comandos disponíveis."
+    )
+
+
+def _handle_catalogo_remove_confirm(user_id: str, text: str, data: dict) -> dict:
+    """Processa confirmação de remoção de catálogo."""
+    text_clean = text.strip().upper()
+    
+    if text_clean == "CONFIRMAR":
+        from shopee_core.catalog_service import delete_catalog
+        
+        shop_uid = data.get("shop_uid")
+        shop_name = data.get("shop_name")
+        
+        success = delete_catalog(user_id, shop_uid)
+        
+        clear_session(user_id)
+        
+        if success:
+            log.info(f"[CATALOG] Catálogo removido: user={user_id} shop_uid={shop_uid}")
+            
+            return _txt(
+                f"✅ *Catálogo removido*\n\n"
+                f"O catálogo da loja *{shop_name}* foi removido com sucesso.\n\n"
+                f"Use */catalogo importar* para adicionar um novo catálogo."
+            )
+        else:
+            return _txt(
+                "❌ Erro ao remover catálogo.\n\n"
+                "Tente novamente com */catalogo remover*."
+            )
+    
+    elif text.lower().strip() in {"cancelar", "/cancelar", "não", "nao"}:
+        clear_session(user_id)
+        return _txt(
+            "❌ Remoção cancelada.\n\n"
+            "O catálogo foi mantido."
+        )
+    
+    else:
+        return _txt(
+            "⚠️ Para confirmar a remoção, digite exatamente:\n"
+            "*CONFIRMAR*\n\n"
+            "_Ou envie */cancelar* para manter o catálogo._"
+        )
+
+
+def _handle_catalog_file_upload(user_id: str, msg: dict, data: dict) -> dict:
+    """
+    Processa upload de arquivo de catálogo (XLSX/XLS/CSV).
+    Valida formato e agenda importação em background.
+    """
+    media_type = msg.get("media_type", "")
+    mimetype = msg.get("mimetype", "")
+    base64_data = msg.get("base64_data", "")
+    
+    log.info(f"[CATALOG] Upload recebido: media_type={media_type} mimetype={mimetype} base64_len={len(base64_data)}")
+    
+    # Valida tipo de arquivo
+    if media_type != "document":
+        return _txt(
+            "⚠️ Por favor, envie um *arquivo* (documento).\n\n"
+            "Formatos aceitos:\n"
+            "• .xlsx (Excel)\n"
+            "• .xls (Excel antigo)\n"
+            "• .csv (separado por vírgula)\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    # Valida mimetype
+    valid_mimetypes = [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # .xlsx
+        "application/vnd.ms-excel",  # .xls
+        "text/csv",  # .csv
+        "application/csv",  # .csv (alternativo)
+    ]
+    
+    if mimetype not in valid_mimetypes:
+        return _txt(
+            f"⚠️ Formato não suportado: {mimetype}\n\n"
+            "Formatos aceitos:\n"
+            "• .xlsx (Excel)\n"
+            "• .xls (Excel antigo)\n"
+            "• .csv (separado por vírgula)\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    if not base64_data:
+        return _txt(
+            "❌ Não consegui receber o arquivo.\n\n"
+            "Tente enviar novamente ou use */cancelar*."
+        )
+    
+    # Extrai dados da sessão
+    shop_uid = data.get("shop_uid")
+    shop_url = data.get("shop_url")
+    username = data.get("username")
+    
+    if not shop_uid or not username:
+        clear_session(user_id)
+        return _txt(
+            "❌ Erro: dados da loja não encontrados na sessão.\n\n"
+            "Use */catalogo importar* para tentar novamente."
+        )
+    
+    log.info(f"[CATALOG] Agendando importação: user={user_id} shop={username} mimetype={mimetype}")
+    
+    # Salva estado de processamento
+    save_session(user_id, "processing_catalog_import", {
+        "shop_uid": shop_uid,
+        "shop_url": shop_url,
+        "username": username,
+    })
+    
+    return {
+        "type": "background_task",
+        "task": "import_catalog",
+        "text": (
+            f"⏳ *Importando catálogo...*\n\n"
+            f"Processando arquivo da loja *{username}*.\n\n"
+            f"Isso pode levar alguns segundos.\n\n"
+            f"_Envie */cancelar* para interromper._"
+        ),
+        "user_id": user_id,
+        "shop_uid": shop_uid,
+        "shop_url": shop_url,
+        "username": username,
+        "base64_data": base64_data,
+        "mimetype": mimetype,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2031,6 +2284,8 @@ def _handle_shop_url(user_id: str, url: str, from_active_shop: bool = False, sho
         "shop_url": url,
         "user_id": user_id,
         "segmento": DEFAULT_SEGMENTO,
+        "from_active_shop": from_active_shop,
+        "shop_name": shop_name or "",
     }
 
 
@@ -2148,6 +2403,11 @@ def handle_whatsapp_text(user_id: str, text: str) -> dict:
 def _handle_media_message(user_id: str, msg: dict, state: str, data: dict) -> dict:
     media_type = msg.get("media_type", "")
 
+    # ── Handler especial para importação de catálogo (U6) ────────
+    if state == "awaiting_catalog_file":
+        return _handle_catalog_file_upload(user_id, msg, data)
+
+    # ── Handler de imagens para edição ────────────────────────────
     if media_type != "image":
         return _txt(
             "🔴 Ainda só aceito *imagens* para editar.\n\n"
