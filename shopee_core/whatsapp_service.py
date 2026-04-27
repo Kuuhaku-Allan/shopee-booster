@@ -16,6 +16,7 @@ Não importa streamlit.
 from __future__ import annotations
 
 import logging
+import sys
 import traceback
 
 from shopee_core.session_service import get_session, save_session, clear_session
@@ -181,6 +182,7 @@ def _menu_message() -> dict:
         "👋 Olá! Eu sou o *ShopeeBooster*, seu assistente de e-commerce.\n\n"
         "O que você quer fazer hoje?\n\n"
         "🏪 */loja* — Gerenciar suas lojas cadastradas\n"
+        "🤖 */ia* — Configurar sua chave de IA (Gemini)\n"
         "🔍 */auditar* — Auditar e otimizar um produto da sua loja\n"
         "💬 */chat* — Tirar dúvidas sobre e-commerce\n"
         "🖼️ */imagem* — Editar imagem de produto\n"
@@ -485,6 +487,11 @@ def _route(
     if lower.startswith("/loja"):
         return _handle_loja_command(user_id, text, lower, state, data)
 
+    # ── Comandos de IA (U3) ───────────────────────────────────────
+
+    if lower.startswith("/ia"):
+        return _handle_ia_command(user_id, text, lower, state, data)
+
     if lower in {"/chat"}:
         clear_session(user_id)
         return _txt(
@@ -559,6 +566,14 @@ def _route(
     if state == "awaiting_shop_remove_confirm":
         return _handle_loja_remove_confirm(user_id, text, data)
 
+    # ── Estados do fluxo de IA (U3) ───────────────────────────────
+
+    if state == "awaiting_ia_api_key":
+        return _handle_ia_api_key_input(user_id, text)
+
+    if state == "awaiting_ia_remove_confirm":
+        return _handle_ia_remove_confirm(user_id, text)
+
     # ── Estados do fluxo do Sentinela ─────────────────────────────
 
     if state == "awaiting_sentinel_shop_url":
@@ -576,6 +591,239 @@ def _route(
     # ── Fallback: conversa geral com o chatbot ────────────────────
 
     return _handle_general_chat(user_id, text, data)
+
+
+# ══════════════════════════════════════════════════════════════════
+# HANDLERS DE IA (U3)
+# ══════════════════════════════════════════════════════════════════
+
+def get_user_gemini_api_key(user_id: str) -> str | None:
+    """
+    Retorna a Gemini API Key do usuário ou fallback global.
+    
+    Ordem de prioridade:
+    1. Chave própria do usuário (salva criptografada)
+    2. Chave global do ambiente (se ALLOW_GLOBAL_GEMINI_FALLBACK=true)
+    3. None (sem chave disponível)
+    
+    Returns:
+        API Key ou None
+    """
+    from shopee_core.user_config_service import get_secret
+    import os
+    from dotenv import load_dotenv
+    from pathlib import Path
+    
+    # Tenta chave do usuário primeiro
+    user_key = get_secret(user_id, "gemini_api_key")
+    if user_key:
+        return user_key
+    
+    # Fallback para chave global se permitido
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).resolve().parent.parent
+    
+    config_path = base / ".shopee_config"
+    if config_path.exists():
+        load_dotenv(config_path)
+    
+    allow_fallback = os.getenv("ALLOW_GLOBAL_GEMINI_FALLBACK", "false").lower() == "true"
+    
+    if allow_fallback:
+        global_key = os.getenv("GOOGLE_API_KEY")
+        if global_key:
+            return global_key
+    
+    return None
+
+
+def _handle_ia_command(user_id: str, text: str, lower: str, state: str, data: dict) -> dict:
+    """Roteador de comandos de IA."""
+    from shopee_core.user_config_service import has_secret, mask_secret, get_secret
+    import os
+    from dotenv import load_dotenv
+    from pathlib import Path
+    
+    # Carrega config para verificar fallback
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).resolve().parent.parent
+    
+    config_path = base / ".shopee_config"
+    if config_path.exists():
+        load_dotenv(config_path)
+    
+    allow_fallback = os.getenv("ALLOW_GLOBAL_GEMINI_FALLBACK", "false").lower() == "true"
+    
+    # Comando base: /ia ou /ia status
+    if lower in {"/ia", "/ia status"}:
+        has_user_key = has_secret(user_id, "gemini_api_key")
+        
+        if has_user_key:
+            # Usuário tem chave própria
+            user_key = get_secret(user_id, "gemini_api_key")
+            masked = mask_secret(user_key)
+            
+            return _txt(
+                "🤖 *IA configurada*\n\n"
+                f"✅ Status: Chave própria ativa\n"
+                f"🔑 Chave: {masked}\n\n"
+                "*Comandos:*\n"
+                "• */ia configurar* — trocar chave\n"
+                "• */ia remover* — remover chave salva"
+            )
+        
+        elif allow_fallback:
+            # Sem chave própria, mas fallback global ativo
+            return _txt(
+                "🤖 *IA*\n\n"
+                "⚠️ Status: Usando chave global do ambiente de desenvolvimento.\n\n"
+                "Para usar sua própria chave:\n"
+                "• */ia configurar*"
+            )
+        
+        else:
+            # Sem chave e sem fallback
+            return _txt(
+                "🤖 *IA não configurada*\n\n"
+                "Para usar auditoria, análise de imagem e respostas com IA, envie:\n"
+                "*/ia configurar*"
+            )
+    
+    # /ia configurar
+    if lower in {"/ia configurar", "/ia config"}:
+        clear_session(user_id)
+        save_session(user_id, "awaiting_ia_api_key", {})
+        
+        return _txt(
+            "🔐 *Configurar chave de IA*\n\n"
+            "Envie sua *Gemini API Key*.\n\n"
+            "Ela será salva criptografada neste ambiente e usada apenas nas suas solicitações.\n\n"
+            "⚠️ *Aviso de privacidade:*\n"
+            "Não envie chaves de contas importantes em ambientes que você não controla.\n\n"
+            "_Para cancelar, envie */cancelar*._"
+        )
+    
+    # /ia remover
+    if lower in {"/ia remover", "/ia deletar", "/ia apagar"}:
+        has_user_key = has_secret(user_id, "gemini_api_key")
+        
+        if not has_user_key:
+            return _txt(
+                "⚠️ Você não tem uma chave de IA configurada.\n\n"
+                "Use */ia configurar* para adicionar uma."
+            )
+        
+        clear_session(user_id)
+        save_session(user_id, "awaiting_ia_remove_confirm", {})
+        
+        return _txt(
+            "⚠️ *Tem certeza que deseja remover sua chave de IA?*\n\n"
+            "Após a remoção, você não poderá usar:\n"
+            "• Auditoria de produtos\n"
+            "• Análise de imagens\n"
+            "• Respostas com IA\n\n"
+            "Digite *CONFIRMAR* para remover.\n"
+            "_Ou envie */cancelar* para manter._"
+        )
+    
+    # Comando não reconhecido
+    return _txt(
+        "❓ Comando não reconhecido.\n\n"
+        "Use */ia* para ver os comandos disponíveis."
+    )
+
+
+def _handle_ia_api_key_input(user_id: str, text: str) -> dict:
+    """
+    Processa a Gemini API Key enviada pelo usuário.
+    Valida formato básico e salva criptografada.
+    """
+    api_key = text.strip()
+    
+    # Validação básica
+    if len(api_key) < 20:
+        return _txt(
+            "❌ Chave inválida. A Gemini API Key deve ter pelo menos 20 caracteres.\n\n"
+            "Envie a chave correta ou */cancelar* para interromper."
+        )
+    
+    # Validação de caracteres suspeitos (evita que usuário mande texto comum)
+    if " " in api_key or "\n" in api_key:
+        return _txt(
+            "❌ Chave inválida. A API Key não deve conter espaços ou quebras de linha.\n\n"
+            "Envie a chave correta ou */cancelar* para interromper."
+        )
+    
+    # Salva criptografada
+    from shopee_core.user_config_service import save_secret, mask_secret
+    
+    try:
+        save_secret(user_id, "gemini_api_key", api_key)
+        log.info(f"[IA] Gemini API Key salva para user={user_id}")
+        
+        clear_session(user_id)
+        
+        masked = mask_secret(api_key)
+        
+        return _txt(
+            f"✅ *Chave de IA salva com sucesso.*\n\n"
+            f"🔑 Chave: {masked}\n\n"
+            f"Agora suas respostas, auditorias e análises podem usar sua própria API Key.\n\n"
+            f"Use */ia* para ver o status."
+        )
+    
+    except Exception as e:
+        log.error(f"[IA] Erro ao salvar API Key: {e}")
+        clear_session(user_id)
+        
+        return _txt(
+            f"❌ Erro ao salvar chave: {e}\n\n"
+            "Tente novamente com */ia configurar*."
+        )
+
+
+def _handle_ia_remove_confirm(user_id: str, text: str) -> dict:
+    """Processa confirmação de remoção da API Key."""
+    text_clean = text.strip().upper()
+    
+    if text_clean == "CONFIRMAR":
+        from shopee_core.user_config_service import delete_secret
+        
+        success = delete_secret(user_id, "gemini_api_key")
+        
+        clear_session(user_id)
+        
+        if success:
+            log.info(f"[IA] Gemini API Key removida para user={user_id}")
+            
+            return _txt(
+                "✅ *Chave de IA removida.*\n\n"
+                "Você não poderá mais usar funcionalidades que dependem de IA.\n\n"
+                "Use */ia configurar* para adicionar uma nova chave."
+            )
+        else:
+            return _txt(
+                "❌ Erro ao remover chave.\n\n"
+                "Tente novamente com */ia remover*."
+            )
+    
+    elif text.lower().strip() in {"cancelar", "/cancelar", "não", "nao"}:
+        clear_session(user_id)
+        return _txt(
+            "❌ Remoção cancelada.\n\n"
+            "Sua chave de IA foi mantida."
+        )
+    
+    else:
+        return _txt(
+            "⚠️ Para confirmar a remoção, digite exatamente:\n"
+            "*CONFIRMAR*\n\n"
+            "_Ou envie */cancelar* para manter a chave._"
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
