@@ -496,14 +496,37 @@ def _run_optimization_bg(user_id: str, product: dict, segmento: str):
     """
     Background task: executa otimização completa e envia resultado pelo WhatsApp.
     Roda fora do ciclo de request/response do FastAPI.
+    Usa a Gemini API Key do usuário quando disponível.
     """
     product_name = product.get("name", "Produto")
     log.info(f"[BG] Iniciando otimização: '{product_name}' user={user_id}")
 
+    # Obtém chave de IA do usuário
+    from shopee_core.whatsapp_service import get_user_gemini_api_key
+    
+    api_key = get_user_gemini_api_key(user_id)
+    
+    if not api_key:
+        # Sem chave de IA disponível
+        clear_session(user_id)
+        message = (
+            "🤖 *IA não configurada*\n\n"
+            "Para gerar a otimização, configure sua chave com:\n"
+            "*/ia configurar*"
+        )
+        try:
+            evo_send_text(user_id=user_id, text=message)
+            log.info(f"[BG] Otimização cancelada: sem API Key para user={user_id}")
+        except Exception as e:
+            log.error(f"[BG] Falha ao enviar aviso de IA: {e}")
+        return
+
     try:
         from shopee_core.audit_service import generate_product_optimization
         from shopee_core.whatsapp_service import format_optimization_result
-        result = generate_product_optimization(product, segmento=segmento)
+        
+        # Passa api_key para a função de otimização
+        result = generate_product_optimization(product, segmento=segmento, api_key=api_key)
         message = format_optimization_result(result, product_name)
     except Exception as e:
         log.error(f"[BG] Erro na otimização: {e}")

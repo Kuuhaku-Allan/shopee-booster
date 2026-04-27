@@ -72,12 +72,17 @@ def load_shop_from_url(shop_url: str) -> dict:
     }
 
 
-def generate_product_optimization(product: dict, segmento: str) -> dict:
+def generate_product_optimization(product: dict, segmento: str, api_key: str = None) -> dict:
     """
     Executa o fluxo completo de otimização para um produto:
       1. Busca concorrentes na Shopee (Playwright)
       2. Busca avaliações no Mercado Livre (Playwright)
       3. Gera o listing otimizado com Gemini
+
+    Args:
+        product: Dados do produto
+        segmento: Segmento de mercado
+        api_key: Gemini API Key opcional (usa GOOGLE_API_KEY se None)
 
     Retorna AuditResponse-compatível.
     """
@@ -106,13 +111,14 @@ def generate_product_optimization(product: dict, segmento: str) -> dict:
         product_name_override=keyword,
     )
 
-    # 3. Otimização Gemini
+    # 3. Otimização Gemini (passa api_key)
     from backend_core import generate_full_optimization
     optimization_text = generate_full_optimization(
         product=product,
         competitors_df=df_competitors,
         reviews=reviews or [],
         segmento=segmento,
+        api_key=api_key,  # Passa api_key opcional
     )
 
     return {

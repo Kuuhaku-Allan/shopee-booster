@@ -523,14 +523,36 @@ def _route(
         inline_url = parts[1].strip() if len(parts) > 1 else ""
 
         if inline_url:
+            # URL inline: usa essa URL pontualmente
             return _handle_shop_url(user_id, inline_url)
 
-        save_session(user_id, "awaiting_shop_url", {})
-        return _txt(
-            "🔍 *Auditoria iniciada.*\n\n"
-            "Me envie a URL da loja na Shopee.\n"
-            "Exemplo: https://shopee.com.br/nome_da_loja"
-        )
+        # Sem URL: tenta usar loja ativa
+        from shopee_core.user_config_service import get_active_shop
+        
+        active_shop = get_active_shop(user_id)
+        
+        if active_shop:
+            # Tem loja ativa: usa automaticamente
+            shop_url = active_shop.get("shop_url")
+            shop_name = active_shop.get("display_name") or active_shop.get("username")
+            
+            log.info(f"[AUDITAR] Usando loja ativa: {shop_name} user={user_id}")
+            
+            # Usa a loja ativa
+            return _handle_shop_url(user_id, shop_url, from_active_shop=True, shop_name=shop_name)
+        
+        else:
+            # Não tem loja ativa: pede URL ou orienta a cadastrar
+            save_session(user_id, "awaiting_shop_url", {})
+            return _txt(
+                "🔍 *Auditoria*\n\n"
+                "Você ainda não tem uma loja ativa cadastrada.\n\n"
+                "Você pode:\n"
+                "• Enviar a URL da loja agora; ou\n"
+                "• Usar */loja adicionar* para salvar uma loja.\n\n"
+                "*Exemplo de URL:*\n"
+                "https://shopee.com.br/nome_da_loja"
+            )
 
     # ── Guard: bloqueia nova mensagem enquanto carregando loja ──────────
 
@@ -1959,12 +1981,18 @@ def _handle_sentinel_confirmation(user_id: str, text: str, data: dict) -> dict:
         )
 
 
-def _handle_shop_url(user_id: str, url: str) -> dict:
+def _handle_shop_url(user_id: str, url: str, from_active_shop: bool = False, shop_name: str = None) -> dict:
     """
     Valida a URL e delega o carregamento da loja para background (Fase 3D).
 
+    Args:
+        user_id: JID do WhatsApp
+        url: URL da loja
+        from_active_shop: Se True, está usando loja ativa cadastrada
+        shop_name: Nome da loja (para mensagem contextual)
+
     Retorna type="background_task", task="load_shop" para que o api_server.py:
-      1. Envie "\u23f3 Carregando sua loja..." imediatamente
+      1. Envie mensagem de "Carregando..." imediatamente
       2. Agende _run_load_shop_bg() via BackgroundTasks
       3. Ao terminar: salve sessao awaiting_product_index e envie a lista
     """
@@ -1978,18 +2006,28 @@ def _handle_shop_url(user_id: str, url: str) -> dict:
         )
 
     # Transita para 'processing_load_shop' — guard bloqueia duplicatas
-    save_session(user_id, "processing_load_shop", {"shop_url": url})
+    save_session(user_id, "processing_load_shop", {"shop_url": url, "from_active_shop": from_active_shop})
 
-    log.info(f"[WA] Agendando carregamento de loja background: url={url!r} user={user_id}")
+    log.info(f"[WA] Agendando carregamento de loja background: url={url!r} from_active={from_active_shop} user={user_id}")
+
+    # Mensagem contextual
+    if from_active_shop and shop_name:
+        loading_text = (
+            f"🔍 *Auditoria iniciada*\n\n"
+            f"Usando sua loja ativa: *{shop_name}*\n\n"
+            f"⏳ Carregando produtos..."
+        )
+    else:
+        loading_text = (
+            "⏳ *Carregando sua loja...*\n\n"
+            "Estou buscando os produtos na Shopee. Isso pode levar até 1 minuto.\n"
+            "Vou te enviar a lista assim que terminar!"
+        )
 
     return {
         "type": "background_task",
         "task": "load_shop",
-        "text": (
-            "⏳ *Carregando sua loja...*\n\n"
-            "Estou buscando os produtos na Shopee. Isso pode levar até 1 minuto.\n"
-            "Vou te enviar a lista assim que terminar!"
-        ),
+        "text": loading_text,
         "shop_url": url,
         "user_id": user_id,
         "segmento": DEFAULT_SEGMENTO,

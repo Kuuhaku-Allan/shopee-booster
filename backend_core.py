@@ -67,25 +67,42 @@ load_dotenv(CONFIG_ENV)  # Sobrepõe com .shopee_config (prioridade maior)
 
 API_KEY = os.getenv("GOOGLE_API_KEY")
 
-def get_client():
+def get_client(api_key: str = None):
     """
-    Retorna o cliente Gemini cacheado na sessão do Streamlit.
+    Retorna o cliente Gemini.
     
-    Por quê session_state e não um global?
-    - O httpx.Client interno do genai.Client é fechado quando o objeto é GC'd.
-    - Criar um novo Client a cada chamada causa 'client has been closed'.
-    - Usar session_state garante que o mesmo objeto sobreviva entre reruns
-      e seja invalidado automaticamente quando a API key mudar.
+    Args:
+        api_key: API Key opcional. Se None, usa GOOGLE_API_KEY do ambiente.
+    
+    Para o .exe (Streamlit):
+    - Usa session_state para cachear o cliente
+    - Invalida cache se a API key mudar
+    
+    Para o WhatsApp Bot:
+    - Cria cliente direto com a API key fornecida
+    - Não usa session_state (não há Streamlit)
     """
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
+    # Se api_key foi fornecida explicitamente, cria cliente direto
+    if api_key:
+        return genai.Client(api_key=api_key)
+    
+    # Fallback para GOOGLE_API_KEY do ambiente
+    env_api_key = os.getenv("GOOGLE_API_KEY")
+    if not env_api_key:
         raise ValueError("GOOGLE_API_KEY não configurada. Insira sua chave no painel lateral.")
-    # Invalida o cache se a chave mudou (ex: usuário reconfigurou)
-    if (st.session_state.get("_gemini_api_key") != api_key
-            or "_gemini_client" not in st.session_state):
-        st.session_state["_gemini_client"] = genai.Client(api_key=api_key)
-        st.session_state["_gemini_api_key"] = api_key
-    return st.session_state["_gemini_client"]
+    
+    # Se estamos no Streamlit, usa session_state para cache
+    try:
+        import streamlit as st
+        # Invalida o cache se a chave mudou (ex: usuário reconfigurou)
+        if (st.session_state.get("_gemini_api_key") != env_api_key
+                or "_gemini_client" not in st.session_state):
+            st.session_state["_gemini_client"] = genai.Client(api_key=env_api_key)
+            st.session_state["_gemini_api_key"] = env_api_key
+        return st.session_state["_gemini_client"]
+    except (ImportError, AttributeError):
+        # Não está no Streamlit, cria cliente direto
+        return genai.Client(api_key=env_api_key)
 
 # Alias para compatibilidade — não usar diretamente, sempre chamar get_client()
 client = get_client
@@ -628,7 +645,20 @@ asyncio.run(run())
 # GERAÇÃO DE CONTEÚDO COM GEMINI
 # ══════════════════════════════════════════════════════════════════
 
-def generate_full_optimization(product: dict, competitors_df, reviews: list, segmento: str) -> str:
+def generate_full_optimization(product: dict, competitors_df, reviews: list, segmento: str, api_key: str = None) -> str:
+    """
+    Gera otimização completa do produto usando Gemini.
+    
+    Args:
+        product: Dados do produto
+        competitors_df: DataFrame com concorrentes
+        reviews: Lista de avaliações
+        segmento: Segmento de mercado
+        api_key: Gemini API Key opcional (usa GOOGLE_API_KEY se None)
+    
+    Returns:
+        Texto da otimização gerada
+    """
     nome = product.get("name", "")
     preco = product.get("price", 0)
 
@@ -686,7 +716,8 @@ Responda EXATAMENTE neste formato:
     for m in MODELOS_TEXTO:
         try:
             config = {"thinking_config": {"thinking_budget": 0}} if "3.1" in m or "2.5" in m else {}
-            response = get_client().models.generate_content(
+            # Passa api_key para get_client
+            response = get_client(api_key=api_key).models.generate_content(
                 model=m,
                 contents=[prompt],
                 config=config if config else None
