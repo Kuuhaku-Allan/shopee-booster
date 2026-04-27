@@ -1172,10 +1172,12 @@ def _run_sentinel_bg(user_id: str, config: dict):
                             "titulo": c.get("nome", ""),
                             "preco": float(c.get("preco", 0) or 0),
                             "loja": str(c.get("shop_id") or ""),
+                            "url": c.get("url", ""),  # U7.8: Adicionar URL
                             "is_new": False,
                             "keyword": kw,
                             "item_id": c.get("item_id"),
                             "shop_id": c.get("shop_id"),
+                            "source": "shopee",  # U7.8: Adicionar source
                         }
                     )
 
@@ -1338,8 +1340,19 @@ def _run_sentinel_bg(user_id: str, config: dict):
             tg_cfg = None
 
         # ── Sempre gera relatório (U7.6) ───────────────────────────
+        # Inicializa variáveis antes do try (U7.8)
+        chart_path = None
+        table_csv_path = None
+        table_png_path = None
+        
         try:
             from shopee_core.sentinel_report_service import generate_sentinel_report
+
+            # Log de diagnóstico (U7.8)
+            log.info(f"[RELATORIO] resultado.keys={list(resultado.keys())}")
+            log.info(f"[RELATORIO] concorrentes_len={len(resultado.get('concorrentes', []))}")
+            if resultado.get('concorrentes'):
+                log.info(f"[RELATORIO] primeiro_concorrente={resultado.get('concorrentes', [None])[0]}")
 
             log.info("[SENTINELA] Gerando relatório...")
             report = generate_sentinel_report(
@@ -1357,8 +1370,23 @@ def _run_sentinel_bg(user_id: str, config: dict):
             log.info(f"[SENTINELA]   chart_path={chart_path}")
             log.info(f"[SENTINELA]   csv_path={table_csv_path}")
             log.info(f"[SENTINELA]   table_png_path={table_png_path}")
+            
+            # Valida se arquivos existem (U7.8)
+            from pathlib import Path
+            chart_exists = Path(chart_path).exists() if chart_path else False
+            csv_exists = Path(table_csv_path).exists() if table_csv_path else False
+            png_exists = Path(table_png_path).exists() if table_png_path else False
+            
+            log.info(f"[RELATORIO] chart_exists={chart_exists}")
+            log.info(f"[RELATORIO] csv_exists={csv_exists}")
+            log.info(f"[RELATORIO] table_png_exists={png_exists}")
+            
+            # Alerta se paths vazios mas há concorrentes (U7.8)
+            if len(resultado.get('concorrentes', [])) > 0 and not chart_path:
+                log.error("[RELATORIO] ERRO: Concorrentes existem mas chart_path está vazio - problema de normalização!")
+                
         except Exception as e:
-            log.error(f"[SENTINELA] Erro ao gerar relatório: {e}")
+            log.error(f"[SENTINELA] Erro ao gerar relatório: {e}", exc_info=True)
 
         # ── Envia para Telegram se configurado ─────────────────────
         if tg_cfg and chart_path:
@@ -1390,6 +1418,9 @@ def _run_sentinel_bg(user_id: str, config: dict):
             from shopee_core.bot_state import save_sentinel_run
             
             run_id = f"{user_id}_{janela_execucao}"
+            
+            # Log de diagnóstico antes de salvar (U7.8)
+            log.info(f"[DEBUG] Salvando com chart_path={chart_path}, csv_path={table_csv_path}, png_path={table_png_path}")
             
             save_sentinel_run(
                 run_id=run_id,

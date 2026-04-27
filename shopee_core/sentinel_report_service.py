@@ -76,9 +76,15 @@ def build_competitor_dataframe(resultado: dict) -> pd.DataFrame:
     """
     concorrentes = resultado.get("concorrentes", [])
     
+    log.info(f"[REPORT] build_competitor_dataframe: recebeu {len(concorrentes)} concorrentes")
+    
     if not concorrentes:
         log.warning("[REPORT] Nenhum concorrente para gerar DataFrame")
         return pd.DataFrame()
+    
+    # Log do primeiro concorrente para debug (U7.8)
+    if concorrentes:
+        log.info(f"[REPORT] Primeiro concorrente: {concorrentes[0]}")
     
     # Normaliza dados
     data = []
@@ -97,7 +103,7 @@ def build_competitor_dataframe(resultado: dict) -> pd.DataFrame:
     if not df.empty:
         df = df.sort_values("Ranking")
     
-    log.info(f"[REPORT] DataFrame criado: {len(df)} concorrentes")
+    log.info(f"[REPORT] DataFrame criado: {len(df)} linhas")
     return df
 
 
@@ -282,6 +288,7 @@ def generate_sentinel_report(
         }
     """
     log.info("[REPORT] Gerando relatório do Sentinela")
+    log.info(f"[REPORT] include_chart={include_chart}, include_csv={include_csv}, include_table_png={include_table_png}")
     
     # Timestamp para nomes de arquivo
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -291,7 +298,9 @@ def generate_sentinel_report(
     summary = build_sentinel_summary(resultado)
     
     # DataFrame
+    log.info("[REPORT] Construindo DataFrame...")
     df = build_competitor_dataframe(resultado)
+    log.info(f"[REPORT] DataFrame construído: empty={df.empty}, shape={df.shape if not df.empty else 'N/A'}")
     
     # Gera arquivos
     report = {
@@ -302,24 +311,34 @@ def generate_sentinel_report(
     }
     
     if not df.empty:
+        log.info("[REPORT] DataFrame não está vazio, gerando arquivos...")
+        
         # Gráfico
         if include_chart:
             chart_path = REPORTS_DIR / f"sentinela_{keyword_safe}_{timestamp}_chart.png"
+            log.info(f"[REPORT] Gerando gráfico: {chart_path}")
             report["chart_path"] = generate_price_chart(
                 df, 
                 str(chart_path), 
                 resultado.get("keyword", "")
             )
+            log.info(f"[REPORT] Gráfico gerado: {report['chart_path']}")
         
         # CSV
         if include_csv:
             csv_path = REPORTS_DIR / f"sentinela_{keyword_safe}_{timestamp}_table.csv"
+            log.info(f"[REPORT] Gerando CSV: {csv_path}")
             report["csv_path"] = generate_competitor_table_csv(df, str(csv_path))
+            log.info(f"[REPORT] CSV gerado: {report['csv_path']}")
         
         # PNG da tabela (opcional)
         if include_table_png:
             table_png_path = REPORTS_DIR / f"sentinela_{keyword_safe}_{timestamp}_table.png"
+            log.info(f"[REPORT] Gerando PNG da tabela: {table_png_path}")
             report["table_png_path"] = generate_competitor_table_png(df, str(table_png_path))
+            log.info(f"[REPORT] PNG da tabela gerado: {report['table_png_path']}")
+    else:
+        log.warning("[REPORT] DataFrame está vazio, não será possível gerar arquivos")
     
-    log.info(f"[REPORT] Relatório gerado: chart={bool(report['chart_path'])} csv={bool(report['csv_path'])}")
+    log.info(f"[REPORT] Relatório gerado: chart={bool(report['chart_path'])} csv={bool(report['csv_path'])} png={bool(report['table_png_path'])}")
     return report
