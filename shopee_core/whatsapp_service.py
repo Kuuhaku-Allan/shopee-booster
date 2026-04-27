@@ -183,6 +183,7 @@ def _menu_message() -> dict:
         "O que você quer fazer hoje?\n\n"
         "🏪 */loja* — Gerenciar suas lojas cadastradas\n"
         "🤖 */ia* — Configurar sua chave de IA (Gemini)\n"
+        "📢 */telegram* — Configurar alertas do Telegram\n"
         "🔍 */auditar* — Auditar e otimizar um produto da sua loja\n"
         "💬 */chat* — Tirar dúvidas sobre e-commerce\n"
         "🖼️ */imagem* — Editar imagem de produto\n"
@@ -492,6 +493,11 @@ def _route(
     if lower.startswith("/ia"):
         return _handle_ia_command(user_id, text, lower, state, data)
 
+    # ── Comandos de Telegram (U4) ────────────────────────────────
+
+    if lower.startswith("/telegram"):
+        return _handle_telegram_command(user_id, text, lower, state, data)
+
     if lower in {"/chat"}:
         clear_session(user_id)
         return _txt(
@@ -574,6 +580,17 @@ def _route(
     if state == "awaiting_ia_remove_confirm":
         return _handle_ia_remove_confirm(user_id, text)
 
+    # ── Estados do fluxo de Telegram (U4) ────────────────────────
+
+    if state == "awaiting_telegram_token":
+        return _handle_telegram_token_input(user_id, text)
+
+    if state == "awaiting_telegram_chat_id":
+        return _handle_telegram_chat_id_input(user_id, text, data)
+
+    if state == "awaiting_telegram_remove_confirm":
+        return _handle_telegram_remove_confirm(user_id, text)
+
     # ── Estados do fluxo do Sentinela ─────────────────────────────
 
     if state == "awaiting_sentinel_shop_url":
@@ -591,6 +608,370 @@ def _route(
     # ── Fallback: conversa geral com o chatbot ────────────────────
 
     return _handle_general_chat(user_id, text, data)
+
+
+# ══════════════════════════════════════════════════════════════════
+# HANDLERS DE TELEGRAM (U4)
+# ══════════════════════════════════════════════════════════════════
+
+def get_user_telegram_config(user_id: str) -> dict | None:
+    """
+    Retorna a configuração do Telegram do usuário.
+    
+    Returns:
+        Dict com {"token": str, "chat_id": str} ou None
+    """
+    from shopee_core.user_config_service import get_secret
+    
+    token = get_secret(user_id, "telegram_token")
+    chat_id = get_secret(user_id, "telegram_chat_id")
+    
+    if token and chat_id:
+        return {"token": token, "chat_id": chat_id}
+    
+    return None
+
+
+def _handle_telegram_command(user_id: str, text: str, lower: str, state: str, data: dict) -> dict:
+    """Roteador de comandos de Telegram."""
+    from shopee_core.user_config_service import has_secret, mask_secret, get_secret
+    
+    # Comando base: /telegram ou /telegram status
+    if lower in {"/telegram", "/telegram status"}:
+        has_token = has_secret(user_id, "telegram_token")
+        has_chat_id = has_secret(user_id, "telegram_chat_id")
+        
+        if has_token and has_chat_id:
+            # Usuário tem Telegram configurado
+            token = get_secret(user_id, "telegram_token")
+            chat_id = get_secret(user_id, "telegram_chat_id")
+            
+            masked_token = mask_secret(token)
+            
+            return _txt(
+                "📢 *Telegram configurado*\n\n"
+                f"✅ Status: Ativo\n"
+                f"🤖 Bot Token: {masked_token}\n"
+                f"💬 Chat ID: {chat_id}\n\n"
+                "*Comandos:*\n"
+                "• */telegram testar* — enviar mensagem de teste\n"
+                "• */telegram configurar* — trocar configuração\n"
+                "• */telegram remover* — remover configuração"
+            )
+        
+        else:
+            # Telegram não configurado
+            return _txt(
+                "📢 *Telegram não configurado*\n\n"
+                "O Telegram é usado para receber alertas completos do Sentinela, "
+                "incluindo resumo, gráfico e tabela.\n\n"
+                "Para configurar, envie:\n"
+                "*/telegram configurar*"
+            )
+    
+    # /telegram configurar
+    if lower in {"/telegram configurar", "/telegram config"}:
+        clear_session(user_id)
+        save_session(user_id, "awaiting_telegram_token", {})
+        
+        return _txt(
+            "📢 *Configurar Telegram*\n\n"
+            "Você vai precisar de:\n"
+            "1️⃣ Token do bot do Telegram\n"
+            "2️⃣ Seu chat_id\n\n"
+            "*Tutorial rápido:*\n"
+            "• Abra o Telegram\n"
+            "• Procure por @BotFather\n"
+            "• Envie /newbot\n"
+            "• Siga as instruções\n"
+            "• Copie o token gerado\n\n"
+            "⚠️ *Importante:* Envie uma mensagem qualquer para seu bot antes de continuar.\n\n"
+            "Agora envie o *token do bot*.\n"
+            "_Para cancelar, envie */cancelar*._"
+        )
+    
+    # /telegram testar
+    if lower in {"/telegram testar", "/telegram teste", "/telegram test"}:
+        config = get_user_telegram_config(user_id)
+        
+        if not config:
+            return _txt(
+                "⚠️ Telegram não configurado.\n\n"
+                "Use */telegram configurar* primeiro."
+            )
+        
+        # Tenta enviar mensagem de teste
+        try:
+            from telegram_service import TelegramSentinela
+            
+            telegram = TelegramSentinela(
+                token=config["token"],
+                chat_id=config["chat_id"]
+            )
+            
+            test_message = (
+                "🛡️ *Teste do ShopeeBooster Sentinela*\n\n"
+                "Se você recebeu esta mensagem, seus alertas do Telegram "
+                "estão configurados corretamente."
+            )
+            
+            result = telegram.enviar_mensagem(test_message)
+            
+            if result:
+                log.info(f"[TELEGRAM] Teste enviado com sucesso para user={user_id}")
+                return _txt(
+                    "✅ *Mensagem de teste enviada para o Telegram!*\n\n"
+                    "Verifique seu Telegram para confirmar o recebimento."
+                )
+            else:
+                log.warning(f"[TELEGRAM] Falha no teste")
+                return _txt(
+                    "❌ Não consegui enviar a mensagem de teste.\n\n"
+                    "*Verifique:*\n"
+                    "• Se o token está correto\n"
+                    "• Se você enviou uma mensagem para o bot antes\n"
+                    "• Se o chat_id está correto"
+                )
+        
+        except Exception as e:
+            log.error(f"[TELEGRAM] Erro no teste: {e}")
+            return _txt(
+                f"❌ Erro ao enviar mensagem de teste:\n{e}\n\n"
+                "Verifique suas configurações com */telegram status*."
+            )
+    
+    # /telegram remover
+    if lower in {"/telegram remover", "/telegram deletar", "/telegram apagar"}:
+        config = get_user_telegram_config(user_id)
+        
+        if not config:
+            return _txt(
+                "⚠️ Você não tem Telegram configurado.\n\n"
+                "Use */telegram configurar* para adicionar."
+            )
+        
+        clear_session(user_id)
+        save_session(user_id, "awaiting_telegram_remove_confirm", {})
+        
+        return _txt(
+            "⚠️ *Tem certeza que deseja remover a configuração do Telegram?*\n\n"
+            "Após a remoção, você não receberá mais alertas do Sentinela.\n\n"
+            "Digite *CONFIRMAR* para remover.\n"
+            "_Ou envie */cancelar* para manter._"
+        )
+    
+    # Comando não reconhecido
+    return _txt(
+        "❓ Comando não reconhecido.\n\n"
+        "Use */telegram* para ver os comandos disponíveis."
+    )
+
+
+def _handle_telegram_token_input(user_id: str, text: str) -> dict:
+    """
+    Processa o token do bot do Telegram.
+    Valida formato básico e pede o chat_id.
+    """
+    token = text.strip()
+    
+    # Validação básica do token
+    if len(token) < 30:
+        return _txt(
+            "❌ Token inválido. O token do Telegram deve ter pelo menos 30 caracteres.\n\n"
+            "Envie o token correto ou */cancelar* para interromper."
+        )
+    
+    if ":" not in token:
+        return _txt(
+            "❌ Token inválido. O token do Telegram deve conter ':' (dois pontos).\n\n"
+            "Formato esperado: 123456789:ABCdefGHIjklMNOpqrSTUvwxYZ\n\n"
+            "Envie o token correto ou */cancelar* para interromper."
+        )
+    
+    # Valida que a parte antes do ":" é numérica
+    bot_id = token.split(":")[0]
+    if not bot_id.isdigit():
+        return _txt(
+            "❌ Token inválido. A parte antes de ':' deve ser numérica.\n\n"
+            "Formato esperado: 123456789:ABCdefGHIjklMNOpqrSTUvwxYZ\n\n"
+            "Envie o token correto ou */cancelar* para interromper."
+        )
+    
+    # Token válido, pede chat_id
+    save_session(user_id, "awaiting_telegram_chat_id", {"token": token})
+    
+    log.info(f"[TELEGRAM] Token recebido para user={user_id}")
+    
+    return _txt(
+        "✅ *Token recebido.*\n\n"
+        "Agora envie seu *chat_id* do Telegram.\n\n"
+        "*Dica:* Depois de mandar uma mensagem para seu bot, você pode acessar:\n"
+        f"https://api.telegram.org/bot{token}/getUpdates\n\n"
+        "Procure por `\"chat\":{{\"id\":...}}`\n\n"
+        "O chat_id pode ser positivo ou negativo (grupos/canais).\n"
+        "_Ou envie */cancelar* para interromper._"
+    )
+
+
+def _handle_telegram_chat_id_input(user_id: str, text: str, data: dict) -> dict:
+    """
+    Processa o chat_id do Telegram.
+    Salva token e chat_id criptografados e envia teste automático.
+    """
+    chat_id = text.strip()
+    
+    # Remove espaços e caracteres não numéricos (exceto - no início)
+    chat_id_clean = chat_id.replace(" ", "").replace("+", "")
+    
+    # Validação básica do chat_id
+    if not chat_id_clean:
+        return _txt(
+            "❌ Chat ID inválido. Envie um número válido.\n\n"
+            "Exemplo: 123456789 ou -1001234567890\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    # Verifica se é numérico (pode começar com -)
+    if chat_id_clean.startswith("-"):
+        if not chat_id_clean[1:].isdigit():
+            return _txt(
+                "❌ Chat ID inválido. Deve ser um número.\n\n"
+                "Exemplo: 123456789 ou -1001234567890\n\n"
+                "_Ou envie */cancelar* para interromper._"
+            )
+    else:
+        if not chat_id_clean.isdigit():
+            return _txt(
+                "❌ Chat ID inválido. Deve ser um número.\n\n"
+                "Exemplo: 123456789 ou -1001234567890\n\n"
+                "_Ou envie */cancelar* para interromper._"
+            )
+    
+    # Recupera token da sessão
+    token = data.get("token")
+    
+    if not token:
+        clear_session(user_id)
+        return _txt(
+            "❌ Erro: token não encontrado na sessão.\n\n"
+            "Tente novamente com */telegram configurar*."
+        )
+    
+    # Salva token e chat_id criptografados
+    from shopee_core.user_config_service import save_secret, mask_secret
+    
+    try:
+        save_secret(user_id, "telegram_token", token)
+        save_secret(user_id, "telegram_chat_id", chat_id_clean)
+        
+        log.info(f"[TELEGRAM] Configuração salva para user={user_id}")
+        
+        clear_session(user_id)
+        
+        # Tenta enviar mensagem de teste automática
+        try:
+            from telegram_service import TelegramSentinela
+            
+            telegram = TelegramSentinela(token=token, chat_id=chat_id_clean)
+            
+            test_message = (
+                "🛡️ *Teste do ShopeeBooster Sentinela*\n\n"
+                "Se você recebeu esta mensagem, seus alertas do Telegram "
+                "estão configurados corretamente."
+            )
+            
+            result = telegram.enviar_mensagem(test_message)
+            
+            if result:
+                log.info(f"[TELEGRAM] Teste automático enviado com sucesso para user={user_id}")
+                
+                masked_token = mask_secret(token)
+                
+                return _txt(
+                    f"✅ *Telegram configurado com sucesso!*\n\n"
+                    f"🤖 Bot Token: {masked_token}\n"
+                    f"💬 Chat ID: {chat_id_clean}\n\n"
+                    f"Enviei uma mensagem de teste para confirmar.\n"
+                    f"Verifique seu Telegram!\n\n"
+                    f"Use */telegram testar* para enviar outra mensagem de teste."
+                )
+            else:
+                log.warning(f"[TELEGRAM] Falha no teste automático")
+                
+                masked_token = mask_secret(token)
+                
+                return _txt(
+                    f"⚠️ *Telegram configurado, mas o teste falhou.*\n\n"
+                    f"🤖 Bot Token: {masked_token}\n"
+                    f"💬 Chat ID: {chat_id_clean}\n\n"
+                    f"*Verifique:*\n"
+                    f"• Se você enviou uma mensagem para o bot antes\n"
+                    f"• Se o chat_id está correto\n\n"
+                    f"Use */telegram testar* para tentar novamente."
+                )
+        
+        except Exception as e:
+            log.error(f"[TELEGRAM] Erro no teste automático: {e}")
+            
+            masked_token = mask_secret(token)
+            
+            return _txt(
+                f"⚠️ *Telegram configurado, mas o teste falhou.*\n\n"
+                f"🤖 Bot Token: {masked_token}\n"
+                f"💬 Chat ID: {chat_id_clean}\n\n"
+                f"Erro: {e}\n\n"
+                f"Use */telegram testar* para tentar novamente."
+            )
+    
+    except Exception as e:
+        log.error(f"[TELEGRAM] Erro ao salvar configuração: {e}")
+        clear_session(user_id)
+        
+        return _txt(
+            f"❌ Erro ao salvar configuração: {e}\n\n"
+            "Tente novamente com */telegram configurar*."
+        )
+
+
+def _handle_telegram_remove_confirm(user_id: str, text: str) -> dict:
+    """Processa confirmação de remoção da configuração do Telegram."""
+    text_clean = text.strip().upper()
+    
+    if text_clean == "CONFIRMAR":
+        from shopee_core.user_config_service import delete_secret
+        
+        token_deleted = delete_secret(user_id, "telegram_token")
+        chat_id_deleted = delete_secret(user_id, "telegram_chat_id")
+        
+        clear_session(user_id)
+        
+        if token_deleted or chat_id_deleted:
+            log.info(f"[TELEGRAM] Configuração removida para user={user_id}")
+            
+            return _txt(
+                "✅ *Configuração do Telegram removida.*\n\n"
+                "Você não receberá mais alertas do Sentinela.\n\n"
+                "Use */telegram configurar* para adicionar novamente."
+            )
+        else:
+            return _txt(
+                "❌ Erro ao remover configuração.\n\n"
+                "Tente novamente com */telegram remover*."
+            )
+    
+    elif text.lower().strip() in {"cancelar", "/cancelar", "não", "nao"}:
+        clear_session(user_id)
+        return _txt(
+            "❌ Remoção cancelada.\n\n"
+            "Sua configuração do Telegram foi mantida."
+        )
+    
+    else:
+        return _txt(
+            "⚠️ Para confirmar a remoção, digite exatamente:\n"
+            "*CONFIRMAR*\n\n"
+            "_Ou envie */cancelar* para manter a configuração._"
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
