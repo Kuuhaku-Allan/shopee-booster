@@ -112,6 +112,25 @@ def init_bot_state_db():
                 UNIQUE(user_id, shop_uid, keyword, janela_execucao)
             );
 
+            CREATE TABLE IF NOT EXISTS sentinel_runs (
+                run_id            TEXT PRIMARY KEY,
+                user_id           TEXT    NOT NULL,
+                shop_uid          TEXT    NOT NULL,
+                username          TEXT    NOT NULL,
+                janela_execucao   TEXT    NOT NULL,
+                status            TEXT    NOT NULL,
+                keywords_json     TEXT,
+                resultado_json    TEXT,
+                summary_text      TEXT,
+                chart_path        TEXT,
+                table_csv_path    TEXT,
+                table_png_path    TEXT,
+                whatsapp_sent_at  TEXT,
+                telegram_sent_at  TEXT,
+                created_at        TEXT    NOT NULL,
+                finished_at       TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS image_history (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id     TEXT    NOT NULL,
@@ -484,4 +503,152 @@ def clear_image_history(user_id: str, session_id: str):
         conn.execute(
             "DELETE FROM image_history WHERE user_id = ? AND session_id = ?",
             (user_id, session_id),
+        )
+
+
+# ══════════════════════════════════════════════════════════════
+# SENTINEL RUNS — Histórico de execuções do Sentinela
+# ══════════════════════════════════════════════════════════════
+
+def save_sentinel_run(
+    run_id: str,
+    user_id: str,
+    shop_uid: str,
+    username: str,
+    janela_execucao: str,
+    status: str,
+    keywords: list = None,
+    resultado: dict = None,
+    summary_text: str = None,
+    chart_path: str = None,
+    table_csv_path: str = None,
+    table_png_path: str = None,
+    whatsapp_sent_at: str = None,
+    telegram_sent_at: str = None,
+):
+    """
+    Salva ou atualiza uma execução do Sentinela.
+    
+    Args:
+        run_id: ID único da execução (ex: user_id + janela_execucao)
+        user_id: JID do WhatsApp
+        shop_uid: UID da loja
+        username: Nome da loja
+        janela_execucao: Janela de tempo
+        status: Status da execução (done, error, timeout)
+        keywords: Lista de keywords monitoradas
+        resultado: Resultado completo da execução
+        summary_text: Texto do resumo
+        chart_path: Caminho do gráfico gerado
+        table_csv_path: Caminho do CSV gerado
+        table_png_path: Caminho da tabela PNG gerada
+        whatsapp_sent_at: Timestamp do envio WhatsApp
+        telegram_sent_at: Timestamp do envio Telegram
+    """
+    init_bot_state_db()
+    
+    import json
+    
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO sentinel_runs
+                (run_id, user_id, shop_uid, username, janela_execucao, status,
+                 keywords_json, resultado_json, summary_text,
+                 chart_path, table_csv_path, table_png_path,
+                 whatsapp_sent_at, telegram_sent_at,
+                 created_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                status = excluded.status,
+                keywords_json = excluded.keywords_json,
+                resultado_json = excluded.resultado_json,
+                summary_text = excluded.summary_text,
+                chart_path = excluded.chart_path,
+                table_csv_path = excluded.table_csv_path,
+                table_png_path = excluded.table_png_path,
+                whatsapp_sent_at = excluded.whatsapp_sent_at,
+                telegram_sent_at = excluded.telegram_sent_at,
+                finished_at = excluded.finished_at
+            """,
+            (
+                run_id,
+                user_id,
+                shop_uid,
+                username,
+                janela_execucao,
+                status,
+                json.dumps(keywords, ensure_ascii=False) if keywords else None,
+                json.dumps(resultado, ensure_ascii=False) if resultado else None,
+                summary_text,
+                chart_path,
+                table_csv_path,
+                table_png_path,
+                whatsapp_sent_at,
+                telegram_sent_at,
+                datetime.utcnow().isoformat(),
+                datetime.utcnow().isoformat() if status in {"done", "error", "timeout"} else None,
+            ),
+        )
+
+
+def get_latest_sentinel_run(user_id: str, shop_uid: str, status: str = "done") -> dict | None:
+    """
+    Retorna a última execução do Sentinela para a loja.
+    
+    Args:
+        user_id: JID do WhatsApp
+        shop_uid: UID da loja
+        status: Status da execução (padrão: done)
+    
+    Returns:
+        Dict com dados da execução ou None
+    """
+    init_bot_state_db()
+    
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM sentinel_runs
+            WHERE user_id = ? AND shop_uid = ? AND status = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (user_id, shop_uid, status),
+        ).fetchone()
+    
+    if not row:
+        return None
+    
+    import json
+    result = dict(row)
+    
+    # Parse JSON fields
+    if result.get("keywords_json"):
+        try:
+            result["keywords"] = json.loads(result["keywords_json"])
+        except:
+            result["keywords"] = []
+    
+    if result.get("resultado_json"):
+        try:
+            result["resultado"] = json.loads(result["resultado_json"])
+        except:
+            result["resultado"] = {}
+    
+    return result
+
+
+def mark_sentinel_run_telegram_sent(run_id: str):
+    """Marca que o relatório foi enviado ao Telegram."""
+    init_bot_state_db()
+    
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE sentinel_runs
+            SET telegram_sent_at = ?
+            WHERE run_id = ?
+            """,
+            (datetime.utcnow().isoformat(), run_id),
         )

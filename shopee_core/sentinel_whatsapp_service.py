@@ -516,6 +516,7 @@ def format_sentinel_menu() -> str:
         "Comandos disponíveis:\n\n"
         "*/sentinela configurar* — cadastrar loja e preferências\n"
         "*/sentinela rodar* — fazer uma checagem agora\n"
+        "*/sentinela relatorio* — reenviar último relatório ao Telegram\n"
         "*/sentinela destravar* — remover locks antigos (timeout/error)\n"
         "*/sentinela status* — ver monitoramento atual\n"
         "*/sentinela keywords* — atualizar palavras-chave\n"

@@ -1327,6 +1327,9 @@ def _run_sentinel_bg(user_id: str, config: dict):
         # ── Telegram (por usuário) ─────────────────────────────────
         telegram_note = "Relatório completo não enviado. Use /telegram configurar."
         sent_to_telegram = False
+        chart_path = None
+        table_csv_path = None
+        table_png_path = None
 
         try:
             from shopee_core.whatsapp_service import get_user_telegram_config
@@ -1334,25 +1337,37 @@ def _run_sentinel_bg(user_id: str, config: dict):
         except Exception:
             tg_cfg = None
 
-        if tg_cfg:
+        # ── Sempre gera relatório (U7.6) ───────────────────────────
+        try:
+            from shopee_core.sentinel_report_service import generate_sentinel_report
+
+            log.info("[SENTINELA] Gerando relatório...")
+            report = generate_sentinel_report(
+                resultado,
+                include_chart=True,
+                include_csv=True,
+                include_table_png=False,
+            )
+            
+            chart_path = report.get("chart_path")
+            table_csv_path = report.get("csv_path")
+            table_png_path = report.get("table_png_path")
+            
+            log.info(f"[SENTINELA] Relatório gerado: chart={chart_path}, csv={table_csv_path}")
+        except Exception as e:
+            log.error(f"[SENTINELA] Erro ao gerar relatório: {e}")
+
+        # ── Envia para Telegram se configurado ─────────────────────
+        if tg_cfg and chart_path:
             try:
                 from telegram_service import TelegramSentinela
-                from shopee_core.sentinel_report_service import generate_sentinel_report
-
-                log.info("[SENTINELA] Gerando relatório para Telegram...")
-                report = generate_sentinel_report(
-                    resultado,
-                    include_chart=True,
-                    include_csv=True,
-                    include_table_png=False,
-                )
 
                 log.info("[SENTINELA] Enviando relatório ao Telegram...")
                 telegram = TelegramSentinela(token=tg_cfg["token"], chat_id=tg_cfg["chat_id"])
                 telegram.enviar_relatorio_sentinela(
                     resultado=resultado,
-                    chart_path=report.get("chart_path") or None,
-                    table_path=report.get("csv_path") or None,
+                    chart_path=chart_path,
+                    table_path=table_csv_path,
                 )
                 sent_to_telegram = True
                 log.info("[SENTINELA] Relatório enviado ao Telegram com sucesso")
@@ -1361,6 +1376,38 @@ def _run_sentinel_bg(user_id: str, config: dict):
 
         if sent_to_telegram:
             telegram_note = "📢 Relatório completo enviado ao Telegram."
+        elif chart_path:
+            telegram_note = (
+                "📢 Relatório salvo.\n"
+                "Configure o Telegram e use */sentinela relatorio* para receber."
+            )
+        
+        # ── Salva execução no histórico (U7.6) ─────────────────────
+        try:
+            from shopee_core.bot_state import save_sentinel_run
+            
+            run_id = f"{user_id}_{janela_execucao}"
+            
+            save_sentinel_run(
+                run_id=run_id,
+                user_id=user_id,
+                shop_uid=shop_uid,
+                username=username,
+                janela_execucao=janela_execucao,
+                status="done",
+                keywords=keywords_executadas,
+                resultado=resultado,
+                summary_text="\n".join(msg_parts) if 'msg_parts' in locals() else None,
+                chart_path=chart_path,
+                table_csv_path=table_csv_path,
+                table_png_path=table_png_path,
+                whatsapp_sent_at=datetime.utcnow().isoformat(),
+                telegram_sent_at=datetime.utcnow().isoformat() if sent_to_telegram else None,
+            )
+            
+            log.info(f"[SENTINELA] Execução salva: run_id={run_id}")
+        except Exception as e:
+            log.error(f"[SENTINELA] Erro ao salvar execução: {e}")
 
         # ── Monta mensagem de resumo para WhatsApp ─────────────────
         msg_parts = [

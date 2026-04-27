@@ -2086,6 +2086,73 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
                 "*/sentinela rodar*"
             )
     
+    # /sentinela relatorio (U7.6)
+    if lower in {"/sentinela relatorio", "/sentinela reenviar", "/sentinela telegram"}:
+        active_shop = get_active_shop(user_id)
+        if not active_shop:
+            return _txt(
+                "Você ainda não tem uma loja ativa.\n\n"
+                "Use */loja adicionar* para cadastrar uma loja primeiro."
+            )
+
+        # Verifica se Telegram está configurado
+        tg_cfg = get_user_telegram_config(user_id)
+        if not tg_cfg:
+            return _txt(
+                "📢 *Telegram não configurado*\n\n"
+                "Use */telegram configurar* para receber o relatório completo."
+            )
+        
+        # Busca último relatório done
+        from shopee_core.bot_state import get_latest_sentinel_run, mark_sentinel_run_telegram_sent
+        
+        last_run = get_latest_sentinel_run(user_id, active_shop.get("shop_uid"), status="done")
+        
+        if not last_run:
+            return _txt(
+                "⚠️ *Nenhum relatório encontrado*\n\n"
+                "Ainda não existe relatório salvo para esta loja.\n\n"
+                "Use */sentinela rodar* primeiro."
+            )
+        
+        # Envia relatório para o Telegram
+        try:
+            from telegram_service import TelegramSentinela
+            
+            telegram = TelegramSentinela(token=tg_cfg["token"], chat_id=tg_cfg["chat_id"])
+            
+            resultado = last_run.get("resultado", {})
+            chart_path = last_run.get("chart_path")
+            table_path = last_run.get("table_csv_path")
+            
+            telegram.enviar_relatorio_sentinela(
+                resultado=resultado,
+                chart_path=chart_path,
+                table_path=table_path,
+            )
+            
+            # Marca como enviado
+            mark_sentinel_run_telegram_sent(last_run["run_id"])
+            
+            janela = last_run.get("janela_execucao", "")
+            keywords_count = len(last_run.get("keywords", []))
+            
+            return _txt(
+                f"✅ *Relatório enviado ao Telegram!*\n\n"
+                f"📊 Janela: {janela}\n"
+                f"🔍 Keywords: {keywords_count}\n\n"
+                f"Confira o relatório completo no Telegram."
+            )
+            
+        except Exception as e:
+            log.error(f"[WA] Erro ao enviar relatório ao Telegram: {e}")
+            return _txt(
+                f"❌ *Erro ao enviar relatório*\n\n"
+                f"Não consegui enviar o relatório ao Telegram.\n\n"
+                f"Erro: {str(e)[:100]}\n\n"
+                f"Verifique se o bot do Telegram está funcionando."
+            )
+    
     # /sentinela pausar
     if lower in {"/sentinela pausar", "/sentinela parar"}:
         active_shop = get_active_shop(user_id)
