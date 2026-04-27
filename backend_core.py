@@ -118,6 +118,104 @@ MODELOS_TEXTO = [
 ]
 
 
+# ══════════════════════════════════════════════════════════════════
+# HELPER DE FALLBACK ROBUSTO PARA MODELOS GEMINI (U8)
+# ══════════════════════════════════════════════════════════════════
+
+def generate_text_with_model_fallback(
+    prompt: str,
+    api_key: str | None = None,
+    models: list[str] | None = None,
+    task_name: str = "text"
+) -> str:
+    """
+    Gera texto usando Gemini com fallback robusto entre múltiplos modelos.
+    
+    Args:
+        prompt: Prompt para o modelo
+        api_key: API Key opcional (usa GOOGLE_API_KEY se None)
+        models: Lista de modelos a tentar (usa MODELOS_TEXTO se None)
+        task_name: Nome da tarefa para logs
+    
+    Returns:
+        Texto gerado ou mensagem de erro detalhada
+    
+    Comportamento:
+        - Tenta cada modelo na ordem fornecida
+        - Cria cliente Gemini NOVO para cada tentativa (evita "client closed")
+        - Se erro parecer relacionado a config, tenta sem config
+        - Registra erro de cada modelo
+        - Retorna resumo de todos os erros se todos falharem
+    """
+    import logging
+    log = logging.getLogger("gemini_fallback")
+    
+    errors = []
+    models = models or MODELOS_TEXTO
+    
+    # Determina API key efetiva
+    effective_key = api_key or os.getenv("GOOGLE_API_KEY")
+    if not effective_key:
+        return "❌ Nenhuma Gemini API Key configurada. Use /ia configurar."
+    
+    log.info(f"[GEMINI] Iniciando fallback para task={task_name}, {len(models)} modelos")
+    
+    for model in models:
+        log.info(f"[GEMINI] Tentando modelo {model}")
+        
+        # Configurações a tentar para este modelo
+        configs_to_try = []
+        
+        # Modelos 3.1 e 2.5 suportam thinking_config
+        if "3.1" in model or "2.5" in model:
+            configs_to_try.append({"thinking_config": {"thinking_budget": 0}})
+        
+        # Sempre tenta sem config como fallback
+        configs_to_try.append(None)
+        
+        for cfg in configs_to_try:
+            client = None
+            try:
+                # Cria cliente NOVO para cada tentativa (U8)
+                client = genai.Client(api_key=effective_key)
+                
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[prompt],
+                    config=cfg,
+                )
+                
+                text = (response.text or "").strip()
+                if text:
+                    log.info(f"[GEMINI] Sucesso com modelo {model}")
+                    return text
+                
+                errors.append(f"{model}: resposta vazia")
+                
+            except Exception as e:
+                config_label = "com config" if cfg else "sem config"
+                error_msg = f"{model} ({config_label}): {type(e).__name__}: {str(e)[:200]}"
+                errors.append(error_msg)
+                log.warning(f"[GEMINI] Falhou modelo {model} ({config_label}): {e}")
+                time.sleep(1.5)  # Rate limiting
+                
+            finally:
+                # Fecha cliente para evitar "client closed" em próximas tentativas
+                try:
+                    if client:
+                        client.close()
+                except Exception:
+                    pass
+    
+    # Todos os modelos falharam
+    log.error(f"[GEMINI] Todos os modelos falharam para task={task_name}")
+    return (
+        "⏳ Todos os modelos falharam.\n\n"
+        "Modelos tentados:\n"
+        + "\n".join(f"• {err[:300]}" for err in errors)
+    )
+
+
 
 # ══════════════════════════════════════════════════════════════════
 # UTILITÁRIOS
@@ -712,22 +810,14 @@ Responda EXATAMENTE neste formato:
 ## 🚀 3 ARGUMENTOS DE VENDA ÚNICOS
 [3 bullets curtos baseados diretamente nas fraquezas/reclamações dos concorrentes]
 """
-    ultimo_erro = ""
-    for m in MODELOS_TEXTO:
-        try:
-            config = {"thinking_config": {"thinking_budget": 0}} if "3.1" in m or "2.5" in m else {}
-            # Passa api_key para get_client
-            response = get_client(api_key=api_key).models.generate_content(
-                model=m,
-                contents=[prompt],
-                config=config if config else None
-            )
-            return response.text
-        except Exception as e:
-            ultimo_erro = f"{m}: {e}"
-            time.sleep(2)
-            continue
-    return f"⏳ Todos os modelos falharam. Último erro: {ultimo_erro}"
+    
+    # U8: Usa helper robusto de fallback
+    return generate_text_with_model_fallback(
+        prompt=prompt,
+        api_key=api_key,
+        models=MODELOS_TEXTO,
+        task_name="audit_optimization",
+    )
 
 
 def build_catalog_context(produtos: list, shop_name: str) -> str:
