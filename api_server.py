@@ -1346,14 +1346,17 @@ def _run_sentinel_bg(user_id: str, config: dict):
                 resultado,
                 include_chart=True,
                 include_csv=True,
-                include_table_png=False,
+                include_table_png=True,  # U7.7: Incluir tabela PNG também
             )
             
             chart_path = report.get("chart_path")
             table_csv_path = report.get("csv_path")
             table_png_path = report.get("table_png_path")
             
-            log.info(f"[SENTINELA] Relatório gerado: chart={chart_path}, csv={table_csv_path}")
+            log.info(f"[SENTINELA] Relatório gerado:")
+            log.info(f"[SENTINELA]   chart_path={chart_path}")
+            log.info(f"[SENTINELA]   csv_path={table_csv_path}")
+            log.info(f"[SENTINELA]   table_png_path={table_png_path}")
         except Exception as e:
             log.error(f"[SENTINELA] Erro ao gerar relatório: {e}")
 

@@ -2105,6 +2105,7 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
         
         # Busca último relatório done
         from shopee_core.bot_state import get_latest_sentinel_run, mark_sentinel_run_telegram_sent
+        import os
         
         last_run = get_latest_sentinel_run(user_id, active_shop.get("shop_uid"), status="done")
         
@@ -2115,6 +2116,63 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
                 "Use */sentinela rodar* primeiro."
             )
         
+        # Verifica arquivos
+        chart_path = last_run.get("chart_path")
+        csv_path = last_run.get("table_csv_path")
+        table_png_path = last_run.get("table_png_path")
+        
+        log.info(f"[RELATORIO] chart_path={chart_path}")
+        log.info(f"[RELATORIO] csv_path={csv_path}")
+        log.info(f"[RELATORIO] table_png_path={table_png_path}")
+        
+        # Verifica se arquivos existem
+        chart_exists = chart_path and os.path.exists(chart_path)
+        csv_exists = csv_path and os.path.exists(csv_path)
+        table_png_exists = table_png_path and os.path.exists(table_png_path)
+        
+        log.info(f"[RELATORIO] Arquivos existem: chart={chart_exists}, csv={csv_exists}, table_png={table_png_exists}")
+        
+        # Se não existem, tenta regenerar
+        if not chart_exists or not csv_exists:
+            log.warning("[RELATORIO] Arquivos não encontrados, tentando regenerar...")
+            try:
+                from shopee_core.sentinel_report_service import generate_sentinel_report
+                
+                resultado = last_run.get("resultado", {})
+                if resultado:
+                    report = generate_sentinel_report(
+                        resultado,
+                        include_chart=True,
+                        include_csv=True,
+                        include_table_png=True,
+                    )
+                    
+                    chart_path = report.get("chart_path")
+                    csv_path = report.get("csv_path")
+                    table_png_path = report.get("table_png_path")
+                    
+                    # Atualiza no banco
+                    from shopee_core.bot_state import save_sentinel_run
+                    save_sentinel_run(
+                        run_id=last_run["run_id"],
+                        user_id=last_run["user_id"],
+                        shop_uid=last_run["shop_uid"],
+                        username=last_run["username"],
+                        janela_execucao=last_run["janela_execucao"],
+                        status=last_run["status"],
+                        keywords=last_run.get("keywords"),
+                        resultado=resultado,
+                        chart_path=chart_path,
+                        table_csv_path=csv_path,
+                        table_png_path=table_png_path,
+                        whatsapp_sent_at=last_run.get("whatsapp_sent_at"),
+                        telegram_sent_at=last_run.get("telegram_sent_at"),
+                    )
+                    
+                    log.info("[RELATORIO] Relatório regenerado com sucesso")
+            except Exception as e:
+                log.error(f"[RELATORIO] Erro ao regenerar relatório: {e}")
+        
         # Envia relatório para o Telegram
         try:
             from telegram_service import TelegramSentinela
@@ -2122,14 +2180,23 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
             telegram = TelegramSentinela(token=tg_cfg["token"], chat_id=tg_cfg["chat_id"])
             
             resultado = last_run.get("resultado", {})
-            chart_path = last_run.get("chart_path")
-            table_path = last_run.get("table_csv_path")
             
+            log.info("[TELEGRAM] Enviando resumo...")
             telegram.enviar_relatorio_sentinela(
                 resultado=resultado,
-                chart_path=chart_path,
-                table_path=table_path,
+                chart_path=chart_path if chart_exists or chart_path else None,
+                table_path=csv_path if csv_exists or csv_path else None,
             )
+            log.info("[TELEGRAM] Resumo e arquivos enviados")
+            
+            # Envia tabela PNG se existir
+            if table_png_exists and table_png_path:
+                try:
+                    log.info("[TELEGRAM] Enviando tabela PNG...")
+                    telegram.enviar_foto(table_png_path, caption="📊 Tabela de Concorrentes")
+                    log.info("[TELEGRAM] Tabela PNG enviada")
+                except Exception as e:
+                    log.error(f"[TELEGRAM] Erro ao enviar tabela PNG: {e}")
             
             # Marca como enviado
             mark_sentinel_run_telegram_sent(last_run["run_id"])
@@ -2137,15 +2204,29 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
             janela = last_run.get("janela_execucao", "")
             keywords_count = len(last_run.get("keywords", []))
             
+            # Monta lista de itens enviados
+            items = ["• resumo"]
+            if chart_exists or chart_path:
+                items.append("• gráfico de preços")
+            if csv_exists or csv_path:
+                items.append("• tabela CSV")
+            if table_png_exists:
+                items.append("• tabela PNG")
+            
+            items_text = "\n".join(items)
+            
             return _txt(
                 f"✅ *Relatório enviado ao Telegram!*\n\n"
                 f"📊 Janela: {janela}\n"
                 f"🔍 Keywords: {keywords_count}\n\n"
+                f"Itens enviados:\n{items_text}\n\n"
                 f"Confira o relatório completo no Telegram."
             )
             
         except Exception as e:
             log.error(f"[WA] Erro ao enviar relatório ao Telegram: {e}")
+            import traceback
+            log.error(traceback.format_exc())
             return _txt(
                 f"❌ *Erro ao enviar relatório*\n\n"
                 f"Não consegui enviar o relatório ao Telegram.\n\n"
