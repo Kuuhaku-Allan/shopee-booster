@@ -180,6 +180,7 @@ def _menu_message() -> dict:
     return _txt(
         "👋 Olá! Eu sou o *ShopeeBooster*, seu assistente de e-commerce.\n\n"
         "O que você quer fazer hoje?\n\n"
+        "🏪 */loja* — Gerenciar suas lojas cadastradas\n"
         "🔍 */auditar* — Auditar e otimizar um produto da sua loja\n"
         "💬 */chat* — Tirar dúvidas sobre e-commerce\n"
         "🖼️ */imagem* — Editar imagem de produto\n"
@@ -479,6 +480,11 @@ def _route(
             f"Se algo parece travado, envie */cancelar*."
         )
 
+    # ── Comandos de Loja (U2) ────────────────────────────────────
+
+    if lower.startswith("/loja"):
+        return _handle_loja_command(user_id, text, lower, state, data)
+
     if lower in {"/chat"}:
         clear_session(user_id)
         return _txt(
@@ -539,6 +545,20 @@ def _route(
     if state == "awaiting_product_index":
         return _handle_product_selection(user_id, lower, data)
 
+    # ── Estados do fluxo de Loja (U2) ────────────────────────────
+
+    if state == "awaiting_shop_add_url":
+        return _handle_loja_add_url(user_id, text)
+
+    if state == "awaiting_shop_select_index":
+        return _handle_loja_select_index(user_id, text, data)
+
+    if state == "awaiting_shop_remove_index":
+        return _handle_loja_remove_index(user_id, text, data)
+
+    if state == "awaiting_shop_remove_confirm":
+        return _handle_loja_remove_confirm(user_id, text, data)
+
     # ── Estados do fluxo do Sentinela ─────────────────────────────
 
     if state == "awaiting_sentinel_shop_url":
@@ -556,6 +576,366 @@ def _route(
     # ── Fallback: conversa geral com o chatbot ────────────────────
 
     return _handle_general_chat(user_id, text, data)
+
+
+# ══════════════════════════════════════════════════════════════════
+# HANDLERS DE LOJA (U2)
+# ══════════════════════════════════════════════════════════════════
+
+def _handle_loja_command(user_id: str, text: str, lower: str, state: str, data: dict) -> dict:
+    """Roteador de comandos de loja."""
+    from shopee_core.user_config_service import (
+        get_active_shop,
+        list_shops,
+    )
+    
+    # Comando base: /loja
+    if lower == "/loja":
+        shops = list_shops(user_id)
+        active_shop = get_active_shop(user_id)
+        
+        if not shops:
+            return _txt(
+                "🏪 *Você ainda não tem uma loja cadastrada.*\n\n"
+                "Use */loja adicionar* para cadastrar a primeira loja.\n\n"
+                "Depois você poderá usar:\n"
+                "• */catalogo* para importar produtos\n"
+                "• */auditar* para otimizar anúncios\n"
+                "• */sentinela* para monitorar concorrentes"
+            )
+        
+        # Monta mensagem com loja ativa e comandos
+        active_name = active_shop.get("display_name") or active_shop.get("username") if active_shop else None
+        
+        if active_name:
+            header = f"🏪 *Lojas cadastradas*\n\n✅ Loja ativa: *{active_name}*\n\n"
+        else:
+            header = "🏪 *Lojas cadastradas*\n\n⚠️ Nenhuma loja ativa no momento.\n\n"
+        
+        commands = (
+            "*Comandos:*\n"
+            "• */loja adicionar* — cadastrar uma loja\n"
+            "• */loja listar* — ver lojas salvas\n"
+            "• */loja selecionar* — trocar loja ativa\n"
+            "• */loja remover* — remover uma loja"
+        )
+        
+        return _txt(header + commands)
+    
+    # /loja adicionar
+    if lower.startswith("/loja adicionar"):
+        # Extrai URL inline se houver: /loja adicionar https://shopee.com.br/loja
+        parts = text.split(maxsplit=2)
+        inline_url = parts[2].strip() if len(parts) > 2 else ""
+        
+        if inline_url:
+            return _handle_loja_add_url(user_id, inline_url)
+        
+        clear_session(user_id)
+        save_session(user_id, "awaiting_shop_add_url", {})
+        return _txt(
+            "🏪 *Adicionar loja*\n\n"
+            "Me envie a URL da sua loja na Shopee.\n\n"
+            "*Exemplo:*\n"
+            "https://shopee.com.br/totalmenteseu\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    # /loja listar
+    if lower in {"/loja listar", "/loja lista", "/loja ver"}:
+        shops = list_shops(user_id)
+        
+        if not shops:
+            return _txt(
+                "🏪 Você ainda não tem lojas cadastradas.\n\n"
+                "Use */loja adicionar* para cadastrar a primeira."
+            )
+        
+        active_shop = get_active_shop(user_id)
+        active_uid = active_shop.get("shop_uid") if active_shop else None
+        
+        lines = ["🏪 *Suas lojas:*\n"]
+        for i, shop in enumerate(shops):
+            name = shop.get("display_name") or shop.get("username")
+            is_active = shop.get("shop_uid") == active_uid
+            marker = "✅" if is_active else f"*{i}*"
+            lines.append(f"{marker} — {name}")
+        
+        lines.append("\n_Use */loja selecionar* para trocar a loja ativa._")
+        
+        return _txt("\n".join(lines))
+    
+    # /loja selecionar
+    if lower in {"/loja selecionar", "/loja trocar", "/loja ativar"}:
+        shops = list_shops(user_id)
+        
+        if not shops:
+            return _txt(
+                "🏪 Você ainda não tem lojas cadastradas.\n\n"
+                "Use */loja adicionar* para cadastrar a primeira."
+            )
+        
+        if len(shops) == 1:
+            return _txt(
+                "🏪 Você tem apenas uma loja cadastrada.\n\n"
+                "Ela já está ativa automaticamente."
+            )
+        
+        # Monta lista numerada
+        active_shop = get_active_shop(user_id)
+        active_uid = active_shop.get("shop_uid") if active_shop else None
+        
+        lines = ["🏪 *Selecione a loja ativa:*\n"]
+        for i, shop in enumerate(shops):
+            name = shop.get("display_name") or shop.get("username")
+            is_active = shop.get("shop_uid") == active_uid
+            marker = "✅" if is_active else ""
+            lines.append(f"*{i}* — {name} {marker}")
+        
+        lines.append("\n_Envie o número da loja que deseja ativar._")
+        lines.append("_Ou envie */cancelar* para interromper._")
+        
+        clear_session(user_id)
+        save_session(user_id, "awaiting_shop_select_index", {"shops": shops})
+        
+        return _txt("\n".join(lines))
+    
+    # /loja remover
+    if lower in {"/loja remover", "/loja deletar", "/loja apagar"}:
+        shops = list_shops(user_id)
+        
+        if not shops:
+            return _txt(
+                "🏪 Você ainda não tem lojas cadastradas.\n\n"
+                "Use */loja adicionar* para cadastrar a primeira."
+            )
+        
+        # Monta lista numerada
+        lines = ["🏪 *Remover loja:*\n"]
+        for i, shop in enumerate(shops):
+            name = shop.get("display_name") or shop.get("username")
+            lines.append(f"*{i}* — {name}")
+        
+        lines.append("\n_Envie o número da loja que deseja remover._")
+        lines.append("_Ou envie */cancelar* para interromper._")
+        
+        clear_session(user_id)
+        save_session(user_id, "awaiting_shop_remove_index", {"shops": shops})
+        
+        return _txt("\n".join(lines))
+    
+    # Comando não reconhecido
+    return _txt(
+        "❓ Comando não reconhecido.\n\n"
+        "Use */loja* para ver os comandos disponíveis."
+    )
+
+
+def _handle_loja_add_url(user_id: str, url: str) -> dict:
+    """
+    Valida e adiciona uma loja.
+    Não exige que a Shopee retorne produtos - apenas valida a URL e extrai o username.
+    """
+    url = url.strip()
+    
+    # Validação básica de URL
+    if not url.startswith("http") or "shopee.com.br" not in url:
+        return _txt(
+            "❌ URL inválida. Use o formato:\n"
+            "https://shopee.com.br/nome_da_loja\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    # Extrai username da URL
+    import re
+    match = re.search(r'shopee\.com\.br/([^/?]+)', url)
+    if not match:
+        return _txt(
+            "❌ Não consegui extrair o nome da loja da URL.\n\n"
+            "Use o formato:\n"
+            "https://shopee.com.br/nome_da_loja\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    username = match.group(1)
+    
+    # Verifica se já existe
+    from shopee_core.user_config_service import list_shops
+    shops = list_shops(user_id)
+    
+    for shop in shops:
+        if shop.get("username") == username:
+            return _txt(
+                f"⚠️ A loja *{username}* já está cadastrada.\n\n"
+                "Use */loja listar* para ver suas lojas."
+            )
+    
+    # Adiciona a loja (sem validar produtos)
+    from shopee_core.user_config_service import add_shop
+    
+    is_first_shop = len(shops) == 0
+    
+    try:
+        shop_uid = add_shop(
+            user_id=user_id,
+            shop_url=url,
+            username=username,
+            shop_id=None,  # Será preenchido depois se necessário
+            display_name=None,
+            set_as_active=is_first_shop,
+        )
+        
+        log.info(f"[LOJA] Loja adicionada: user={user_id} username={username} uid={shop_uid}")
+        
+        clear_session(user_id)
+        
+        if is_first_shop:
+            return _txt(
+                f"✅ *Loja cadastrada!*\n\n"
+                f"🏪 Nome: *{username}*\n"
+                f"✅ Status: definida como loja ativa.\n\n"
+                f"Agora você pode usar:\n"
+                f"• */catalogo* para importar produtos\n"
+                f"• */auditar* para otimizar anúncios\n"
+                f"• */sentinela* para monitorar concorrentes"
+            )
+        else:
+            return _txt(
+                f"✅ *Loja cadastrada!*\n\n"
+                f"🏪 Nome: *{username}*\n\n"
+                f"Use */loja selecionar* para definir como loja ativa.\n"
+                f"Use */loja listar* para ver todas as suas lojas."
+            )
+    
+    except Exception as e:
+        log.error(f"[LOJA] Erro ao adicionar loja: {e}")
+        return _txt(
+            f"❌ Erro ao cadastrar loja: {e}\n\n"
+            "Tente novamente com */loja adicionar*."
+        )
+
+
+def _handle_loja_select_index(user_id: str, text: str, data: dict) -> dict:
+    """Processa seleção de loja ativa."""
+    try:
+        index = int(text.strip())
+    except ValueError:
+        return _txt(
+            "⚠️ Por favor, envie apenas o *número* da loja.\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    shops = data.get("shops", [])
+    
+    if index < 0 or index >= len(shops):
+        return _txt(
+            f"❌ Número inválido. Escolha entre *0* e *{len(shops) - 1}*.\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    shop = shops[index]
+    shop_uid = shop.get("shop_uid")
+    name = shop.get("display_name") or shop.get("username")
+    
+    from shopee_core.user_config_service import set_active_shop
+    
+    success = set_active_shop(user_id, shop_uid)
+    
+    clear_session(user_id)
+    
+    if success:
+        return _txt(
+            f"✅ *Loja ativada!*\n\n"
+            f"🏪 Loja ativa: *{name}*\n\n"
+            f"Agora os comandos */catalogo*, */auditar* e */sentinela* "
+            f"usarão esta loja automaticamente."
+        )
+    else:
+        return _txt(
+            "❌ Erro ao ativar loja.\n\n"
+            "Tente novamente com */loja selecionar*."
+        )
+
+
+def _handle_loja_remove_index(user_id: str, text: str, data: dict) -> dict:
+    """Processa seleção de loja para remoção."""
+    try:
+        index = int(text.strip())
+    except ValueError:
+        return _txt(
+            "⚠️ Por favor, envie apenas o *número* da loja.\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    shops = data.get("shops", [])
+    
+    if index < 0 or index >= len(shops):
+        return _txt(
+            f"❌ Número inválido. Escolha entre *0* e *{len(shops) - 1}*.\n\n"
+            "_Ou envie */cancelar* para interromper._"
+        )
+    
+    shop = shops[index]
+    name = shop.get("display_name") or shop.get("username")
+    shop_uid = shop.get("shop_uid")
+    
+    # Pede confirmação
+    save_session(user_id, "awaiting_shop_remove_confirm", {
+        "shop_uid": shop_uid,
+        "shop_name": name,
+    })
+    
+    return _txt(
+        f"⚠️ *Confirmar remoção?*\n\n"
+        f"🏪 Loja: *{name}*\n\n"
+        f"Esta ação não pode ser desfeita.\n"
+        f"Os produtos importados desta loja também serão removidos.\n\n"
+        f"Responda:\n"
+        f"• *Confirmar* - para remover\n"
+        f"• *Cancelar* - para manter"
+    )
+
+
+def _handle_loja_remove_confirm(user_id: str, text: str, data: dict) -> dict:
+    """Processa confirmação de remoção de loja."""
+    lower = text.lower().strip()
+    
+    if lower in {"confirmar", "sim", "ok", "confirma", "remover"}:
+        shop_uid = data.get("shop_uid")
+        shop_name = data.get("shop_name")
+        
+        from shopee_core.user_config_service import remove_shop
+        
+        success = remove_shop(user_id, shop_uid)
+        
+        clear_session(user_id)
+        
+        if success:
+            return _txt(
+                f"🗑️ *Loja removida*\n\n"
+                f"A loja *{shop_name}* foi removida com sucesso.\n\n"
+                f"Use */loja listar* para ver suas lojas restantes.\n"
+                f"Use */loja adicionar* para cadastrar outra loja."
+            )
+        else:
+            return _txt(
+                "❌ Erro ao remover loja.\n\n"
+                "Tente novamente com */loja remover*."
+            )
+    
+    elif lower in {"cancelar", "não", "nao", "manter"}:
+        clear_session(user_id)
+        return _txt(
+            "❌ Remoção cancelada.\n\n"
+            "A loja foi mantida."
+        )
+    
+    else:
+        return _txt(
+            "Por favor, responda:\n"
+            "• *Confirmar* - para remover a loja\n"
+            "• *Cancelar* - para manter a loja"
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
