@@ -82,6 +82,10 @@ def normalize_whatsapp_number(user_id: str) -> str:
         return ""
     # Remove sufixo JID (@s.whatsapp.net, @g.us etc.)
     number = user_id.split("@")[0]
+    # Alguns IDs vêm como "5511...:63@s.whatsapp.net" (device/agent suffix).
+    # Para envio, a Evolution espera apenas o número base antes do ":".
+    if ":" in number:
+        number = number.split(":", 1)[0]
     # Remove qualquer caractere não numérico
     return re.sub(r"\D", "", number)
 
@@ -136,15 +140,28 @@ def _send_single_text(user_id: str, text: str) -> dict:
     if not number:
         return {"ok": False, "error": "Número/JID inválido ou vazio."}
 
-    url = f"{_base_url()}/message/sendText/{_instance()}"
-    log.info(f"[EVO] _send_single_text → {url} number={number} len={len(text)}")
+    url_with_instance = f"{_base_url()}/message/sendText/{_instance()}"
+    url_no_instance = f"{_base_url()}/message/sendText"
 
-    # Formato primário (Evolution API v2)
-    payload_v2 = {"number": number, "text": text}
-    # Formato alternativo (algumas versões/forks)
-    payload_v1 = {"number": number, "textMessage": {"text": text}}
+    # Evolution API varia bastante entre versões/forks:
+    # - algumas usam instância na URL
+    # - outras exigem "instance" no payload
+    # - algumas aceitam "text", outras exigem "textMessage.text"
+    attempts: list[tuple[str, dict]] = [
+        # Sem options
+        (url_with_instance, {"number": number, "text": text}),
+        (url_with_instance, {"number": number, "textMessage": {"text": text}}),
+        # Alguns forks exigem "options" (mesmo vazio)
+        (url_with_instance, {"number": number, "options": {}, "text": text}),
+        (url_with_instance, {"number": number, "options": {}, "textMessage": {"text": text}}),
+        # Instância no payload (algumas versões)
+        (url_no_instance, {"instance": _instance(), "number": number, "text": text}),
+        (url_no_instance, {"instance": _instance(), "number": number, "textMessage": {"text": text}}),
+        (url_no_instance, {"instance": _instance(), "number": number, "options": {}, "text": text}),
+        (url_no_instance, {"instance": _instance(), "number": number, "options": {}, "textMessage": {"text": text}}),
+    ]
 
-    for attempt, payload in enumerate([payload_v2, payload_v1], start=1):
+    for attempt, (url, payload) in enumerate(attempts, start=1):
         try:
             r = requests.post(
                 url,
@@ -165,15 +182,12 @@ def _send_single_text(user_id: str, text: str) -> dict:
                     "data": r.json() if r.content else {},
                 }
 
-            # 400/422 no primeiro formato → tenta o alternativo
-            if r.status_code in (400, 422) and attempt == 1:
-                log.warning(
-                    f"[EVO] Formato v2 rejeitado ({r.status_code}), "
-                    "tentando formato v1..."
-                )
-                continue
+            # Tenta próximos formatos/URLs
+            if r.status_code in (400, 401, 403, 404, 422):
+                # Só loga detalhes no último attempt para evitar spam
+                if attempt < len(attempts):
+                    continue
 
-            # Outro erro — não há mais alternativas
             return {
                 "ok": False,
                 "status_code": r.status_code,
