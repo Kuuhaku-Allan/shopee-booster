@@ -1035,16 +1035,13 @@ def _run_sentinel_bg(user_id: str, config: dict):
     """
     Background task: executa o Sentinela e envia resultado.
     
-    U7.2 — Correções de observabilidade:
-      - Sessão já foi salva no webhook como "queued"
-      - Atualiza status para "running" ao iniciar
-      - Timeout real com ThreadPoolExecutor
-      - Sempre envia mensagem final
-      - Salva resultado antes de limpar sessão
+    U7.3 — Logs cirúrgicos para diagnóstico:
+      - Logs detalhados antes/depois de cada etapa
+      - BaseException para capturar travamentos
+      - Traceback completo em caso de erro
+      - Mensagem de erro enviada ao usuário
     """
-    from shopee_core.sentinel_service import request_sentinel_execution, mark_sentinel_finished
-    from shopee_core.sentinel_whatsapp_service import generate_janela_execucao
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+    import traceback
     
     log.info("[SENTINELA] ════════════════════════════════════════════════════")
     log.info(f"[SENTINELA] Início da execução: user={user_id}")
@@ -1053,15 +1050,22 @@ def _run_sentinel_bg(user_id: str, config: dict):
     TIMEOUT_PER_KEYWORD = 90  # segundos
 
     try:
+        # ── Etapa 1: Import do backend_core ────────────────────────
+        log.info("[SENTINELA] Etapa 1/6: importando backend_core.fetch_competitors_intercept...")
         from backend_core import fetch_competitors_intercept
+        log.info("[SENTINELA] Etapa 1/6 OK: backend_core importado")
 
+        # ── Etapa 2: Leitura de config ─────────────────────────────
+        log.info("[SENTINELA] Etapa 2/6: lendo config...")
         shop_uid = config.get("shop_uid") or ""
-        shop_id = config.get("shop_id", "unknown")  # legado / compat
+        shop_id = config.get("shop_id", "unknown")
         username = config.get("username", "loja")
         keywords = config.get("keywords") or []
         total_keywords = len(keywords)
+        log.info(f"[SENTINELA] Etapa 2/6 OK: shop_uid={shop_uid!r}, username={username!r}, keywords={total_keywords}")
 
         if not shop_uid:
+            log.warning("[SENTINELA] shop_uid vazio, abortando")
             evo_send_text(
                 user_id=user_id,
                 text="❌ Erro: não encontrei a loja ativa (shop_uid) para executar o Sentinela.",
@@ -1070,13 +1074,19 @@ def _run_sentinel_bg(user_id: str, config: dict):
             return
 
         if not keywords:
+            log.warning("[SENTINELA] keywords vazio, abortando")
             evo_send_text(user_id=user_id, text="❌ Nenhuma keyword configurada para monitoramento.")
             clear_session(user_id)
             return
 
+        # ── Etapa 3: Gerar janela de execução ──────────────────────
+        log.info("[SENTINELA] Etapa 3/6: gerando janela_execucao...")
+        from shopee_core.sentinel_whatsapp_service import generate_janela_execucao
         janela_execucao = generate_janela_execucao()
+        log.info(f"[SENTINELA] Etapa 3/6 OK: janela={janela_execucao}")
 
-        # ── 1. Atualiza status para "running" ──────────────────────
+        # ── Etapa 4: Salvar sessão como "running" ──────────────────
+        log.info("[SENTINELA] Etapa 4/6: salvando sessão running...")
         save_session(
             user_id,
             "processing_sentinel",
@@ -1092,23 +1102,37 @@ def _run_sentinel_bg(user_id: str, config: dict):
                 "janela_execucao": janela_execucao,
             },
         )
-        log.info(f"[SENTINELA] Status atualizado para 'running'")
+        log.info("[SENTINELA] Etapa 4/6 OK: sessão running salva")
 
+        # ── Etapa 5: Preparar estruturas de dados ──────────────────
+        log.info("[SENTINELA] Etapa 5/6: preparando estruturas de dados...")
+        from shopee_core.sentinel_service import request_sentinel_execution, mark_sentinel_finished
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+        
         keywords_executadas: list[str] = []
         keywords_com_erro: list[str] = []
         keywords_timeout: list[str] = []
         all_concorrentes: list[dict] = []
         first_lock_block: dict | None = None
+        log.info("[SENTINELA] Etapa 5/6 OK: estruturas preparadas")
 
-        # ── 2. Processa cada keyword com timeout real ──────────────
+        # ── Etapa 6: Definir função de timeout ─────────────────────
+        log.info("[SENTINELA] Etapa 6/6: definindo fetch_with_timeout...")
         def fetch_with_timeout(keyword: str) -> list:
             """Executa fetch com timeout real usando ThreadPoolExecutor."""
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(fetch_competitors_intercept, keyword)
                 return future.result(timeout=TIMEOUT_PER_KEYWORD)
+        log.info("[SENTINELA] Etapa 6/6 OK: função definida")
+        
+        log.info(f"[SENTINELA] Iniciando loop de {total_keywords} keywords...")
         
         for idx, kw in enumerate(keywords, 1):
+            log.info(f"[SENTINELA] ──────────────────────────────────────────────")
+            log.info(f"[SENTINELA] Keyword {idx}/{total_keywords}: {kw!r}")
+            
             # ── Atualiza progresso antes de cada keyword ───────────
+            log.info(f"[SENTINELA] Salvando progresso antes da keyword {idx}...")
             save_session(
                 user_id,
                 "processing_sentinel",
@@ -1333,18 +1357,12 @@ def _run_sentinel_bg(user_id: str, config: dict):
             "🛡️ *Sentinela concluído!*\n",
             f"🏪 Loja: *{username}*",
             f"🔍 Keywords analisadas: *{len(keywords_executadas)}*",
-        ]
-        
-        if len(keywords_raw) > MAX_SENTINEL_KEYWORDS_PER_RUN:
-            msg_parts.append(f"_Rodadas as {MAX_SENTINEL_KEYWORDS_PER_RUN} primeiras keywords nesta checagem._")
-        
-        msg_parts.extend([
             f"📊 Concorrentes analisados: *{len(all_concorrentes)}*",
             f"🏷️ Menor preço encontrado: *R$ {menor_preco:.2f}*",
             f"💰 Preço médio: *R$ {preco_medio:.2f}*",
             "",
             telegram_note,
-        ])
+        ]
         
         if keywords_com_erro:
             msg_parts.append(f"\n⚠️ Erro em: {', '.join(keywords_com_erro)}")
@@ -1360,18 +1378,24 @@ def _run_sentinel_bg(user_id: str, config: dict):
         log.info(f"[SENTINELA] Concluído: user={user_id} shop_uid={shop_uid} kws={len(keywords_executadas)}")
         log.info("[SENTINELA] ════════════════════════════════════════════════════")
 
-    except Exception as e:
-        log.error(f"[SENTINELA] Erro crítico: {e}\n{traceback.format_exc()}")
+    except BaseException as e:
+        log.error(f"[SENTINELA] ❌ ERRO FATAL: {type(e).__name__}: {e}")
+        log.error(f"[SENTINELA] Traceback completo:")
+        log.error(traceback.format_exc())
+        
         try:
             evo_send_text(
                 user_id=user_id,
                 text=(
-                    "❌ Ocorreu um erro durante o monitoramento.\n"
-                    "Tente novamente com */sentinela rodar*."
+                    f"❌ *O Sentinela travou antes de buscar concorrentes.*\n\n"
+                    f"Erro: {type(e).__name__}\n\n"
+                    f"Veja os logs do servidor para mais detalhes.\n"
+                    f"Tente novamente com */sentinela rodar*."
                 ),
             )
-        except Exception:
-            pass
+            log.info("[SENTINELA] Mensagem de erro enviada ao usuário")
+        except Exception as send_error:
+            log.error(f"[SENTINELA] Falha ao enviar mensagem de erro: {send_error}")
     
     finally:
         # ── 4. Garante limpeza da sessão ───────────────────────────
