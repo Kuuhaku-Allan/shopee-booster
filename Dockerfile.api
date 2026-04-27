@@ -1,0 +1,50 @@
+# Dockerfile.api - ShopeeBooster WhatsApp Bot API
+# Para deploy em Oracle Cloud Always Free (Ubuntu ARM Ampere A1)
+
+FROM python:3.11-slim
+
+# Metadados
+LABEL maintainer="ShopeeBooster"
+LABEL description="ShopeeBooster WhatsApp Bot API"
+
+# Variáveis de ambiente
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Diretório de trabalho
+WORKDIR /app
+
+# Instala dependências do sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copia requirements
+COPY requirements.txt .
+
+# Instala dependências Python
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copia código da aplicação
+COPY api_server.py .
+COPY backend_core.py .
+COPY shopee_core/ ./shopee_core/
+COPY telegram_service.py .
+COPY sentinela_db.py .
+
+# Cria diretórios necessários
+RUN mkdir -p data/reports uploads/catalogs
+
+# Expõe porta
+EXPOSE 8787
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8787/health || exit 1
+
+# Comando de inicialização
+CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8787", "--log-level", "info"]

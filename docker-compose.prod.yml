@@ -1,0 +1,138 @@
+# docker-compose.prod.yml - Produção Oracle Cloud
+# ShopeeBooster WhatsApp Bot + Evolution API + Postgres
+
+version: '3.8'
+
+services:
+  # Postgres para Evolution API
+  postgres:
+    image: postgres:15-alpine
+    container_name: shopee_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-evolution}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-evolution_password}
+      POSTGRES_DB: ${POSTGRES_DB:-evolution}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - shopee_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-evolution}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Evolution API
+  evolution_api:
+    image: atendai/evolution-api:latest
+    container_name: shopee_evolution
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Servidor
+      SERVER_URL: ${EVOLUTION_SERVER_URL:-http://localhost:8080}
+      
+      # Database
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-evolution}:${POSTGRES_PASSWORD:-evolution_password}@postgres:5432/${POSTGRES_DB:-evolution}?schema=public
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      
+      # Autenticação
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      
+      # Instância
+      DEL_INSTANCE: "false"
+      
+      # Logs
+      LOG_LEVEL: ${EVOLUTION_LOG_LEVEL:-info}
+      LOG_COLOR: "true"
+      
+      # Webhook
+      WEBHOOK_GLOBAL_ENABLED: "false"
+      WEBHOOK_GLOBAL_URL: ""
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
+      
+      # QR Code
+      QRCODE_LIMIT: 30
+      QRCODE_COLOR: "#198754"
+      
+      # Configurações
+      CONFIG_SESSION_PHONE_CLIENT: "ShopeeBooster"
+      CONFIG_SESSION_PHONE_NAME: "Chrome"
+      
+    volumes:
+      - evolution_instances:/evolution/instances
+      - evolution_store:/evolution/store
+    networks:
+      - shopee_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ShopeeBooster API
+  shopee_api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: shopee_api
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      # Evolution API
+      EVOLUTION_API_URL: http://evolution_api:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      WHATSAPP_INSTANCE: ${WHATSAPP_INSTANCE:-shopee_booster}
+      
+      # URL pública do bot (para webhook)
+      SHOPEE_API_PUBLIC_URL: ${SHOPEE_API_PUBLIC_URL}
+      
+      # Segurança
+      BOT_SECRET_KEY: ${BOT_SECRET_KEY}
+      ALLOW_GLOBAL_GEMINI_FALLBACK: ${ALLOW_GLOBAL_GEMINI_FALLBACK:-false}
+      
+      # Gemini API (opcional - usuários podem configurar via /ia configurar)
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      
+      # Telegram (opcional - usuários podem configurar via /telegram configurar)
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+      - ./.shopee_config:/app/.shopee_config
+    networks:
+      - shopee_network
+    depends_on:
+      evolution_api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  shopee_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  evolution_instances:
+    driver: local
+  evolution_store:
+    driver: local

@@ -19,3 +19,21 @@ infra/evolution/.env
 
 # Banco de dados de estado do bot (gerado em runtime)
 data/bot_state.db
+data/bot_state.db-shm
+data/bot_state.db-wal
+
+# Relatórios gerados (não commitar dados de produção)
+data/reports/*.png
+data/reports/*.csv
+
+# Catálogos importados (podem conter dados sensíveis)
+uploads/catalogs/*.csv
+uploads/catalogs/*.xlsx
+
+# Secrets de produção (NUNCA COMMITAR!)
+.env.production
+docker-compose.override.yml
+
+# Logs de produção
+*.log
+logs/
