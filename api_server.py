@@ -532,7 +532,12 @@ def _run_optimization_bg(user_id: str, product: dict, segmento: str):
 def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
     """
     Background task: carrega loja para configuração do Sentinela com fallback conversacional.
-    Se não conseguir produtos, pede keywords manuais.
+    
+    Estratégia (Ordem de Prioridade):
+    1. Tentar intercept via Playwright (método principal)
+    2. Se falhar, usar catálogo cacheado (importado anteriormente)
+    3. Se não houver cache, usar APIs diretas da Shopee (fallback)
+    4. Se tudo falhar, solicitar keywords manuais
     """
     from shopee_core.shop_loader_service import load_shop_with_fallback
     from shopee_core.sentinel_whatsapp_service import (
@@ -543,7 +548,8 @@ def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
     log.info(f"[BG] Carregando loja para Sentinela com fallback: url={shop_url!r} user={user_id}")
 
     try:
-        loaded = load_shop_with_fallback(shop_url)
+        # Passa user_id para buscar catálogo cacheado se necessário
+        loaded = load_shop_with_fallback(shop_url=shop_url, user_id=user_id)
     except Exception as e:
         log.error(f"[BG] Exceção ao carregar loja para Sentinela: {e}")
         loaded = {"ok": False, "message": str(e)}
@@ -592,6 +598,7 @@ def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
                 "keywords": keywords,
                 "method_used": method_used,
                 "auto_generated": True,
+                "from_catalog": method_used in ["catalog_cache", "catalog_import"],
             },
         )
         
@@ -603,11 +610,16 @@ def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
         if len(keywords) > 10:
             keywords_text += f"\n• ... e mais {len(keywords) - 10} keywords"
 
+        # Indica a fonte dos produtos
         method_info = ""
-        if method_used == "fallback":
-            method_info = "\n\n_ℹ️ Produtos carregados via método alternativo (API direta)_"
+        if method_used == "catalog_cache":
+            method_info = "\n\n_📦 Produtos carregados do catálogo importado_"
+        elif method_used == "catalog_import":
+            method_info = "\n\n_📦 Produtos carregados do catálogo recém-importado_"
+        elif method_used == "fallback":
+            method_info = "\n\n_ℹ️ Produtos carregados via API alternativa_"
         elif method_used == "intercept":
-            method_info = "\n\n_✅ Produtos carregados via método padrão_"
+            method_info = "\n\n_✅ Produtos carregados via scraping público_"
 
         msg = (
             f"✅ *Loja analisada!*\n\n"
@@ -636,7 +648,7 @@ def _run_load_shop_for_sentinel_bg(user_id: str, shop_url: str):
 
 
 def _fallback_to_manual_keywords(user_id: str, shop_url: str, username: str, shopid: str, reason: str):
-    """Helper para iniciar fallback de keywords manuais."""
+    """Helper para iniciar fallback de keywords manuais com sugestão de catálogo."""
     # Salva dados na sessão para input manual
     save_session(
         user_id,
@@ -652,7 +664,12 @@ def _fallback_to_manual_keywords(user_id: str, shop_url: str, username: str, sho
 
     msg = (
         f"{reason}\n\n"
-        f"Para continuar mesmo assim, me envie de *3 a 5 keywords* para monitorar, uma por linha.\n\n"
+        f"💡 *Você tem 2 opções:*\n\n"
+        f"*1️⃣ Importar catálogo (recomendado)*\n"
+        f"Use */catalogo* para importar seus produtos do Shopee Seller Center.\n"
+        f"Depois volte e configure o Sentinela novamente.\n\n"
+        f"*2️⃣ Usar keywords manuais*\n"
+        f"Me envie de *3 a 5 keywords* para monitorar, uma por linha.\n\n"
         f"*Exemplo:*\n"
         f"mochila infantil princesa\n"
         f"mochila escolar rosa\n"

@@ -77,16 +77,37 @@ def get_sentinel_config(user_id: str) -> Optional[dict]:
     if not row:
         return None
     
+    # Tenta carregar keywords_json como dict (novo formato) ou list (formato legado)
+    keywords_json = row["keywords_json"] or "{}"
+    try:
+        keywords_data = json.loads(keywords_json)
+        if isinstance(keywords_data, list):
+            # Formato legado: apenas lista de keywords
+            keywords = keywords_data
+            auto_generated = False
+            from_catalog = False
+        else:
+            # Novo formato: dict com metadados
+            keywords = keywords_data.get("keywords", [])
+            auto_generated = keywords_data.get("auto_generated", False)
+            from_catalog = keywords_data.get("from_catalog", False)
+    except:
+        keywords = []
+        auto_generated = False
+        from_catalog = False
+    
     return {
         "user_id": row["user_id"],
         "shop_url": row["shop_url"],
         "username": row["username"],
         "shop_id": row["shop_id"],
-        "keywords": json.loads(row["keywords_json"] or "[]"),
+        "keywords": keywords,
         "is_active": bool(row["is_active"]),
         "interval_minutes": row["interval_minutes"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "auto_generated": auto_generated,
+        "from_catalog": from_catalog,
     }
 
 
@@ -98,6 +119,8 @@ def save_sentinel_config(
     keywords: list[str] = None,
     is_active: bool = True,
     interval_minutes: int = 360,
+    auto_generated: bool = False,
+    from_catalog: bool = False,
 ):
     """Salva ou atualiza a configuração do Sentinela."""
     _init_sentinel_config_table()
@@ -106,6 +129,13 @@ def save_sentinel_config(
         keywords = []
     
     now = datetime.utcnow().isoformat()
+    
+    # Adiciona metadados extras ao JSON de keywords
+    keywords_data = {
+        "keywords": keywords,
+        "auto_generated": auto_generated,
+        "from_catalog": from_catalog,
+    }
     
     with _get_conn() as conn:
         conn.execute(
@@ -122,7 +152,7 @@ def save_sentinel_config(
                 interval_minutes = excluded.interval_minutes,
                 updated_at = excluded.updated_at
             """,
-            (user_id, shop_url, username, shop_id, json.dumps(keywords), 
+            (user_id, shop_url, username, shop_id, json.dumps(keywords_data), 
              is_active, interval_minutes, now, now)
         )
 
@@ -201,12 +231,19 @@ def format_sentinel_status(config: dict) -> str:
     if len(config["keywords"]) > 5:
         keywords_text += f"\n• ... e mais {len(config['keywords']) - 5} keywords"
     
+    # Indica origem das keywords se disponível
+    keywords_origin = ""
+    if config.get("auto_generated"):
+        keywords_origin = "\n_🤖 Keywords geradas automaticamente dos produtos_"
+    elif config.get("from_catalog"):
+        keywords_origin = "\n_📦 Keywords geradas do catálogo importado_"
+    
     return (
         f"🛡️ *Status do Sentinela*\n\n"
         f"{status_emoji} Status: *{status_text}*\n"
         f"🏪 Loja: _{config['username'] or 'Carregando...'}_\n"
         f"⏰ Intervalo: {interval_text}\n"
-        f"🔍 Keywords monitoradas ({len(config['keywords'])}):\n{keywords_text}\n\n"
+        f"🔍 Keywords monitoradas ({len(config['keywords'])}):\n{keywords_text}{keywords_origin}\n\n"
         f"_Configurado em {config['created_at'][:10]}_"
     )
 

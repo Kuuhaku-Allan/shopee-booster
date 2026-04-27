@@ -714,6 +714,7 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
 def _handle_sentinel_shop_url(user_id: str, url: str) -> dict:
     """
     Valida a URL da loja para configuração do Sentinela.
+    Usa shop_loader_service com fallback para catálogo importado.
     """
     url = url.strip()
 
@@ -734,8 +735,8 @@ def _handle_sentinel_shop_url(user_id: str, url: str) -> dict:
         "task": "load_shop_for_sentinel",
         "text": (
             "⏳ *Carregando sua loja...*\n\n"
-            "Estou analisando os produtos para gerar keywords de monitoramento.\n"
-            "Vou te mostrar as keywords em instantes!"
+            "Estou analisando os produtos para gerar keywords de monitoramento.\n\n"
+            "_Vou tentar scraping público primeiro. Se falhar, uso o catálogo importado._"
         ),
         "shop_url": url,
         "user_id": user_id,
@@ -905,6 +906,8 @@ def _handle_sentinel_confirmation(user_id: str, text: str, data: dict) -> dict:
         username = data.get("username", "")
         shop_id = data.get("shop_id", "")
         keywords = data.get("keywords", [])
+        auto_generated = data.get("auto_generated", False)
+        from_catalog = data.get("from_catalog", False)
         
         save_sentinel_config(
             user_id=user_id,
@@ -914,6 +917,8 @@ def _handle_sentinel_confirmation(user_id: str, text: str, data: dict) -> dict:
             keywords=keywords,
             is_active=True,
             interval_minutes=360,  # 6 horas padrão
+            auto_generated=auto_generated,
+            from_catalog=from_catalog,
         )
         
         clear_session(user_id)
