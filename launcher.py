@@ -70,6 +70,16 @@ def wake_sentinela():
     except Exception:
         pass
 
+# ── Fila para comandos de UI (abrir janela) ───
+_ui_command_queue = queue.Queue()
+
+def request_open_window():
+    """Solicita abertura de janela nativa (será processado na thread principal)."""
+    try:
+        _ui_command_queue.put_nowait("open_window")
+    except Exception:
+        pass
+
 
 # ── Utilidades ────────────────────────────────────────────────
 def porta_em_uso(porta: int) -> bool:
@@ -202,10 +212,13 @@ def criar_icone_imagem() -> Image.Image:
 
 
 def acao_abrir_janela(icon, item):
+    """Solicita abertura da janela nativa."""
     if not porta_em_uso(PORTA):
         iniciar_streamlit()
         aguardar_streamlit()
-    abrir_janela_nativa()
+    
+    # Solicita abertura de janela (será processado na thread principal)
+    request_open_window()
 
 
 def acao_abrir_navegador(icon, item):
@@ -755,23 +768,40 @@ def main():
         ctypes.windll.user32.MessageBoxW(0, "O servidor não iniciou no tempo limite (120s).", "Shopee Booster - Erro", 0 | 16)
         sys.exit(1)
 
-    _sentinela_log("[Main] Streamlit OK. Iniciando janela...")
+    _sentinela_log("[Main] Streamlit OK. Abrindo janela nativa...")
 
     # 3.5. Delay de respiro para o Streamlit renderizar o HTML inicial
     time.sleep(2)
 
-    # 4. Iniciar bandeja em thread NÃO-DAEMON
+    # 4. Iniciar bandeja em thread separada (não-daemon para manter app rodando)
+    _sentinela_log("[Main] Iniciando ícone na bandeja...")
     tray_thread = threading.Thread(target=iniciar_tray, daemon=False)
     tray_thread.start()
 
-    # 5. Abrir janela nativa principal (bloqueante)
+    # 5. Abrir janela nativa na thread principal (pywebview exige isso no Windows)
     _sentinela_log("[Main] Abrindo janela nativa...")
     abrir_janela_nativa()
 
-    # Se chegamos aqui, o usuário fechou a janela no "X"
-    # O app continua rodando via tray_thread (não-daemon)
-    _sentinela_log("[Main] Janela fechada. Aguardando tray...")
-    tray_thread.join()
+    # 6. Loop principal para processar comandos de UI (abrir janela)
+    _sentinela_log("[Main] Janela fechada. App continua na bandeja. Aguardando comandos...")
+    
+    while tray_thread.is_alive():
+        try:
+            # Verifica se há comando para abrir janela (timeout de 1s)
+            comando = _ui_command_queue.get(timeout=1.0)
+            if comando == "open_window":
+                _sentinela_log("[Main] Comando recebido: abrir janela")
+                if not porta_em_uso(PORTA):
+                    iniciar_streamlit()
+                    aguardar_streamlit()
+                abrir_janela_nativa()
+        except queue.Empty:
+            # Timeout normal, continua o loop
+            continue
+        except Exception as e:
+            _sentinela_log(f"[Main] Erro no loop de comandos: {e}")
+    
+    _sentinela_log("[Main] Tray encerrado. Finalizando app.")
 
 
 if __name__ == "__main__":

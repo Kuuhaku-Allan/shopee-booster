@@ -23,8 +23,7 @@ if %errorlevel% neq 0 (
 )
 
 REM â”€â”€ Instalar Playwright (browsers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-echo  Verificando Playwright...
-python -m playwright install chromium
+echo  Pulando instalacao do Playwright (sera feita pelo install_browsers.exe)...
 
 REM â”€â”€ Build â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 echo.
@@ -42,6 +41,9 @@ pyinstaller ^
     --add-data "ui_theme.py;." ^
     --add-data "updater.py;." ^
     --add-data "release_meta.py;." ^
+    --add-data "telegram_service.py;." ^
+    --add-data "sentinela_db.py;." ^
+    --add-data "shopee_core;shopee_core" ^
     --add-data "version.txt;." ^
     --add-data "assets;assets" ^
     --add-data "models;models" ^
@@ -60,6 +62,7 @@ pyinstaller ^
     --collect-all nest_asyncio ^
     --collect-all playwright ^
     --collect-all Pillow ^
+    --collect-all shopee_core ^
     --hidden-import "PIL.ImageEnhance" ^
     --hidden-import "PIL.ImageFilter" ^
     --hidden-import "PIL.ImageDraw" ^

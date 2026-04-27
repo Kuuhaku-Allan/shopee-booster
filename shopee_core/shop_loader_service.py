@@ -4,10 +4,11 @@ shopee_core/shop_loader_service.py — Carregador Robusto de Lojas Shopee
 Serviço unificado para carregar informações de lojas e produtos.
 Usado tanto pela Auditoria quanto pelo Sentinela.
 
-Estratégia:
+Estratégia (Ordem de Prioridade):
 1. Tentar intercept via Playwright (método principal)
-2. Se falhar, usar APIs diretas da Shopee (fallback)
-3. Normalizar formato de retorno
+2. Se falhar, usar catálogo cacheado (importado anteriormente)
+3. Se não houver cache, usar APIs diretas da Shopee (fallback)
+4. Se tudo falhar, solicitar importação de catálogo
 """
 
 from __future__ import annotations
@@ -19,9 +20,13 @@ from typing import Optional
 log = logging.getLogger("shop_loader")
 
 
-def load_shop_with_fallback(shop_url: str) -> dict:
+def load_shop_with_fallback(shop_url: str, user_id: str = "desktop") -> dict:
     """
-    Carrega loja com fallback robusto.
+    Carrega loja com fallback robusto em múltiplas camadas.
+    
+    Args:
+        shop_url: URL da loja Shopee
+        user_id: ID do usuário (para buscar catálogo cacheado)
     
     Returns:
         {
@@ -31,7 +36,7 @@ def load_shop_with_fallback(shop_url: str) -> dict:
                 "username": str,
                 "shop": dict,
                 "products": list[dict],
-                "method_used": str  # "intercept" ou "fallback"
+                "method_used": str  # "intercept", "catalog_cache", "fallback", "needs_import"
             }
         }
     """
@@ -58,17 +63,60 @@ def load_shop_with_fallback(shop_url: str) -> dict:
         data["method_used"] = "intercept"
         return {
             "ok": True,
-            "message": f"Loja '{username}' carregada com {len(products)} produto(s) via intercept.",
+            "message": f"Loja '{username}' carregada com {len(products)} produto(s) via scraping.",
             "data": data,
         }
     
-    # Se não conseguiu produtos, tenta fallback
-    log.warning(f"[SHOP] Intercept retornou 0 produtos. Tentando fallback para {username}")
+    # ═══════════════════════════════════════════════════════════════
+    # FALLBACK 1: Catálogo Cacheado (Importado Anteriormente)
+    # ═══════════════════════════════════════════════════════════════
+    log.warning(f"[SHOP] Intercept retornou 0 produtos. Tentando catálogo cacheado...")
+    
+    try:
+        from shopee_core.catalog_service import get_catalog
+        
+        catalog = get_catalog(user_id=user_id, shop_url=shop_url)
+        
+        if catalog and catalog.get("products"):
+            cached_products = catalog["products"]
+            log.info(f"[SHOP] Catálogo cacheado encontrado: {len(cached_products)} produtos")
+            
+            data["products"] = cached_products
+            data["method_used"] = "catalog_cache"
+            data["catalog_imported_at"] = catalog.get("imported_at")
+            data["catalog_source"] = catalog.get("source")
+            
+            return {
+                "ok": True,
+                "message": (
+                    f"✓ Loja '{username}' carregada com {len(cached_products)} produto(s) do catálogo importado.\n"
+                    f"Importado em: {catalog.get('imported_at', 'N/A')}"
+                ),
+                "data": data,
+            }
+        else:
+            log.info(f"[SHOP] Nenhum catálogo cacheado encontrado para user_id={user_id}, shop_url={shop_url}")
+    
+    except Exception as e:
+        log.error(f"[SHOP] Erro ao buscar catálogo cacheado: {e}")
+    
+    # ═══════════════════════════════════════════════════════════════
+    # FALLBACK 2: APIs Diretas da Shopee
+    # ═══════════════════════════════════════════════════════════════
+    log.warning(f"[SHOP] Catálogo não encontrado. Tentando APIs diretas...")
     
     if not shopid:
         return {
             "ok": False,
-            "message": f"Loja '{username}' encontrada, mas não consegui obter shopid para fallback.",
+            "message": (
+                f"Loja '{username}' encontrada, mas não consegui carregar produtos.\n\n"
+                "💡 **SOLUÇÃO**: Importe o catálogo da sua loja:\n"
+                "1. Acesse o Shopee Seller Center\n"
+                "2. Vá em Produtos → Exportar\n"
+                "3. Baixe o arquivo XLSX/CSV\n"
+                "4. Importe aqui no ShopeeBooster\n\n"
+                "Isso garante que seus produtos sempre estarão disponíveis!"
+            ),
             "data": data,
         }
     
@@ -76,23 +124,40 @@ def load_shop_with_fallback(shop_url: str) -> dict:
     fallback_products = fetch_products_fallback(username, str(shopid))
     
     if fallback_products:
-        log.info(f"[SHOP] Fallback success: {len(fallback_products)} produtos")
+        log.info(f"[SHOP] Fallback API success: {len(fallback_products)} produtos")
         data["products"] = fallback_products
         data["method_used"] = "fallback"
         return {
             "ok": True,
-            "message": f"Loja '{username}' carregada com {len(fallback_products)} produto(s) via fallback.",
+            "message": f"Loja '{username}' carregada com {len(fallback_products)} produto(s) via API direta.",
             "data": data,
         }
     
-    # Ambos falharam
-    log.error(f"[SHOP] Tanto intercept quanto fallback falharam para {username}")
+    # ═══════════════════════════════════════════════════════════════
+    # TODOS OS MÉTODOS FALHARAM: Solicita Importação
+    # ═══════════════════════════════════════════════════════════════
+    log.error(f"[SHOP] Todos os métodos falharam para {username}")
+    
+    data["method_used"] = "needs_import"
+    
     return {
         "ok": False,
         "message": (
-            f"Encontrei a loja '{username}', mas a Shopee não retornou produtos agora.\n"
-            "Isso pode ser instabilidade da Shopee ou bloqueio temporário.\n"
-            "Tente novamente em alguns minutos."
+            f"Não consegui carregar produtos da loja '{username}' automaticamente.\n\n"
+            "🔒 **A Shopee está bloqueando scraping automatizado.**\n\n"
+            "💡 **SOLUÇÃO RECOMENDADA**: Importe o catálogo da sua loja:\n\n"
+            "**Como exportar do Shopee Seller Center:**\n"
+            "1. Acesse: https://seller.shopee.com.br/\n"
+            "2. Vá em **Produtos** → **Meus Produtos**\n"
+            "3. Clique em **Exportar** (ícone de download)\n"
+            "4. Baixe o arquivo XLSX ou CSV\n"
+            "5. Importe aqui no ShopeeBooster\n\n"
+            "✅ **Vantagens**:\n"
+            "• Fonte oficial e autorizada\n"
+            "• Não depende de scraping\n"
+            "• Cache local para uso offline\n"
+            "• Funciona em Auditoria, Sentinela e Otimização\n\n"
+            "Após importar, seus produtos estarão sempre disponíveis!"
         ),
         "data": data,
     }

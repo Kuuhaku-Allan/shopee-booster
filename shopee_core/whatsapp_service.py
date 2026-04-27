@@ -138,6 +138,9 @@ def extract_evolution_message(payload: dict) -> dict:
         or ""
     )
 
+    # file_name (para documentos)
+    file_name = document_msg.get("fileName") or document_msg.get("filename") or ""
+
     # media_type como string simples (image/video/document/audio/sticker)
     if "imageMessage" in message:
         media_type = "image"
@@ -162,6 +165,7 @@ def extract_evolution_message(payload: dict) -> dict:
         "mimetype": mimetype,
         "base64_data": base64_data,
         "caption": caption.strip(),
+        "file_name": file_name,
         "message_id": message_id,
         "raw": payload,
     }
@@ -181,6 +185,7 @@ def _menu_message() -> dict:
         "👋 Olá! Eu sou o *ShopeeBooster*, seu assistente de e-commerce.\n\n"
         "O que você quer fazer hoje?\n\n"
         "🔍 */auditar* — Auditar e otimizar um produto da sua loja\n"
+        "📦 */catalogo* — Importar catálogo de produtos (XLSX/CSV)\n"
         "💬 */chat* — Tirar dúvidas sobre e-commerce\n"
         "🖼️ */imagem* — Editar imagem de produto\n"
         "🛡️ */sentinela* — Monitorar concorrentes automaticamente\n"
@@ -513,6 +518,23 @@ def _route(
             "Exemplo: https://shopee.com.br/nome_da_loja"
         )
 
+    # ── Comando /catalogo ─────────────────────────────────────────
+
+    if lower in {"/catalogo", "/catálogo", "/catalog"}:
+        save_session(user_id, "awaiting_catalog_file", {})
+        return _txt(
+            "📦 *Importação de Catálogo*\n\n"
+            "Envie o arquivo XLSX ou CSV exportado do Shopee Seller Center.\n\n"
+            "**Como exportar:**\n"
+            "1. Acesse https://seller.shopee.com.br/\n"
+            "2. Vá em *Produtos* → *Meus Produtos*\n"
+            "3. Clique em *Exportar* (ícone de download)\n"
+            "4. Baixe o arquivo XLSX ou CSV\n"
+            "5. Envie aqui\n\n"
+            "✅ Após importar, seus produtos estarão disponíveis para Auditoria, Sentinela e Otimização!\n\n"
+            "_Para cancelar, envie_ */cancelar*"
+        )
+
     # ── Guard: bloqueia nova mensagem enquanto carregando loja ──────────
 
     if state == "processing_load_shop":
@@ -552,6 +574,15 @@ def _route(
 
     if state == "awaiting_sentinel_keywords_update":
         return _handle_sentinel_keywords_update(user_id, text, data)
+
+    # ── Estados do fluxo de catálogo ──────────────────────────────
+
+    if state == "awaiting_catalog_file":
+        return _txt(
+            "📎 Por favor, envie o arquivo XLSX ou CSV como *documento*.\n\n"
+            "_Aguardando arquivo..._\n\n"
+            "Para cancelar, envie */cancelar*"
+        )
 
     # ── Fallback: conversa geral com o chatbot ────────────────────
 
@@ -1095,6 +1126,36 @@ def handle_whatsapp_text(user_id: str, text: str) -> dict:
 
 def _handle_media_message(user_id: str, msg: dict, state: str, data: dict) -> dict:
     media_type = msg.get("media_type", "")
+
+    # ── Caso especial: aguardando arquivo de catálogo ─────────────
+    if state == "awaiting_catalog_file":
+        if media_type != "document":
+            return _txt(
+                "📎 Por favor, envie o arquivo como *documento* (não como imagem).\n\n"
+                "O arquivo deve ser XLSX ou CSV exportado do Shopee Seller Center.\n\n"
+                "_Para cancelar, envie_ */cancelar*"
+            )
+        
+        # Valida extensão do arquivo
+        file_name = msg.get("file_name", "").lower()
+        if not (file_name.endswith('.xlsx') or file_name.endswith('.xls') or file_name.endswith('.csv')):
+            return _txt(
+                "❌ Arquivo inválido.\n\n"
+                "Por favor, envie um arquivo XLSX ou CSV exportado do Shopee Seller Center.\n\n"
+                "_Para cancelar, envie_ */cancelar*"
+            )
+        
+        log.info(f"[WA] Catálogo: file_name={file_name} base64_len={len(msg.get('base64_data', ''))}")
+        
+        return {
+            "type": "background_task",
+            "task": "import_catalog",
+            "text": "⏳ *Importando catálogo...*\n\nIsso pode levar alguns segundos.",
+            "user_id": user_id,
+            "msg": msg,
+        }
+
+    # ── Fluxo normal de mídia (imagens) ───────────────────────────
 
     if media_type != "image":
         return _txt(

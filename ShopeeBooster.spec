@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.hooks import copy_metadata
 
-datas = [('app.py', '.'), ('backend_core.py', '.'), ('ui_theme.py', '.'), ('updater.py', '.'), ('release_meta.py', '.'), ('version.txt', '.'), ('assets', 'assets'), ('models', 'models'), ('C:\\Users\\Defal\\AppData\\Local\\ms-playwright', 'pw-browsers')]
+datas = [('app.py', '.'), ('backend_core.py', '.'), ('ui_theme.py', '.'), ('updater.py', '.'), ('release_meta.py', '.'), ('version.txt', '.'), ('assets', 'assets'), ('models', 'models'), ('telegram_service.py', '.'), ('sentinela_db.py', '.'), ('shopee_core', 'shopee_core'), ('C:\\Users\\Defal\\AppData\\Local\\ms-playwright', 'pw-browsers')]
 binaries = []
 hiddenimports = ['PIL.ImageEnhance', 'PIL.ImageFilter', 'PIL.ImageDraw', 'google.genai', 'onnxruntime', 'PIL._tkinter_finder', 'pystray._win32', 'nest_asyncio']
 datas += copy_metadata('pymatting')
@@ -29,6 +29,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('playwright')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('Pillow')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('shopee_core')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
