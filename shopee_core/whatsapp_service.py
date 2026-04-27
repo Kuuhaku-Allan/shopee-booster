@@ -470,6 +470,41 @@ def _route(
         if state == "idle":
             return _txt("Você não tem nenhum fluxo ativo no momento. Tudo livre! Envie */menu* para ver o que fazer.")
         
+        # ── Status do Sentinela (U7.1) ─────────────────────────────
+        if state == "processing_sentinel":
+            from datetime import datetime
+            
+            shop_name = data.get("username", "sua loja")
+            current_kw = data.get("current_keyword", "")
+            completed = data.get("completed_keywords", 0)
+            total = data.get("total_keywords", 0)
+            started_at_str = data.get("started_at", "")
+            
+            # Calcula tempo desde início
+            tempo_msg = ""
+            if started_at_str:
+                try:
+                    started_at = datetime.fromisoformat(started_at_str)
+                    elapsed = datetime.utcnow() - started_at
+                    minutes = int(elapsed.total_seconds() / 60)
+                    tempo_msg = f"Tempo decorrido: {minutes} min\n"
+                except Exception:
+                    pass
+            
+            progress_msg = f"Progresso: {completed}/{total}"
+            if current_kw:
+                progress_msg += f"\nKeyword atual: *{current_kw}*"
+            
+            return _txt(
+                f"🛡️ *Sentinela em execução*\n\n"
+                f"Loja: *{shop_name}*\n"
+                f"{progress_msg}\n"
+                f"{tempo_msg}\n"
+                f"_Vou avisar quando terminar._\n\n"
+                f"⚠️ Não inicie outro Sentinela agora."
+            )
+        
+        # ── Status de outros fluxos ────────────────────────────────
         status_map = {
             "awaiting_shop_url": "Aguardando você me enviar o link da sua loja.",
             "processing_load_shop": "Carregando a sua loja e listando os produtos... ⏳",
@@ -1952,6 +1987,20 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
     
     # /sentinela rodar
     if lower in {"/sentinela rodar", "/sentinela executar", "/sentinela agora"}:
+        # ── Bloqueio: não permite rodar se já está em execução (U7.1) ──
+        if state == "processing_sentinel":
+            shop_name = data.get("username", "sua loja")
+            completed = data.get("completed_keywords", 0)
+            total = data.get("total_keywords", 0)
+            
+            return _txt(
+                f"⚠️ *O Sentinela já está rodando!*\n\n"
+                f"Loja: *{shop_name}*\n"
+                f"Progresso: {completed}/{total}\n\n"
+                f"Use */status* para acompanhar o progresso.\n"
+                f"Aguarde a conclusão antes de iniciar outra checagem."
+            )
+        
         active_shop = get_active_shop(user_id)
         if not active_shop:
             return _txt(
