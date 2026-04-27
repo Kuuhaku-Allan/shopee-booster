@@ -388,42 +388,18 @@ asyncio.run(run())
 
 
 def fetch_competitors_intercept(keyword: str) -> list:
-    kw_encoded = keyword.replace(" ", "+")
+    """
+    Busca concorrentes no Mercado Livre (mais estável que Shopee).
+    
+    Retorna lista de produtos similares com preço, avaliações e estrelas.
+    
+    NOTA: ML não exibe número de avaliações na listagem, apenas estrelas (rating).
+    Curtidas também não existem no ML (conceito exclusivo da Shopee).
+    """
+    kw_encoded = keyword.replace(" ", "-").lower()
     script = f"""
-import asyncio, json, sys
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-
-def parse_items(data):
-    items = data.get("items") or data.get("data", {{}}).get("items") or []
-    competitors = []
-    seen_ids = set()
-
-    for item in items[:20]:
-        b = item.get("item_basic", item) or {{}}
-        item_id = b.get("itemid") or item.get("itemid")
-        if not item_id or item_id in seen_ids:
-            continue
-        seen_ids.add(item_id)
-
-        rating = b.get("item_rating") or {{}}
-        price_raw = b.get("price_min") or b.get("price") or 0
-        competitors.append({{
-            "item_id":    item_id,
-            "shop_id":    b.get("shopid") or item.get("shopid"),
-            "nome":       (b.get("name") or "")[:65],
-            "preco":      price_raw / 100000 if price_raw > 1000 else price_raw,
-            "avaliações": b.get("cmt_count", 0),
-            "curtidas":   b.get("liked_count", 0),
-            "estrelas":   round(rating.get("rating_star", 0), 1),
-        }})
-
-    return competitors[:10]
-
-def is_search_response(response):
-    if response.request.method == "OPTIONS":
-        return False
-    url = response.url
-    return "api/v4/search/search_items" in url or "v4/search/search_items" in url
+import asyncio, json, sys, re
+from playwright.async_api import async_playwright
 
 async def run():
     async with async_playwright() as p:
@@ -434,34 +410,126 @@ async def run():
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             locale="pt-BR",
-            viewport={{"width": 1280, "height": 800}},
-            extra_http_headers={{"Accept-Language": "pt-BR,pt;q=0.9"}}
+            viewport={{"width": 1280, "height": 900}},
+            extra_http_headers={{
+                "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }}
         )
         page = await context.new_page()
-        competitors = []
-        search_url = "https://shopee.com.br/search?keyword={kw_encoded}&sortBy=sales"
-
+        
+        search_url = f"https://lista.mercadolivre.com.br/{kw_encoded}"
+        print(f"[ML] Buscando: {{search_url}}", file=sys.stderr)
+        
         try:
-            async with page.expect_response(is_search_response, timeout=30000) as response_info:
-                await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
-            response = await response_info.value
-            data = await response.json()
-            competitors = parse_items(data)
-            print(f"search_items url: {{response.url}}", file=sys.stderr)
-            print(f"competitors parsed: {{len(competitors)}}", file=sys.stderr)
-        except PlaywrightTimeoutError as e:
-            print(f"search_items timeout: {{e}}", file=sys.stderr)
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
         except Exception as e:
-            print(f"search_items parse err: {{e}}", file=sys.stderr)
-
-        if not competitors:
-            try:
-                await page.goto(search_url, wait_until="load", timeout=45000)
-            except Exception as e:
-                print(f"fallback goto err: {{e}}", file=sys.stderr)
-            await asyncio.sleep(5)
-
+            print(f"[ML] Erro ao carregar: {{e}}", file=sys.stderr)
+            await browser.close()
+            print(json.dumps([]))
+            return
+        
+        await asyncio.sleep(3)
+        
+        # Extrai produtos da página
+        competitors = []
+        
+        try:
+            # Tenta múltiplos seletores (ML muda frequentemente)
+            products = await page.query_selector_all('.ui-search-result__content')
+            if not products:
+                products = await page.query_selector_all('.poly-card__content')
+            if not products:
+                products = await page.query_selector_all('article')
+            
+            print(f"[ML] {{len(products)}} produtos encontrados", file=sys.stderr)
+            
+            for idx, product in enumerate(products[:10]):  # Limita a 10
+                try:
+                    # Nome - tenta múltiplos seletores
+                    name = ""
+                    name_elem = await product.query_selector('.ui-search-item__title')
+                    if not name_elem:
+                        name_elem = await product.query_selector('.poly-component__title')
+                    if not name_elem:
+                        name_elem = await product.query_selector('h2')
+                    
+                    if name_elem:
+                        name = await name_elem.inner_text()
+                        name = name.strip()[:65]
+                    
+                    if not name:
+                        print(f"[ML] Produto {{idx}}: Nome não encontrado, pulando", file=sys.stderr)
+                        continue
+                    
+                    # Preço - seletor correto: .andes-money-amount__fraction
+                    price = 0.0
+                    price_elem = await product.query_selector('.andes-money-amount__fraction')
+                    if price_elem:
+                        price_text = await price_elem.inner_text()
+                        price_text = price_text.replace(".", "").replace(",", ".")
+                        try:
+                            price = float(price_text)
+                        except:
+                            pass
+                    
+                    # Estrelas (rating) - seletor: [class*="review"]
+                    # NOTA: ML não mostra número de avaliações na listagem, apenas estrelas
+                    stars = 0.0
+                    reviews_elem = await product.query_selector('[class*="review"]')
+                    if reviews_elem:
+                        reviews_text = await reviews_elem.inner_text()
+                        # Formato típico: "4.5" ou " 4.5"
+                        star_match = re.search(r'(\\d+[,.]\\d*)', reviews_text)
+                        if star_match:
+                            try:
+                                stars = float(star_match.group(1).replace(",", "."))
+                            except:
+                                pass
+                    
+                    # Estimativa de avaliações baseada nas estrelas
+                    # Produtos com boas avaliações no ML geralmente têm muitas vendas
+                    # Usamos uma heurística: quanto maior a estrela, mais popular
+                    reviews = 0
+                    if stars >= 4.5:
+                        reviews = 100  # Produto muito bem avaliado
+                    elif stars >= 4.0:
+                        reviews = 50   # Produto bem avaliado
+                    elif stars >= 3.5:
+                        reviews = 20   # Produto razoável
+                    elif stars > 0:
+                        reviews = 10   # Produto com poucas avaliações
+                    
+                    # Link do produto (para item_id)
+                    link_elem = await product.query_selector('a[href*="/MLB"]')
+                    item_id = f"ml_{{idx}}"
+                    if link_elem:
+                        href = await link_elem.get_attribute('href')
+                        mlb_match = re.search(r'MLB[\\d]+', href)
+                        if mlb_match:
+                            item_id = mlb_match.group(0)
+                    
+                    competitors.append({{
+                        "item_id": item_id,
+                        "shop_id": "mercadolivre",
+                        "nome": name,
+                        "preco": price,
+                        "avaliações": reviews,  # Estimativa baseada em estrelas
+                        "curtidas": 0,  # ML não tem curtidas (conceito da Shopee)
+                        "estrelas": stars,
+                    }})
+                    
+                    print(f"[ML] Produto {{idx+1}}: {{name[:30]}} - R$ {{price:.2f}} - {{stars}}⭐ (~{{reviews}} aval.)", file=sys.stderr)
+                
+                except Exception as e:
+                    print(f"[ML] Erro ao processar produto {{idx}}: {{e}}", file=sys.stderr)
+                    continue
+        
+        except Exception as e:
+            print(f"[ML] Erro ao extrair produtos: {{e}}", file=sys.stderr)
+        
         await browser.close()
+        print(f"[ML] Total de concorrentes: {{len(competitors)}}", file=sys.stderr)
         print(json.dumps(competitors))
 
 asyncio.run(run())

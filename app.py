@@ -319,23 +319,190 @@ def render_auditoria():
                 st.session_state.shop_data = d
                 shopid = d.get("shopid") or d.get("shop_id")
                 with st.spinner("Carregando catálogo de produtos..."):
-                    st.session_state.shop_produtos = fetch_shop_products_intercept(username, shopid)
+                    # Usa shop_loader_service com fallback para catálogo
+                    from shopee_core.shop_loader_service import load_shop_with_fallback
+                    result = load_shop_with_fallback(shop_url=url_loja, user_id="desktop")
+                    
+                    if result.get("ok"):
+                        st.session_state.shop_produtos = result["data"].get("products", [])
+                        st.session_state.shop_data = result["data"].get("shop", d)
+                        st.session_state.products_source = result["data"].get("method_used", "unknown")
+                    else:
+                        st.session_state.shop_produtos = []
+                        st.session_state.products_source = "failed"
+                        st.session_state.load_error_message = result.get("message", "Erro desconhecido")
+                
                 st.rerun()
             else:
                 st.error("Não foi possível carregar os dados da loja.")
+
+    # ── Seção de Catálogo (quando scraping falha) ─────────────
+    if st.session_state.shop_data and not st.session_state.shop_produtos:
+        st.markdown("---")
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                    padding: 1.5rem; border-radius: 12px; margin: 1rem 0;">
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+                <div style="font-size: 32px;">📦</div>
+                <div>
+                    <div style="font-size: 18px; font-weight: 700; color: white;">Catálogo da Loja</div>
+                    <div style="font-size: 14px; color: rgba(255,255,255,0.9);">
+                        Importe produtos do Shopee Seller Center
+                    </div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Mostra mensagem de erro se houver
+        if hasattr(st.session_state, 'load_error_message'):
+            with st.expander("⚠️ Por que não consegui carregar os produtos?", expanded=True):
+                st.warning(st.session_state.load_error_message)
+        
+        # Verifica se há catálogo cacheado
+        from shopee_core.catalog_service import get_catalog
+        cached_catalog = get_catalog(user_id="desktop", shop_url=url_loja if url_loja else None)
+        
+        if cached_catalog:
+            st.info(f"""
+            📦 **Catálogo salvo encontrado!**
+            
+            - **Produtos**: {len(cached_catalog.get('products', []))}
+            - **Importado em**: {cached_catalog.get('imported_at', 'N/A')}
+            - **Fonte**: {cached_catalog.get('source', 'N/A')}
+            """)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Usar catálogo salvo", type="primary", use_container_width=True):
+                    st.session_state.shop_produtos = cached_catalog.get('products', [])
+                    st.session_state.products_source = "catalog_cache"
+                    st.success(f"✅ {len(st.session_state.shop_produtos)} produtos carregados do catálogo!")
+                    time.sleep(1)
+                    st.rerun()
+            
+            with col2:
+                if st.button("🔄 Importar novo catálogo", use_container_width=True):
+                    st.session_state.show_catalog_upload = True
+                    st.rerun()
+        else:
+            st.session_state.show_catalog_upload = True
+        
+        # Upload de arquivo
+        if st.session_state.get('show_catalog_upload', False) or not cached_catalog:
+            st.markdown("### 📤 Importar Catálogo")
+            
+            with st.expander("📖 Como exportar do Shopee Seller Center", expanded=False):
+                st.markdown("""
+                **Passo a passo:**
+                
+                1. Acesse [Shopee Seller Center](https://seller.shopee.com.br/)
+                2. Vá em **Produtos** → **Meus Produtos**
+                3. Clique em **Exportar** (ícone de download no canto superior direito)
+                4. Escolha o formato **XLSX** ou **CSV**
+                5. Aguarde o download
+                6. Faça upload do arquivo aqui abaixo
+                
+                ✅ **Vantagens:**
+                - Fonte oficial e autorizada
+                - Não depende de scraping
+                - Cache local para uso offline
+                - Funciona em Auditoria, Sentinela e Otimização
+                """)
+            
+            uploaded_file = st.file_uploader(
+                "Selecione o arquivo XLSX ou CSV exportado do Seller Center",
+                type=['xlsx', 'xls', 'csv'],
+                help="Arquivo exportado do Shopee Seller Center com seus produtos"
+            )
+            
+            if uploaded_file is not None:
+                with st.spinner("⏳ Importando catálogo..."):
+                    try:
+                        import tempfile
+                        from pathlib import Path
+                        from shopee_core.catalog_service import import_shopee_export
+                        
+                        # Salva temporariamente
+                        suffix = Path(uploaded_file.name).suffix
+                        with tempfile.NamedTemporaryFile(mode="wb", suffix=suffix, delete=False) as tmp:
+                            tmp.write(uploaded_file.getvalue())
+                            tmp_path = tmp.name
+                        
+                        try:
+                            # Importa
+                            result = import_shopee_export(
+                                file_path=tmp_path,
+                                user_id="desktop",
+                                shop_url=url_loja if url_loja else None,
+                                username=st.session_state.shop_data.get("name") if st.session_state.shop_data else None,
+                            )
+                            
+                            if result["ok"]:
+                                products = result.get("products", [])
+                                st.session_state.shop_produtos = products
+                                st.session_state.products_source = "catalog_import"
+                                
+                                st.success(f"✅ {len(products)} produto(s) importado(s) com sucesso!")
+                                
+                                # Preview dos primeiros produtos
+                                if products:
+                                    st.markdown("**Primeiros produtos importados:**")
+                                    preview_df = pd.DataFrame([
+                                        {
+                                            "Nome": p.get("name", "")[:50],
+                                            "Preço": f"R$ {p.get('price', 0):.2f}",
+                                            "Estoque": p.get("stock", 0),
+                                        }
+                                        for p in products[:5]
+                                    ])
+                                    st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                                    
+                                    if len(products) > 5:
+                                        st.caption(f"... e mais {len(products) - 5} produtos")
+                                
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {result.get('message', 'Erro ao importar catálogo')}")
+                        
+                        finally:
+                            # Remove arquivo temporário
+                            try:
+                                Path(tmp_path).unlink()
+                            except:
+                                pass
+                    
+                    except Exception as e:
+                        st.error(f"❌ Erro ao processar arquivo: {str(e)}")
 
     # ── Métricas da loja (se carregada) ────────────────────────
     if st.session_state.shop_data:
         d = st.session_state.shop_data
         shop_name = d.get("name", "Loja")
+        
+        # Indicador de fonte dos produtos
+        products_source = st.session_state.get('products_source', 'unknown')
+        source_indicators = {
+            'intercept': '🌐 Scraping público',
+            'catalog_cache': '📦 Catálogo importado (cache)',
+            'catalog_import': '📦 Catálogo importado',
+            'fallback': '⚠️ API alternativa',
+            'unknown': '',
+        }
+        source_text = source_indicators.get(products_source, '')
+        source_display = f" · {source_text}" if source_text else ""
 
-        st.markdown(f'<div class="loja-status-bar">🏪 {shop_name} — dados carregados com sucesso</div>',
+        st.markdown(f'<div class="loja-status-bar">🏪 {shop_name} — dados carregados com sucesso{source_display}</div>',
                     unsafe_allow_html=True)
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("🏪 Nome", d.get("name", "—"))
         c2.metric("👥 Seguidores", f"{d.get('follower_count', 'N/D'):,}" if isinstance(d.get('follower_count'), int) else d.get('follower_count', 'N/D'))
-        c3.metric("📦 Produtos", d.get("item_count", "N/D"))
+        
+        # Mostra contagem de produtos carregados (não do shop_data)
+        products_count = len(st.session_state.shop_produtos) if st.session_state.shop_produtos else 0
+        c3.metric("📦 Produtos", products_count if products_count > 0 else d.get("item_count", "N/D"))
         c4.metric("⭐ Avaliação", d.get("rating_star", "N/D"))
 
         rr = d.get("chat_response_rate") or d.get("response_rate")
@@ -425,6 +592,7 @@ def render_auditoria():
     # ── Tab 1: Radar de Concorrentes ──────────────────────────
     with tab_radar:
         st.markdown('<p class="section-label">Busca por Palavra-chave</p>', unsafe_allow_html=True)
+        st.info("💡 **Busca de concorrentes agora usa o Mercado Livre** para maior estabilidade e dados de mercado mais confiáveis.")
         kw = st.text_input(
             "kw",
             value=st.session_state.get("selected_kw") or "mochila escolar",
@@ -440,7 +608,7 @@ def render_auditoria():
             buscar_agora = True
 
         if buscar_agora:
-            with st.spinner("Navegando na Shopee e interceptando resultados... (30-60s)"):
+            with st.spinner("🛒 Buscando concorrentes no Mercado Livre... (30-60s)"):
                 rows = fetch_competitors_intercept(kw)
 
             if rows:
@@ -699,7 +867,9 @@ def render_auditoria():
                     with cols[i % 4]:
                         img_url = prod["image"] if prod["image"].startswith("http") else f"https://down-br.img.susercontent.com/file/{prod['image']}"
                         st.image(img_url, caption=f"{prod['name'][:28]}\nR$ {prod['price']:.2f}", width='stretch')
-                        if st.button("⚡ Otimizar", key=f"opt_{prod['itemid']}"):
+                        # Usa itemid se disponível, senão usa índice para garantir key única
+                        item_key = prod.get('itemid') or f"idx_{i}"
+                        if st.button("⚡ Otimizar", key=f"opt_{item_key}"):
                             st.session_state.selected_product = prod
                             st.session_state.selected_kw = prod["name"][:40]
                             st.session_state.auto_search_competitors = True
@@ -2348,7 +2518,7 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
                     erros = []
 
                     for kw in keywords:
-                        with st.spinner(f"🔍 Buscando concorrentes para '{kw}'... (30-60s)"):
+                        with st.spinner(f"🛒 Buscando concorrentes no Mercado Livre para '{kw}'... (30-60s)"):
                             try:
                                 resultados = fetch_competitors_intercept(kw)
                                 if resultados:

@@ -209,6 +209,165 @@ def audit_optimize_selected(req: AuditRequest):
         raise HTTPException(500, detail=str(e))
 
 
+@app.post("/catalog/import", tags=["Catálogo"])
+async def catalog_import(
+    user_id: str,
+    shop_url: str = None,
+    username: str = None,
+    file_content: bytes = None,
+    file_name: str = None,
+):
+    """
+    Importa catálogo de produtos de arquivo XLSX/CSV.
+    
+    Args:
+        user_id: ID do usuário (telefone no WhatsApp ou "desktop" no .exe)
+        shop_url: URL da loja (opcional)
+        username: Username da loja (opcional)
+        file_content: Conteúdo do arquivo em bytes
+        file_name: Nome do arquivo (para detectar extensão)
+    
+    Returns:
+        {
+            "ok": bool,
+            "message": str,
+            "products_count": int,
+            "products": list[dict]
+        }
+    """
+    log.info(f"/catalog/import user_id={user_id} shop_url={shop_url} file={file_name}")
+    
+    try:
+        from shopee_core.catalog_service import import_shopee_export
+        import tempfile
+        from pathlib import Path
+        
+        if not file_content or not file_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="file_content e file_name são obrigatórios"
+            )
+        
+        # Salva temporariamente para processar
+        suffix = Path(file_name).suffix
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=suffix, delete=False) as tmp:
+            tmp.write(file_content)
+            tmp_path = tmp.name
+        
+        try:
+            result = import_shopee_export(
+                file_path=tmp_path,
+                user_id=user_id,
+                shop_url=shop_url,
+                username=username,
+            )
+            
+            return {
+                "ok": result["ok"],
+                "message": result["message"],
+                "products_count": len(result.get("products", [])),
+                "products": result.get("products", []),
+            }
+        
+        finally:
+            # Remove arquivo temporário
+            try:
+                Path(tmp_path).unlink()
+            except:
+                pass
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"/catalog/import ERRO: {e}")
+        log.error(traceback.format_exc())
+        raise HTTPException(500, detail=str(e))
+
+
+@app.get("/catalog/list", tags=["Catálogo"])
+def catalog_list(user_id: str, shop_url: str = None):
+    """
+    Lista produtos do catálogo cacheado.
+    
+    Args:
+        user_id: ID do usuário
+        shop_url: URL da loja (opcional)
+    
+    Returns:
+        {
+            "ok": bool,
+            "products_count": int,
+            "products": list[dict],
+            "imported_at": str,
+            "source": str
+        }
+    """
+    log.info(f"/catalog/list user_id={user_id} shop_url={shop_url}")
+    
+    try:
+        from shopee_core.catalog_service import get_catalog
+        
+        catalog = get_catalog(user_id=user_id, shop_url=shop_url)
+        
+        if not catalog:
+            return {
+                "ok": False,
+                "message": "Nenhum catálogo encontrado.",
+                "products_count": 0,
+                "products": [],
+            }
+        
+        return {
+            "ok": True,
+            "products_count": len(catalog.get("products", [])),
+            "products": catalog.get("products", []),
+            "imported_at": catalog.get("imported_at"),
+            "source": catalog.get("source"),
+        }
+    
+    except Exception as e:
+        log.error(f"/catalog/list ERRO: {e}")
+        raise HTTPException(500, detail=str(e))
+
+
+@app.delete("/catalog/delete", tags=["Catálogo"])
+def catalog_delete(user_id: str, shop_url: str = None):
+    """
+    Remove catálogo do cache.
+    
+    Args:
+        user_id: ID do usuário
+        shop_url: URL da loja (opcional, se None remove todos do usuário)
+    
+    Returns:
+        {
+            "ok": bool,
+            "message": str
+        }
+    """
+    log.info(f"/catalog/delete user_id={user_id} shop_url={shop_url}")
+    
+    try:
+        from shopee_core.catalog_service import delete_catalog
+        
+        deleted = delete_catalog(user_id=user_id, shop_url=shop_url)
+        
+        if deleted:
+            return {
+                "ok": True,
+                "message": "Catálogo removido com sucesso.",
+            }
+        else:
+            return {
+                "ok": False,
+                "message": "Nenhum catálogo encontrado para remover.",
+            }
+    
+    except Exception as e:
+        log.error(f"/catalog/delete ERRO: {e}")
+        raise HTTPException(500, detail=str(e))
+
+
 # ══════════════════════════════════════════════════════════════════
 # SENTINELA — Lock de execução
 # ══════════════════════════════════════════════════════════════════
@@ -388,6 +547,14 @@ def evolution_webhook(payload: dict, background_tasks: BackgroundTasks):
             )
             log.info(f"[BG] Processamento de mídia agendado para user={msg['user_id']!r} plan={plan} job_id={job_id!r}")
 
+        elif task == "import_catalog":
+            background_tasks.add_task(
+                _run_import_catalog_bg,
+                user_id=response["user_id"],
+                msg=response["msg"],
+            )
+            log.info(f"[BG] Importação de catálogo agendada para user={msg['user_id']!r}")
+
         else:
             log.warning(f"[BG] Tipo de background_task desconhecido: {task!r}")
 
@@ -421,24 +588,21 @@ def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
     """
     Background task: carrega produtos da loja e envia a lista pelo WhatsApp.
     Roda fora do ciclo de request/response do FastAPI.
+    
+    Usa shop_loader_service com fallback para catálogo cacheado.
     """
-    from shopee_core.audit_service import load_shop_from_url
+    from shopee_core.shop_loader_service import load_shop_with_fallback
     log.info(f"[BG] Carregando loja: url={shop_url!r} user={user_id}")
 
     try:
-        loaded = load_shop_from_url(shop_url)
+        loaded = load_shop_with_fallback(shop_url=shop_url, user_id=user_id)
     except Exception as e:
         log.error(f"[BG] Exceção ao carregar loja: {e}")
         loaded = {"ok": False, "message": str(e)}
 
     if not loaded.get("ok"):
         clear_session(user_id)
-        msg = (
-            f"❌ Não consegui carregar a loja.\n"
-            f"Erro: {loaded.get('message', 'desconhecido')}\n\n"
-            "Certifique-se de usar o formato: https://shopee.com.br/nome_da_loja\n"
-            "Envie */auditar* para tentar novamente."
-        )
+        msg = loaded.get("message", "Erro desconhecido ao carregar loja.")
         try:
             evo_send_text(user_id=user_id, text=msg)
         except Exception as e:
@@ -447,13 +611,14 @@ def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
 
     products = loaded["data"].get("products", [])
     username = loaded["data"].get("username", "loja")
+    method_used = loaded["data"].get("method_used", "unknown")
 
     if not products:
         clear_session(user_id)
         try:
             evo_send_text(
                 user_id=user_id,
-                text=f"⚠️ A loja *{username}* foi encontrada, mas não há produtos visíveis no momento."
+                text=f"⚠️ A loja *{username}* foi encontrada, mas não há produtos disponíveis.\n\n{loaded.get('message', '')}"
             )
         except Exception as e:
             log.error(f"[BG] Falha ao enviar aviso de loja vazia: {e}")
@@ -468,9 +633,10 @@ def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
             "username": username,
             "products": products,
             "segmento": segmento,
+            "method_used": method_used,
         },
     )
-    log.info(f"[BG] Loja '{username}' carregada: {len(products)} produtos. user={user_id}")
+    log.info(f"[BG] Loja '{username}' carregada: {len(products)} produtos via {method_used}. user={user_id}")
 
     # Monta e envia a lista de produtos
     from shopee_core.audit_service import list_products_summary
@@ -480,8 +646,15 @@ def _run_load_shop_bg(user_id: str, shop_url: str, segmento: str):
     shown = min(total, MAX_PRODUCTS_LISTED)
     suffix = f"(mostrando os primeiros {shown})" if total > shown else ""
 
+    # Adiciona indicador de fonte dos dados
+    source_indicator = ""
+    if method_used == "catalog_cache":
+        source_indicator = "\n📦 _Produtos carregados do catálogo importado_\n"
+    elif method_used == "fallback":
+        source_indicator = "\n⚠️ _Produtos carregados via API alternativa_\n"
+
     msg = (
-        f"✅ Loja *{username}* carregada com *{total}* produto(s). {suffix}\n\n"
+        f"✅ Loja *{username}* carregada com *{total}* produto(s). {suffix}{source_indicator}\n"
         f"{product_list}\n\n"
         "Escolha o número do produto que deseja otimizar. Ex: *0*"
     )
@@ -1536,3 +1709,116 @@ def evolution_test_send(
         return evo_send_text(user_id=number, text=text)
     except ValueError as e:
         return {"ok": False, "error": str(e), "hint": "Configure EVOLUTION_API_URL, EVOLUTION_API_KEY e WHATSAPP_INSTANCE no .shopee_config"}
+
+
+def _run_import_catalog_bg(user_id: str, msg: dict):
+    """
+    Background task: importa catálogo de produtos de arquivo XLSX/CSV.
+    Roda fora do ciclo de request/response do FastAPI.
+    """
+    import base64
+    import tempfile
+    from pathlib import Path
+    from shopee_core.catalog_service import import_shopee_export
+    from shopee_core.session_service import clear_session
+
+    log.info(f"[CATALOG] Iniciando importação de catálogo para user={user_id}")
+
+    try:
+        # Extrai dados do arquivo
+        base64_str = msg.get("base64_data", "")
+        file_name = msg.get("file_name", "catalog.xlsx")
+        
+        if not base64_str:
+            log.error("[CATALOG] base64_data vazio")
+            evo_send_text(user_id=user_id, text=(
+                "❌ Não consegui receber o arquivo.\n"
+                "Tente enviar novamente."
+            ))
+            clear_session(user_id)
+            return
+        
+        # Remove prefixo se houver
+        if "," in base64_str:
+            base64_str = base64_str.split(",", 1)[1]
+        
+        # Decodifica
+        try:
+            file_bytes = base64.b64decode(base64_str)
+            log.info(f"[CATALOG] Arquivo decodificado: {len(file_bytes)} bytes, nome={file_name}")
+        except Exception as e:
+            log.error(f"[CATALOG] Erro ao decodificar: {e}")
+            evo_send_text(user_id=user_id, text=(
+                "❌ Arquivo corrompido ou inválido.\n"
+                "Tente exportar novamente do Seller Center."
+            ))
+            clear_session(user_id)
+            return
+        
+        # Salva temporariamente
+        suffix = Path(file_name).suffix
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=suffix, delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        
+        log.info(f"[CATALOG] Arquivo salvo temporariamente: {tmp_path}")
+        
+        try:
+            # Importa catálogo
+            result = import_shopee_export(
+                file_path=tmp_path,
+                user_id=user_id,
+                shop_url=None,  # Será extraído do arquivo se possível
+                username=None,
+            )
+            
+            if result["ok"]:
+                products_count = len(result.get("products", []))
+                log.info(f"[CATALOG] Importação bem-sucedida: {products_count} produtos")
+                
+                # Lista primeiros produtos
+                products = result.get("products", [])
+                product_list = []
+                for i, p in enumerate(products[:5], start=1):
+                    name = p.get("name", "")[:40]
+                    price = p.get("price", 0)
+                    product_list.append(f"{i}. {name} - R$ {price:.2f}")
+                
+                products_preview = "\n".join(product_list)
+                more_text = f"\n... e mais {products_count - 5} produtos" if products_count > 5 else ""
+                
+                evo_send_text(user_id=user_id, text=(
+                    f"✅ *Catálogo importado com sucesso!*\n\n"
+                    f"📦 {products_count} produto(s) salvos no cache.\n\n"
+                    f"**Primeiros produtos:**\n{products_preview}{more_text}\n\n"
+                    f"Agora você pode usar */auditar* e */sentinela* normalmente!\n"
+                    f"Os produtos serão carregados automaticamente do catálogo."
+                ))
+            else:
+                log.error(f"[CATALOG] Falha na importação: {result.get('message')}")
+                evo_send_text(user_id=user_id, text=(
+                    f"❌ Não consegui importar o catálogo.\n\n"
+                    f"{result.get('message', 'Erro desconhecido')}\n\n"
+                    f"Certifique-se de enviar o arquivo XLSX ou CSV exportado do Shopee Seller Center."
+                ))
+        
+        finally:
+            # Remove arquivo temporário
+            try:
+                Path(tmp_path).unlink()
+                log.info(f"[CATALOG] Arquivo temporário removido: {tmp_path}")
+            except Exception as e:
+                log.warning(f"[CATALOG] Não foi possível remover arquivo temporário: {e}")
+        
+        # Limpa sessão
+        clear_session(user_id)
+        log.info(f"[CATALOG] Importação finalizada para user={user_id}")
+    
+    except Exception as e:
+        log.error(f"[CATALOG] Exceção durante importação: {e}")
+        log.error(traceback.format_exc())
+        evo_send_text(user_id=user_id, text=(
+            f"❌ Erro ao processar arquivo:\n{str(e)}\n\n"
+            "Tente novamente ou envie */cancelar*."
+        ))
+        clear_session(user_id)
