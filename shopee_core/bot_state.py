@@ -42,9 +42,66 @@ def get_conn() -> sqlite3.Connection:
 def init_bot_state_db():
     """Cria as tabelas caso não existam. Idempotente."""
     with get_conn() as conn:
+        # Migração suave do lock do Sentinela (schema legado → U7)
+        try:
+            cols = conn.execute("PRAGMA table_info(sentinela_locks)").fetchall()
+            col_names = {c["name"] for c in cols} if cols else set()
+        except Exception:
+            col_names = set()
+
+        if col_names and ("user_id" not in col_names or "shop_uid" not in col_names):
+            # Cria tabela nova com schema U7 e copia dados existentes (user_id/shop_uid = NULL)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sentinela_locks_v2 (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id           TEXT,
+                    shop_uid          TEXT,
+                    loja_id           TEXT    NOT NULL,
+                    keyword           TEXT    NOT NULL,
+                    janela_execucao   TEXT    NOT NULL,
+                    executor          TEXT    NOT NULL,
+                    status            TEXT    NOT NULL DEFAULT 'running',
+                    started_at        TEXT    NOT NULL,
+                    finished_at       TEXT,
+                    UNIQUE(user_id, shop_uid, keyword, janela_execucao)
+                );
+                """
+            )
+
+            try:
+                legacy_rows = conn.execute("SELECT * FROM sentinela_locks").fetchall()
+            except Exception:
+                legacy_rows = []
+
+            for r in legacy_rows:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO sentinela_locks_v2
+                        (id, user_id, shop_uid, loja_id, keyword, janela_execucao, executor, status, started_at, finished_at)
+                    VALUES
+                        (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        r["id"] if "id" in col_names else None,
+                        r["loja_id"],
+                        r["keyword"],
+                        r["janela_execucao"],
+                        r["executor"],
+                        r["status"] if "status" in col_names else "running",
+                        r["started_at"] if "started_at" in col_names else datetime.utcnow().isoformat(),
+                        r["finished_at"] if "finished_at" in col_names else None,
+                    ),
+                )
+
+            conn.execute("DROP TABLE IF EXISTS sentinela_locks")
+            conn.execute("ALTER TABLE sentinela_locks_v2 RENAME TO sentinela_locks")
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS sentinela_locks (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id           TEXT,
+                shop_uid          TEXT,
                 loja_id           TEXT    NOT NULL,
                 keyword           TEXT    NOT NULL,
                 janela_execucao   TEXT    NOT NULL,
@@ -52,7 +109,7 @@ def init_bot_state_db():
                 status            TEXT    NOT NULL DEFAULT 'running',
                 started_at        TEXT    NOT NULL,
                 finished_at       TEXT,
-                UNIQUE(loja_id, keyword, janela_execucao)
+                UNIQUE(user_id, shop_uid, keyword, janela_execucao)
             );
 
             CREATE TABLE IF NOT EXISTS image_history (
@@ -83,6 +140,8 @@ def try_acquire_sentinel_lock(
     keyword: str,
     janela_execucao: str,
     executor: str,
+    user_id: str = None,
+    shop_uid: str = None,
 ) -> bool:
     """
     Tenta adquirir o lock para a janela de execução.
@@ -90,7 +149,15 @@ def try_acquire_sentinel_lock(
     Retorna True se o lock foi adquirido (executor pode rodar).
     Retorna False se já existe um lock nessa janela (outro executor já rodou/está rodando).
 
-    O campo UNIQUE(loja_id, keyword, janela_execucao) garante atomicidade via SQLite.
+    O campo UNIQUE garante atomicidade via SQLite.
+    
+    Args:
+        loja_id: ID da loja (legado, mantido para compatibilidade)
+        keyword: Keyword sendo monitorada
+        janela_execucao: Identificador da janela de tempo
+        executor: Quem está executando (whatsapp, desktop, etc)
+        user_id: JID do WhatsApp (U7)
+        shop_uid: UID da loja (U7)
     """
     init_bot_state_db()
     try:
@@ -98,10 +165,10 @@ def try_acquire_sentinel_lock(
             conn.execute(
                 """
                 INSERT INTO sentinela_locks
-                    (loja_id, keyword, janela_execucao, executor, status, started_at)
-                VALUES (?, ?, ?, ?, 'running', ?)
+                    (user_id, shop_uid, loja_id, keyword, janela_execucao, executor, status, started_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'running', ?)
                 """,
-                (loja_id, keyword, janela_execucao, executor,
+                (user_id, shop_uid, loja_id, keyword, janela_execucao, executor,
                  datetime.utcnow().isoformat()),
             )
         return True
@@ -115,36 +182,83 @@ def finish_sentinel_lock(
     keyword: str,
     janela_execucao: str,
     status: str = "done",
+    user_id: str = None,
+    shop_uid: str = None,
 ):
-    """Marca o lock como concluído (status='done') ou com erro (status='error')."""
+    """
+    Marca o lock como concluído (status='done') ou com erro (status='error').
+    
+    Args:
+        loja_id: ID da loja (legado)
+        keyword: Keyword sendo monitorada
+        janela_execucao: Identificador da janela de tempo
+        status: Status final (done, error)
+        user_id: JID do WhatsApp (U7)
+        shop_uid: UID da loja (U7)
+    """
     init_bot_state_db()
     with get_conn() as conn:
-        conn.execute(
-            """
-            UPDATE sentinela_locks
-               SET status = ?, finished_at = ?
-             WHERE loja_id = ? AND keyword = ? AND janela_execucao = ?
-            """,
-            (status, datetime.utcnow().isoformat(),
-             loja_id, keyword, janela_execucao),
-        )
+        if user_id and shop_uid:
+            # Novo formato (U7)
+            conn.execute(
+                """
+                UPDATE sentinela_locks
+                   SET status = ?, finished_at = ?
+                 WHERE user_id = ? AND shop_uid = ? AND keyword = ? AND janela_execucao = ?
+                """,
+                (status, datetime.utcnow().isoformat(),
+                 user_id, shop_uid, keyword, janela_execucao),
+            )
+        else:
+            # Formato legado
+            conn.execute(
+                """
+                UPDATE sentinela_locks
+                   SET status = ?, finished_at = ?
+                 WHERE loja_id = ? AND keyword = ? AND janela_execucao = ?
+                """,
+                (status, datetime.utcnow().isoformat(),
+                 loja_id, keyword, janela_execucao),
+            )
 
 
 def get_sentinel_lock_status(
     loja_id: str,
     keyword: str,
     janela_execucao: str,
+    user_id: str = None,
+    shop_uid: str = None,
 ) -> dict | None:
-    """Retorna o registro do lock, ou None se não existir."""
+    """
+    Retorna o registro do lock, ou None se não existir.
+    
+    Args:
+        loja_id: ID da loja (legado)
+        keyword: Keyword sendo monitorada
+        janela_execucao: Identificador da janela de tempo
+        user_id: JID do WhatsApp (U7)
+        shop_uid: UID da loja (U7)
+    """
     init_bot_state_db()
     with get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT * FROM sentinela_locks
-             WHERE loja_id = ? AND keyword = ? AND janela_execucao = ?
-            """,
-            (loja_id, keyword, janela_execucao),
-        ).fetchone()
+        if user_id and shop_uid:
+            # Novo formato (U7)
+            row = conn.execute(
+                """
+                SELECT * FROM sentinela_locks
+                 WHERE user_id = ? AND shop_uid = ? AND keyword = ? AND janela_execucao = ?
+                """,
+                (user_id, shop_uid, keyword, janela_execucao),
+            ).fetchone()
+        else:
+            # Formato legado
+            row = conn.execute(
+                """
+                SELECT * FROM sentinela_locks
+                 WHERE loja_id = ? AND keyword = ? AND janela_execucao = ?
+                """,
+                (loja_id, keyword, janela_execucao),
+            ).fetchone()
     return dict(row) if row else None
 
 

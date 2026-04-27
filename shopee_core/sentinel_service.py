@@ -18,10 +18,12 @@ from shopee_core.bot_state import (
 
 
 def request_sentinel_execution(
-    loja_id: str,
+    loja_id: str | None,
     keyword: str,
     janela_execucao: str,
     executor: str,
+    user_id: str | None = None,
+    shop_uid: str | None = None,
 ) -> dict:
     """
     Solicita o lock para executar o Sentinela nessa janela.
@@ -33,10 +35,12 @@ def request_sentinel_execution(
           executor (str)  — Quem tem/tinha o lock
     """
     acquired = try_acquire_sentinel_lock(
-        loja_id=loja_id,
+        loja_id=loja_id or "",
         keyword=keyword,
         janela_execucao=janela_execucao,
         executor=executor,
+        user_id=user_id,
+        shop_uid=shop_uid,
     )
 
     if acquired:
@@ -51,7 +55,13 @@ def request_sentinel_execution(
         }
 
     # Outra instância já tem o lock — retorna quem está executando
-    existing = get_sentinel_lock_status(loja_id, keyword, janela_execucao)
+    existing = get_sentinel_lock_status(
+        loja_id or "",
+        keyword,
+        janela_execucao,
+        user_id=user_id,
+        shop_uid=shop_uid,
+    )
     existing_executor = existing["executor"] if existing else "desconhecido"
     existing_status = existing["status"] if existing else "desconhecido"
 
@@ -63,15 +73,18 @@ def request_sentinel_execution(
             f"'{executor}' deve pular esta janela."
         ),
         "executor": existing_executor,
+        "status": existing_status,
         "janela_execucao": janela_execucao,
     }
 
 
 def mark_sentinel_finished(
-    loja_id: str,
+    loja_id: str | None,
     keyword: str,
     janela_execucao: str,
     status: str = "done",
+    user_id: str | None = None,
+    shop_uid: str | None = None,
 ) -> dict:
     """
     Marca a execução do Sentinela como concluída.
@@ -80,10 +93,12 @@ def mark_sentinel_finished(
         status: 'done' (sucesso) ou 'error' (falha)
     """
     finish_sentinel_lock(
-        loja_id=loja_id,
+        loja_id=loja_id or "",
         keyword=keyword,
         janela_execucao=janela_execucao,
         status=status,
+        user_id=user_id,
+        shop_uid=shop_uid,
     )
     return {
         "ok": True,
@@ -92,15 +107,23 @@ def mark_sentinel_finished(
 
 
 def check_sentinel_status(
-    loja_id: str,
+    loja_id: str | None,
     keyword: str,
     janela_execucao: str,
+    user_id: str | None = None,
+    shop_uid: str | None = None,
 ) -> dict:
     """
     Consulta o status atual do lock — útil para o .exe verificar
     se o WhatsApp Bot já rodou antes de executar localmente.
     """
-    row = get_sentinel_lock_status(loja_id, keyword, janela_execucao)
+    row = get_sentinel_lock_status(
+        loja_id or "",
+        keyword,
+        janela_execucao,
+        user_id=user_id,
+        shop_uid=shop_uid,
+    )
     if not row:
         return {
             "exists": False,

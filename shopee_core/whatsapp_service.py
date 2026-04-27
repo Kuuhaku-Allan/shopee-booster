@@ -637,7 +637,7 @@ def _route(
         return _handle_sentinel_shop_url(user_id, text)
 
     if state == "awaiting_sentinel_confirmation":
-        return _handle_sentinel_confirmation(user_id, lower, data)
+        return _handle_sentinel_confirmation(user_id, text, data)
 
     if state == "awaiting_sentinel_keywords_manual":
         return _handle_sentinel_keywords_manual(user_id, text, data)
@@ -1854,6 +1854,7 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
         format_sentinel_status,
         delete_sentinel_config,
     )
+    from shopee_core.user_config_service import get_active_shop
     
     # Comando base: /sentinela
     if lower == "/sentinela":
@@ -1861,23 +1862,104 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
     
     # /sentinela status
     if lower in {"/sentinela status", "/sentinela ver"}:
-        config = get_sentinel_config(user_id)
-        return _txt(format_sentinel_status(config))
+        active_shop = get_active_shop(user_id)
+        if not active_shop:
+            return _txt(
+                "Você ainda não tem uma loja ativa.\n\n"
+                "Use */loja adicionar* para cadastrar uma loja primeiro."
+            )
+
+        telegram_configured = bool(get_user_telegram_config(user_id))
+        config = get_sentinel_config(user_id, active_shop.get("shop_uid"))
+        return _txt(format_sentinel_status(config, telegram_configured=telegram_configured))
     
     # /sentinela configurar
     if lower in {"/sentinela configurar", "/sentinela config"}:
         clear_session(user_id)  # Limpa qualquer sessão anterior
-        save_session(user_id, "awaiting_sentinel_shop_url", {})
-        return _txt(
-            "🛡️ *Configuração do Sentinela*\n\n"
-            "Me envie a URL da sua loja na Shopee.\n\n"
-            "Exemplo: https://shopee.com.br/nome_da_loja\n\n"
-            "_Vou analisar seus produtos e gerar keywords automaticamente para monitoramento._"
+
+        active_shop = get_active_shop(user_id)
+        if not active_shop:
+            return _txt(
+                "Você ainda não tem uma loja ativa.\n\n"
+                "Use */loja adicionar* para cadastrar uma loja primeiro."
+            )
+
+        shop_uid = active_shop.get("shop_uid")
+        shop_url = active_shop.get("shop_url")
+        username = active_shop.get("username")
+        shop_id = active_shop.get("shop_id") or "unknown"
+
+        telegram_configured = bool(get_user_telegram_config(user_id))
+        telegram_note = (
+            ""
+            if telegram_configured
+            else "\n\n⚠️ *Telegram ainda não configurado.*\n"
+                 "O Sentinela pode ser ativado, mas o relatório completo (gráfico e tabela) "
+                 "só é enviado se você usar: */telegram configurar*"
         )
+
+        # 1) Tenta catálogo vinculado à loja ativa (prioridade máxima)
+        try:
+            from shopee_core.sentinel_whatsapp_service import generate_keywords_from_catalog
+            keywords = generate_keywords_from_catalog(user_id, shop_uid)
+        except Exception:
+            keywords = []
+
+        if keywords:
+            save_session(
+                user_id,
+                "awaiting_sentinel_confirmation",
+                {
+                    "shop_uid": shop_uid,
+                    "shop_url": shop_url,
+                    "username": username,
+                    "shop_id": shop_id,
+                    "keywords": keywords,
+                    "keyword_source": "catalog",
+                },
+            )
+
+            preview = "\n".join(f"• {kw}" for kw in keywords[:10])
+            if len(keywords) > 10:
+                preview += f"\n• ... e mais {len(keywords) - 10} keywords"
+
+            return _txt(
+                f"🛡️ *Configurando Sentinela*\n"
+                f"🏪 Loja ativa: *{username}*\n\n"
+                f"✅ Keywords geradas para *{username}*:\n{preview}\n\n"
+                f"Digite *CONFIRMAR* para ativar o Sentinela com essas keywords.\n"
+                f"Ou envie novas keywords, uma por linha."
+                f"{telegram_note}"
+            )
+
+        # 2) Sem catálogo: tenta scraping/fallback em background
+        save_session(user_id, "processing_sentinel_load_shop", {"shop_uid": shop_uid, "shop_url": shop_url})
+        return {
+            "type": "background_task",
+            "task": "load_shop_for_sentinel",
+            "text": (
+                f"🛡️ *Configurando Sentinela*\n"
+                f"🏪 Loja ativa: *{username}*\n\n"
+                f"⚠️ Não encontrei catálogo importado para essa loja.\n"
+                f"Vou tentar gerar keywords usando a vitrine pública.\n\n"
+                f"_Isso pode levar alguns segundos._"
+                f"{telegram_note}"
+            ),
+            "user_id": user_id,
+            "shop_uid": shop_uid,
+            "shop_url": shop_url,
+        }
     
     # /sentinela rodar
     if lower in {"/sentinela rodar", "/sentinela executar", "/sentinela agora"}:
-        config = get_sentinel_config(user_id)
+        active_shop = get_active_shop(user_id)
+        if not active_shop:
+            return _txt(
+                "Você ainda não tem uma loja ativa.\n\n"
+                "Use */loja adicionar* para cadastrar uma loja primeiro."
+            )
+
+        config = get_sentinel_config(user_id, active_shop.get("shop_uid"))
         if not config:
             return _txt(
                 "❌ Sentinela não configurado.\n\n"
@@ -1889,15 +1971,25 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
                 "⏸️ Sentinela está pausado.\n\n"
                 "Use */sentinela ativar* para reativar o monitoramento."
             )
+
+        telegram_configured = bool(get_user_telegram_config(user_id))
+        kw_preview = config.get("keywords", [])[:3]
+        kw_text = "\n".join(f"• {kw}" for kw in kw_preview) if kw_preview else "• (nenhuma)"
+        telegram_line = (
+            "Vou te enviar o resumo aqui e o relatório completo no Telegram."
+            if telegram_configured
+            else "Relatório completo não enviado. Use */telegram configurar*."
+        )
         
         # Agenda execução em background
         return {
             "type": "background_task",
             "task": "run_sentinel",
             "text": (
-                "⏳ *Rodando o Sentinela agora...*\n\n"
-                "Vou buscar concorrentes, comparar com o histórico e te avisar se encontrar novidades.\n\n"
-                "_Isso pode levar alguns minutos._"
+                f"⏳ *Rodando o Sentinela para {config.get('username', 'sua loja')}...*\n\n"
+                f"*Keywords:*\n{kw_text}\n\n"
+                f"{telegram_line}\n\n"
+                f"_Isso pode levar alguns minutos._"
             ),
             "user_id": user_id,
             "config": config,
@@ -1905,20 +1997,16 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
     
     # /sentinela pausar
     if lower in {"/sentinela pausar", "/sentinela parar"}:
-        config = get_sentinel_config(user_id)
+        active_shop = get_active_shop(user_id)
+        if not active_shop:
+            return _txt("Você ainda não tem uma loja ativa. Use */loja adicionar* primeiro.")
+
+        config = get_sentinel_config(user_id, active_shop.get("shop_uid"))
         if not config:
             return _txt("❌ Sentinela não configurado.")
-        
-        from shopee_core.sentinel_whatsapp_service import save_sentinel_config
-        save_sentinel_config(
-            user_id=user_id,
-            shop_url=config["shop_url"],
-            username=config["username"],
-            shop_id=config["shop_id"],
-            keywords=config["keywords"],
-            is_active=False,
-            interval_minutes=config["interval_minutes"],
-        )
+
+        from shopee_core.sentinel_whatsapp_service import pause_sentinel
+        pause_sentinel(user_id=user_id, shop_uid=active_shop.get("shop_uid"))
         
         return _txt(
             "⏸️ *Sentinela pausado*\n\n"
@@ -1928,20 +2016,16 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
     
     # /sentinela ativar
     if lower in {"/sentinela ativar", "/sentinela ativo"}:
-        config = get_sentinel_config(user_id)
+        active_shop = get_active_shop(user_id)
+        if not active_shop:
+            return _txt("Você ainda não tem uma loja ativa. Use */loja adicionar* primeiro.")
+
+        config = get_sentinel_config(user_id, active_shop.get("shop_uid"))
         if not config:
             return _txt("❌ Sentinela não configurado.")
-        
-        from shopee_core.sentinel_whatsapp_service import save_sentinel_config
-        save_sentinel_config(
-            user_id=user_id,
-            shop_url=config["shop_url"],
-            username=config["username"],
-            shop_id=config["shop_id"],
-            keywords=config["keywords"],
-            is_active=True,
-            interval_minutes=config["interval_minutes"],
-        )
+
+        from shopee_core.sentinel_whatsapp_service import resume_sentinel
+        resume_sentinel(user_id=user_id, shop_uid=active_shop.get("shop_uid"))
         
         return _txt(
             "🟢 *Sentinela ativado*\n\n"
@@ -1951,11 +2035,15 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
     
     # /sentinela cancelar
     if lower in {"/sentinela cancelar", "/sentinela remover", "/sentinela deletar"}:
-        config = get_sentinel_config(user_id)
+        active_shop = get_active_shop(user_id)
+        if not active_shop:
+            return _txt("Você ainda não tem uma loja ativa. Use */loja adicionar* primeiro.")
+
+        config = get_sentinel_config(user_id, active_shop.get("shop_uid"))
         if not config:
             return _txt("❌ Sentinela não configurado.")
-        
-        delete_sentinel_config(user_id)
+
+        delete_sentinel_config(user_id, active_shop.get("shop_uid"))
         return _txt(
             "🗑️ *Configuração removida*\n\n"
             "O Sentinela foi desconfigurado.\n"
@@ -1964,7 +2052,11 @@ def _handle_sentinel_command(user_id: str, text: str, lower: str, state: str, da
 
     # /sentinela keywords
     if lower in {"/sentinela keywords", "/sentinela palavras"}:
-        config = get_sentinel_config(user_id)
+        active_shop = get_active_shop(user_id)
+        if not active_shop:
+            return _txt("Você ainda não tem uma loja ativa. Use */loja adicionar* primeiro.")
+
+        config = get_sentinel_config(user_id, active_shop.get("shop_uid"))
         if not config:
             return _txt("❌ Sentinela não configurado.")
         
@@ -2061,16 +2153,26 @@ def _handle_sentinel_keywords_manual(user_id: str, text: str, data: dict) -> dic
     # Salva configuração final
     from shopee_core.sentinel_whatsapp_service import save_sentinel_config
     
+    shop_uid = data.get("shop_uid")
     shop_url = data.get("shop_url", "")
     username = data.get("username", "")
     shop_id = data.get("shop_id", "")
+
+    if not shop_uid:
+        clear_session(user_id)
+        return _txt(
+            "❌ Erro: não encontrei a loja ativa para salvar a configuração.\n\n"
+            "Use */sentinela configurar* para tentar novamente."
+        )
     
     save_sentinel_config(
         user_id=user_id,
+        shop_uid=shop_uid,
         shop_url=shop_url,
         username=username,
         shop_id=shop_id,
         keywords=keywords,
+        keyword_source="manual",
         is_active=True,
         interval_minutes=360,  # 6 horas padrão
     )
@@ -2119,16 +2221,20 @@ def _handle_sentinel_keywords_update(user_id: str, text: str, data: dict) -> dic
     
     # Atualiza configuração
     config = data.get("config", {})
-    
-    from shopee_core.sentinel_whatsapp_service import save_sentinel_config
-    save_sentinel_config(
+
+    from shopee_core.sentinel_whatsapp_service import update_sentinel_keywords
+    shop_uid = config.get("shop_uid", "")
+    if not shop_uid:
+        clear_session(user_id)
+        return _txt(
+            "❌ Erro: não encontrei a loja ativa para atualizar as keywords.\n\n"
+            "Use */sentinela status* e tente novamente."
+        )
+    update_sentinel_keywords(
         user_id=user_id,
-        shop_url=config.get("shop_url", ""),
-        username=config.get("username", ""),
-        shop_id=config.get("shop_id", ""),
+        shop_uid=shop_uid,
         keywords=keywords,
-        is_active=config.get("is_active", True),
-        interval_minutes=config.get("interval_minutes", 360),
+        keyword_source="manual",
     )
     
     clear_session(user_id)
@@ -2183,26 +2289,32 @@ def _handle_sentinel_confirmation(user_id: str, text: str, data: dict) -> dict:
     lower = text.lower().strip()
     
     if lower in {"confirmar", "sim", "ok", "confirma", "aceitar"}:
-        # Salva configuração final
         from shopee_core.sentinel_whatsapp_service import save_sentinel_config
-        
+
+        shop_uid = data.get("shop_uid")
         shop_url = data.get("shop_url", "")
         username = data.get("username", "")
         shop_id = data.get("shop_id", "")
         keywords = data.get("keywords", [])
-        auto_generated = data.get("auto_generated", False)
-        from_catalog = data.get("from_catalog", False)
-        
+        keyword_source = data.get("keyword_source", "manual")
+
+        if not shop_uid:
+            clear_session(user_id)
+            return _txt(
+                "❌ Erro: não encontrei a loja ativa para salvar a configuração.\n\n"
+                "Use */sentinela configurar* para tentar novamente."
+            )
+
         save_sentinel_config(
             user_id=user_id,
+            shop_uid=shop_uid,
             shop_url=shop_url,
             username=username,
             shop_id=shop_id,
             keywords=keywords,
+            keyword_source=keyword_source,
             is_active=True,
-            interval_minutes=360,  # 6 horas padrão
-            auto_generated=auto_generated,
-            from_catalog=from_catalog,
+            interval_minutes=360,
         )
         
         clear_session(user_id)
@@ -2227,10 +2339,55 @@ def _handle_sentinel_confirmation(user_id: str, text: str, data: dict) -> dict:
         )
     
     else:
+        # Interpreta a resposta como novas keywords (uma por linha / vírgula)
+        keywords = _parse_manual_keywords(text)
+
+        if len(keywords) < 1:
+            return _txt(
+                "Por favor, responda:\n"
+                "• *CONFIRMAR* — para aceitar as keywords sugeridas\n"
+                "• *CANCELAR* — para cancelar\n"
+                "• Ou envie novas keywords, uma por linha."
+            )
+
+        from shopee_core.sentinel_whatsapp_service import save_sentinel_config
+
+        shop_uid = data.get("shop_uid")
+        shop_url = data.get("shop_url", "")
+        username = data.get("username", "")
+        shop_id = data.get("shop_id", "")
+
+        if not shop_uid:
+            clear_session(user_id)
+            return _txt(
+                "❌ Erro: não encontrei a loja ativa para salvar a configuração.\n\n"
+                "Use */sentinela configurar* para tentar novamente."
+            )
+
+        save_sentinel_config(
+            user_id=user_id,
+            shop_uid=shop_uid,
+            shop_url=shop_url,
+            username=username,
+            shop_id=shop_id,
+            keywords=keywords,
+            keyword_source="manual",
+            is_active=True,
+            interval_minutes=360,
+        )
+
+        clear_session(user_id)
+
+        keywords_text = "\n".join(f"• {kw}" for kw in keywords[:10])
+        if len(keywords) > 10:
+            keywords_text += f"\n• ... e mais {len(keywords) - 10} keywords"
+
         return _txt(
-            "Por favor, responda:\n"
-            "• *Confirmar* - para aceitar as keywords\n"
-            "• *Cancelar* - para cancelar a configuração"
+            f"✅ *Sentinela configurado!*\n\n"
+            f"🏪 Loja: *{username}*\n"
+            f"🔍 Keywords manuais ({len(keywords)}):\n{keywords_text}\n\n"
+            f"Use */sentinela rodar* para fazer a primeira checagem agora.\n"
+            f"Use */sentinela status* para ver o status completo."
         )
 
 

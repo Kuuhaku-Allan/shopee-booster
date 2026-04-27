@@ -77,7 +77,18 @@ class AuditResponse(BaseModel):
 # ══════════════════════════════════════════════════════════════
 
 class SentinelLockRequest(BaseModel):
-    loja_id: str = Field(..., description="Identificador único da loja monitorada")
+    loja_id: Optional[str] = Field(
+        None,
+        description="Identificador único da loja monitorada (legado / desktop)"
+    )
+    user_id: Optional[str] = Field(
+        None,
+        description="ID do usuário (WhatsApp JID) para lock multiusuário"
+    )
+    shop_uid: Optional[str] = Field(
+        None,
+        description="UID da loja ativa do usuário para lock multiusuário"
+    )
     keyword: str = Field(..., description="Keyword sendo monitorada")
     janela_execucao: str = Field(
         ...,
@@ -97,7 +108,9 @@ class SentinelLockResponse(BaseModel):
 
 
 class SentinelFinishRequest(BaseModel):
-    loja_id: str
+    loja_id: Optional[str] = None
+    user_id: Optional[str] = None
+    shop_uid: Optional[str] = None
     keyword: str
     janela_execucao: str
     status: str = Field("done", description="'done' ou 'error'")
