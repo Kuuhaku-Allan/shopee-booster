@@ -142,46 +142,73 @@ for product in products:
 
 ---
 
-## 💡 Recomendação Final
+## 💡 Decisão Final: Importação de Catálogo
 
-**Implementar Opção A** (Esperar por Elementos DOM) com as seguintes melhorias:
+**CONTEXTO**: v4.0.0 também falha hoje (confirmado pelo usuário).  
+**CONCLUSÃO**: A Shopee mudou a arquitetura e está bloqueando scraping automatizado.
 
-1. **Modificar `fetch_shop_products_intercept`**:
-   - Remover dependência de `rcmd_items` e `shop_page`
-   - Adicionar espera por elementos DOM de produtos
-   - Extrair dados dos elementos renderizados
+### Estratégia Escolhida: Fase 6A - Importação de Catálogo
 
-2. **Adicionar Timeout Configurável**:
-   - Permitir ajustar tempo de espera
-   - Fallback para manual se timeout
+Em vez de tentar driblar a detecção da Shopee (guerra técnica instável), implementar **importação de catálogo autorizado**:
 
-3. **Melhorar Logs**:
-   - Mostrar progresso do carregamento
-   - Indicar quando produtos aparecem
+1. **Usuário exporta produtos do Shopee Seller Center** (XLSX/CSV)
+2. **ShopeeBooster importa e cacheia** os produtos
+3. **Produtos voltam a funcionar** em Auditoria, Sentinela e Otimização
 
-4. **Manter Fallback Manual**:
-   - Como plano B para o Sentinela
-   - Não remover, apenas complementar
+### Vantagens
+- ✅ Sem CNPJ ou API oficial
+- ✅ Sem guerra contra anti-bot
+- ✅ Fonte autorizada (próprio Seller Center)
+- ✅ Mais estável que scraping
+- ✅ Cache local para uso offline
+
+### Ordem de Prioridade de Fontes
+1. **Scraping público** (tentativa 1, pode falhar)
+2. **Catálogo cacheado** (importado anteriormente)
+3. **Upload XLSX/CSV** (solicita ao usuário)
+4. **Keywords manuais** (Sentinela apenas, plano B)
 
 ---
 
 ## 📝 Próximos Passos
 
-### Imediato (Hoje)
-1. ✅ Investigação completa - CONCLUÍDO
-2. ⏳ Implementar Opção A (espera por DOM)
-3. ⏳ Testar com loja totalmenteseu
-4. ⏳ Validar com .exe e FastAPI
+### ✅ CONCLUÍDO
+1. ✅ Investigação completa da regressão
+2. ✅ Confirmação: v4.0.0 também falha (não é regressão no código)
+3. ✅ Criado `shopee_core/catalog_service.py` completo
+4. ✅ Criado scripts de investigação manual e automatizada
 
-### Curto Prazo (Esta Semana)
-1. ⏳ Documentar nova abordagem
-2. ⏳ Atualizar testes
-3. ⏳ Merge para main
+### ⏳ EM ANDAMENTO - Fase 6A: Importação de Catálogo
 
-### Médio Prazo (Próximas Semanas)
-1. ⏳ Monitorar estabilidade
-2. ⏳ Considerar Opção B se necessário
-3. ⏳ Otimizar performance
+#### Imediato (Hoje)
+1. ⏳ Integrar `catalog_service.py` com `shop_loader_service.py`
+   - Modificar `load_shop_with_fallback()` para usar catálogo cacheado
+   - Ordem: scraping → catálogo cache → solicitar importação
+
+2. ⏳ Adicionar suporte no WhatsApp (`whatsapp_service.py`)
+   - Comando `/catalogo` ou `/catálogo` para importar
+   - Aceitar arquivos XLSX/CSV em `/auditar`
+   - Mensagem quando scraping falhar: "Encontrei catálogo importado, usar?"
+
+3. ⏳ Adicionar suporte no Streamlit (`app.py`)
+   - Botão "Importar catálogo da Shopee (.xlsx/.csv)" na Auditoria
+   - Upload de arquivo
+   - Listar produtos importados
+
+4. ⏳ Integrar com Sentinela
+   - Usar catálogo para gerar keywords automáticas quando scraping falhar
+
+#### Curto Prazo (Esta Semana)
+1. ⏳ Testar fluxo completo:
+   - Importação → cache → uso em Auditoria → uso em Sentinela
+2. ⏳ Documentar processo de exportação do Seller Center
+3. ⏳ Atualizar README com novo fluxo
+4. ⏳ Merge para main
+
+#### Médio Prazo (Próximas Semanas)
+1. ⏳ Monitorar estabilidade do catálogo
+2. ⏳ Adicionar sincronização automática (opcional)
+3. ⏳ Considerar investigação de novo endpoint (se necessário)
 
 ---
 
@@ -191,16 +218,19 @@ for product in products:
 - `scripts/test_shop_loader.py` - Teste isolado
 - `scripts/investigate_shopee_endpoints.py` - Captura de endpoints
 - `scripts/check_html_products.py` - Análise de HTML
+- `scripts/discover_new_endpoint.py` - **NOVO**: Descoberta automatizada de endpoints
+- `scripts/manual_browser_investigation.md` - **NOVO**: Guia de investigação manual
 
 ### Evidências
 - `shopee_endpoints_investigation.json` - Todos os endpoints capturados
 - `shop_page.html` - HTML completo da página
 - `test_output.log` - Logs do teste
 
-### Código Afetado
-- `backend_core.py` - `fetch_shop_products_intercept()`
+### Código Implementado
+- `shopee_core/catalog_service.py` - **NOVO**: Serviço de importação de catálogo
+- `backend_core.py` - `fetch_shop_products_intercept()` (tentativa DOM - falhou)
 - `shopee_core/audit_service.py` - `load_shop_from_url()`
-- `shopee_core/shop_loader_service.py` - `load_shop_with_fallback()`
+- `shopee_core/shop_loader_service.py` - `load_shop_with_fallback()` (precisa integração)
 
 ---
 
