@@ -1050,10 +1050,10 @@ def _run_sentinel_bg(user_id: str, config: dict):
     TIMEOUT_PER_KEYWORD = 90  # segundos
 
     try:
-        # ── Etapa 1: Import do backend_core ────────────────────────
-        log.info("[SENTINELA] Etapa 1/6: importando backend_core.fetch_competitors_intercept...")
-        from backend_core import fetch_competitors_intercept
-        log.info("[SENTINELA] Etapa 1/6 OK: backend_core importado")
+        # ── Etapa 1: Import do competitor_service ──────────────────
+        log.info("[SENTINELA] Etapa 1/6: importando competitor_service...")
+        from shopee_core.competitor_service import fetch_competitors
+        log.info("[SENTINELA] Etapa 1/6 OK: competitor_service importado")
 
         # ── Etapa 2: Leitura de config ─────────────────────────────
         log.info("[SENTINELA] Etapa 2/6: lendo config...")
@@ -1107,7 +1107,6 @@ def _run_sentinel_bg(user_id: str, config: dict):
         # ── Etapa 5: Preparar estruturas de dados ──────────────────
         log.info("[SENTINELA] Etapa 5/6: preparando estruturas de dados...")
         from shopee_core.sentinel_service import request_sentinel_execution, mark_sentinel_finished
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
         
         keywords_executadas: list[str] = []
         keywords_com_erro: list[str] = []
@@ -1116,14 +1115,10 @@ def _run_sentinel_bg(user_id: str, config: dict):
         first_lock_block: dict | None = None
         log.info("[SENTINELA] Etapa 5/6 OK: estruturas preparadas")
 
-        # ── Etapa 6: Definir função de timeout ─────────────────────
-        log.info("[SENTINELA] Etapa 6/6: definindo fetch_with_timeout...")
-        def fetch_with_timeout(keyword: str) -> list:
-            """Executa fetch com timeout real usando ThreadPoolExecutor."""
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(fetch_competitors_intercept, keyword)
-                return future.result(timeout=TIMEOUT_PER_KEYWORD)
-        log.info("[SENTINELA] Etapa 6/6 OK: função definida")
+        # ── Etapa 6: Pronto para executar ──────────────────────────
+        log.info("[SENTINELA] Etapa 6/6: pronto para executar keywords")
+        # Nota: fetch_competitors já tem timeout interno via subprocess
+        log.info("[SENTINELA] Etapa 6/6 OK: sistema pronto")
         
         log.info(f"[SENTINELA] Iniciando loop de {total_keywords} keywords...")
         
@@ -1165,9 +1160,9 @@ def _run_sentinel_bg(user_id: str, config: dict):
                     first_lock_block = lock_result
                 continue
 
-            # ── Executa scraping com timeout real ──────────────────
+            # ── Executa scraping com timeout real via subprocess ───────
             try:
-                concorrentes_raw = fetch_with_timeout(kw) or []
+                concorrentes_raw = fetch_competitors(kw, timeout_seconds=TIMEOUT_PER_KEYWORD) or []
                 
                 concorrentes = []
                 for i, c in enumerate(concorrentes_raw[:10]):
@@ -1215,7 +1210,7 @@ def _run_sentinel_bg(user_id: str, config: dict):
                     status="done",
                 )
                 
-            except FutureTimeoutError as e:
+            except TimeoutError:
                 log.error(f"[SENTINELA] Timeout na keyword={kw!r}: {TIMEOUT_PER_KEYWORD}s excedido")
                 keywords_timeout.append(kw)
                 try:
@@ -1229,9 +1224,24 @@ def _run_sentinel_bg(user_id: str, config: dict):
                     )
                 except Exception:
                     pass
+            
+            except RuntimeError as e:
+                log.error(f"[SENTINELA] Erro no scraping da keyword={kw!r}: {e}")
+                keywords_com_erro.append(kw)
+                try:
+                    mark_sentinel_finished(
+                        loja_id=shop_id,
+                        user_id=user_id,
+                        shop_uid=shop_uid,
+                        keyword=kw,
+                        janela_execucao=janela_execucao,
+                        status="error",
+                    )
+                except Exception:
+                    pass
                     
             except Exception as e:
-                log.error(f"[SENTINELA] Erro ao executar keyword={kw!r}: {e}")
+                log.error(f"[SENTINELA] Erro inesperado ao executar keyword={kw!r}: {e}")
                 keywords_com_erro.append(kw)
                 try:
                     mark_sentinel_finished(
