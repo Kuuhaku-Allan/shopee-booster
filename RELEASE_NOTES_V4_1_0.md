@@ -63,9 +63,9 @@
 - ✅ **Catálogo da Loja**: Importação via XLSX/CSV do Shopee Seller Center
 - ✅ **Avaliações**: Já usavam ML, continuam iguais
 - ✅ **Otimização Completa**: Funciona 100% com dados do ML
-- ✅ **Sentinela**: Monitora mudanças de preço no ML
-- ✅ **WhatsApp**: Integração completa
+- ✅ **WhatsApp Bot**: Integração completa e funcional
 - ✅ **API REST**: Todos os endpoints funcionando
+- ⚠️ **Sentinela**: Estrutura compatível com ML, validação final em produção pendente
 
 ---
 
@@ -81,9 +81,15 @@
 - Análise competitiva com dados do ML
 - Geração de otimização com IA
 
-### Teste 3: Sentinela ⏳
-- Aguardando teste em produção
-- Deve monitorar preços no ML
+### Teste 3: Catálogo Importado ✅
+- Upload de XLSX/CSV funcional
+- Cache persistente entre sessões
+- Galeria de produtos renderizada
+
+### Teste 4: Sentinela ⏳
+- Estrutura migrada para ML
+- Validação em produção pendente
+- Monitoramento de preços preparado
 
 ---
 
@@ -176,10 +182,10 @@
 
 ## 🎯 Próximos Passos
 
-1. ⏳ Testar Sentinela em produção
-2. ⏳ Validar com XLSX real do Seller Center
-3. ⏳ Coletar feedback dos usuários
-4. ⏳ Ajustar estimativa de avaliações se necessário
+1. ⏳ Validar Sentinela em produção com monitoramento real
+2. ⏳ Coletar feedback dos usuários sobre dados do ML
+3. ⏳ Ajustar estimativa de avaliações se necessário
+4. ⏳ Expandir integração com outros marketplaces
 
 ---
 

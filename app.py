@@ -1,5 +1,5 @@
 """
-app.py — Orquestrador do Shopee Booster 4.0.0
+app.py — Orquestrador do Shopee Booster 4.1.0
 ============================================
 Este arquivo controla APENAS:
   - Configuração da página e API key

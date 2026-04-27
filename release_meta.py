@@ -15,7 +15,7 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     BUNDLED_DIR = BASE_DIR
 
-DEFAULT_VERSION = "4.0.0"
+DEFAULT_VERSION = "4.1.0"
 
 GITHUB_USUARIO = "Kuuhaku-Allan"
 GITHUB_REPO = "shopee-booster"
