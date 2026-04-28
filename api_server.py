@@ -2276,8 +2276,15 @@ def evolution_qrcode_endpoint():
         
         data = r.json()
         
-        # Verificar se tem QR code
-        if not data.get("code"):
+        # Verificar se tem QR code - tentar múltiplos campos possíveis
+        qr_base64 = (
+            data.get("base64")
+            or data.get("code")
+            or data.get("qrcode", {}).get("base64")
+            or ""
+        )
+        
+        if not qr_base64:
             return {
                 "ok": False,
                 "error": "QR Code não disponível",
@@ -2285,8 +2292,11 @@ def evolution_qrcode_endpoint():
                 "data": data
             }
         
+        # Garantir que o base64 tenha o prefixo correto
+        if qr_base64 and not qr_base64.startswith("data:image"):
+            qr_base64 = "data:image/png;base64," + qr_base64
+        
         # Retornar HTML com QR Code
-        qr_base64 = data["code"]
         pairing_code = data.get("pairingCode", "")
         
         html = f"""
@@ -2388,7 +2398,7 @@ def evolution_qrcode_endpoint():
                 <p class="subtitle">Conectar WhatsApp</p>
                 
                 <div class="qr-container">
-                    <img src="data:image/png;base64,{qr_base64}" alt="QR Code WhatsApp">
+                    <img src="{qr_base64}" alt="QR Code WhatsApp">
                 </div>
                 
                 {f'<div class="pairing-code">Código: {pairing_code}</div>' if pairing_code else ''}

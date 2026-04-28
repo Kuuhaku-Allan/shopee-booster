@@ -151,7 +151,7 @@ try {
 }
 
 try {
-    $EvolutionHealth = Invoke-RestMethod -Uri "http://localhost:8080/health" -Method Get -TimeoutSec 10
+    $EvolutionHealth = Invoke-RestMethod -Uri "http://localhost:8080/" -Method Get -TimeoutSec 10
     Write-Log "✅ Evolution API: OK"
 } catch {
     Write-Log "❌ Evolution API: FALHOU"
@@ -161,12 +161,7 @@ try {
 # Configurar webhook
 Write-Log "Configurando webhook..."
 try {
-    $WebhookBody = @{
-        user_id = "admin"
-        shop_uid = "setup"
-    } | ConvertTo-Json
-    
-    $WebhookResponse = Invoke-RestMethod -Uri "http://localhost:8787/evolution/setup-webhook" -Method Post -Body $WebhookBody -ContentType "application/json" -TimeoutSec 10
+    $WebhookResponse = Invoke-RestMethod -Uri "http://localhost:8787/evolution/setup-webhook" -Method POST -TimeoutSec 10
     
     if ($WebhookResponse.ok) {
         Write-Log "✅ Webhook configurado: $($WebhookResponse.webhook_url)"
@@ -175,6 +170,32 @@ try {
     }
 } catch {
     Write-Log "⚠️  Erro ao configurar webhook: $_"
+}
+
+# Verificar status da instância WhatsApp
+Write-Log "Verificando instância WhatsApp..."
+try {
+    $InstanceStatus = Invoke-RestMethod -Uri "http://localhost:8787/evolution/instance-status" -Method Get -TimeoutSec 10
+    
+    if ($InstanceStatus.ok) {
+        Write-Log "✅ Instância WhatsApp: $($InstanceStatus.state)"
+        
+        if ($InstanceStatus.state -eq "close") {
+            Write-Log "⚠️  WhatsApp desconectado! Gerando QR Code..."
+            try {
+                # Gerar QR Code e salvar como arquivo
+                $QrResponse = Invoke-RestMethod -Uri "http://localhost:8787/evolution/qrcode" -Method Get -TimeoutSec 15
+                Write-Log "✅ QR Code disponível em: http://localhost:8787/evolution/qrcode"
+                Write-Log "📱 AÇÃO NECESSÁRIA: Escaneie o QR Code para conectar o WhatsApp!"
+            } catch {
+                Write-Log "❌ Erro ao gerar QR Code: $_"
+            }
+        }
+    } else {
+        Write-Log "❌ Erro ao verificar instância: $($InstanceStatus.error)"
+    }
+} catch {
+    Write-Log "⚠️  Erro ao verificar instância WhatsApp: $_"
 }
 
 Write-Log "════════════════════════════════════════════════════════════"

@@ -54,7 +54,7 @@ Write-Host "Criando tarefa..." -ForegroundColor Yellow
 $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`""
 
 # Criar trigger (a cada 5 minutos)
-$Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
+$Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 365)
 
 # Criar configurações
 $Settings = New-ScheduledTaskSettingsSet `

@@ -79,7 +79,7 @@ Write-Log "Testando ShopeeBooster API..." "INFO"
 $ApiOk = $false
 try {
     $ApiHealth = Invoke-RestMethod -Uri "http://localhost:8787/health" -Method Get -TimeoutSec 10
-    if ($ApiHealth.status -eq "ok") {
+    if ($ApiHealth.ok -eq $true) {
         Write-Log "ShopeeBooster API: OK" "INFO"
         $ApiOk = $true
     } else {
@@ -97,7 +97,7 @@ if (-not $ApiOk) {
         Start-Sleep -Seconds 20
         
         $ApiHealth = Invoke-RestMethod -Uri "http://localhost:8787/health" -Method Get -TimeoutSec 10
-        if ($ApiHealth.status -eq "ok") {
+        if ($ApiHealth.ok -eq $true) {
             Write-Log "ShopeeBooster API reiniciada com sucesso" "INFO"
             $ApiOk = $true
         }
@@ -110,7 +110,7 @@ if (-not $ApiOk) {
 Write-Log "Testando Evolution API..." "INFO"
 $EvolutionOk = $false
 try {
-    $EvolutionHealth = Invoke-RestMethod -Uri "http://localhost:8080/health" -Method Get -TimeoutSec 10
+    $EvolutionHealth = Invoke-RestMethod -Uri "http://localhost:8080/" -Method Get -TimeoutSec 10
     Write-Log "Evolution API: OK" "INFO"
     $EvolutionOk = $true
 } catch {
@@ -124,7 +124,7 @@ if (-not $EvolutionOk) {
         docker compose -f $ComposeFile --env-file $EnvFile restart evolution_api 2>&1 | Out-Null
         Start-Sleep -Seconds 20
         
-        $EvolutionHealth = Invoke-RestMethod -Uri "http://localhost:8080/health" -Method Get -TimeoutSec 10
+        $EvolutionHealth = Invoke-RestMethod -Uri "http://localhost:8080/" -Method Get -TimeoutSec 10
         Write-Log "Evolution API reiniciada com sucesso" "INFO"
         $EvolutionOk = $true
     } catch {
@@ -143,16 +143,14 @@ if ($ApiOk) {
         } elseif ($InstanceStatus.ok) {
             Write-Log "WhatsApp: Desconectado (state: $($InstanceStatus.state))" "WARN"
             Write-Log "AÇÃO NECESSÁRIA: Escanear QR Code novamente!" "WARN"
+            Write-Log "Acesse: http://localhost:8787/evolution/qrcode" "WARN"
             
-            # Tentar enviar notificação via Telegram (se configurado)
+            # Gerar arquivo qrcode.png para facilitar acesso
             try {
-                $TelegramNotify = @{
-                    message = "⚠️ ShopeeBooster Bot: WhatsApp desconectado! Escaneie o QR Code novamente."
-                } | ConvertTo-Json
-                
-                Invoke-RestMethod -Uri "http://localhost:8787/telegram/send-alert" -Method Post -Body $TelegramNotify -ContentType "application/json" -TimeoutSec 5 2>&1 | Out-Null
+                $QrResponse = Invoke-RestMethod -Uri "http://localhost:8787/evolution/qrcode" -Method Get -TimeoutSec 15
+                Write-Log "QR Code gerado: http://localhost:8787/evolution/qrcode" "INFO"
             } catch {
-                # Telegram não configurado ou falhou, ignorar
+                Write-Log "Erro ao gerar QR Code: $_" "WARN"
             }
         } else {
             Write-Log "WhatsApp: Erro - $($InstanceStatus.error)" "ERROR"
@@ -184,19 +182,16 @@ if ($ApiOk -and $EvolutionOk) {
     }
 }
 
-# 7. Verificar Cloudflare Tunnel
+# 7. Verificar Cloudflare Tunnel (processo Windows, não container)
 Write-Log "Verificando Cloudflare Tunnel..." "INFO"
 try {
-    $CloudflaredStatus = docker inspect shopee_cloudflared --format='{{.State.Status}}' 2>&1
+    $CloudflaredProcess = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
     
-    if ($CloudflaredStatus -eq "running") {
-        Write-Log "Cloudflare Tunnel: Rodando" "INFO"
+    if ($CloudflaredProcess) {
+        Write-Log "Cloudflare Tunnel: Rodando (PID: $($CloudflaredProcess.Id))" "INFO"
     } else {
-        Write-Log "Cloudflare Tunnel: Não está rodando (status: $CloudflaredStatus)" "WARN"
-        Write-Log "Tentando reiniciar Cloudflare Tunnel..." "WARN"
-        docker compose -f $ComposeFile --env-file $EnvFile restart cloudflared 2>&1 | Out-Null
-        Start-Sleep -Seconds 10
-        Write-Log "Cloudflare Tunnel reiniciado" "INFO"
+        Write-Log "Cloudflare Tunnel: Não está rodando" "WARN"
+        Write-Log "AÇÃO NECESSÁRIA: Iniciar cloudflared manualmente ou via start-tunnel.ps1" "WARN"
     }
 } catch {
     Write-Log "Erro ao verificar Cloudflare Tunnel: $_" "WARN"

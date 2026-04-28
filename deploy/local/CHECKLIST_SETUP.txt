@@ -1,0 +1,177 @@
+════════════════════════════════════════════════════════════════════════════════
+SHOPEE BOOSTER BOT - CHECKLIST DE SETUP
+════════════════════════════════════════════════════════════════════════════════
+
+📋 FASE 1: PREPARAÇÃO
+────────────────────────────────────────────────────────────────────────────────
+
+[ ] 1. Navegar para pasta do projeto
+    cd "C:\Users\Defal\Documents\Faculdade\Projeto Shopee"
+
+[ ] 2. Gerar chaves
+    .\deploy\local\generate-keys.ps1
+    
+    Copiar as 3 chaves geradas:
+    [ ] EVOLUTION_API_KEY
+    [ ] POSTGRES_PASSWORD
+    [ ] BOT_SECRET_KEY
+
+[ ] 3. Editar .env.local
+    notepad .env.local
+    
+    Preencher:
+    [ ] EVOLUTION_API_KEY=...
+    [ ] POSTGRES_PASSWORD=...
+    [ ] BOT_SECRET_KEY=...
+    [ ] WHATSAPP_INSTANCE=shopee_booster
+    [ ] ALLOW_GLOBAL_GEMINI_FALLBACK=false
+
+
+════════════════════════════════════════════════════════════════════════════════
+🌐 FASE 2: CLOUDFLARE TUNNEL
+────────────────────────────────────────────────────────────────────────────────
+
+Escolha UMA opção:
+
+[ ] OPÇÃO A: Domínio na Cloudflare
+    
+    1. Acessar: https://one.dash.cloudflare.com/
+    2. Zero Trust > Networks > Tunnels > Create tunnel
+    3. Nome: shopee-booster-bot
+    4. Copiar CLOUDFLARE_TUNNEL_TOKEN
+    5. Public Hostname:
+       - Subdomain: bot
+       - Domain: seudominio.com
+       - Service: http://host.docker.internal:8787
+    
+    6. Adicionar no .env.local:
+       [ ] CLOUDFLARE_TUNNEL_TOKEN=...
+       [ ] SHOPEE_API_PUBLIC_URL=https://bot.seudominio.com
+
+[ ] OPÇÃO B: Tunnel Temporário (sem domínio)
+    
+    1. Abrir PowerShell separado
+    2. Executar: cloudflared tunnel --url http://localhost:8787
+    3. Copiar URL gerada (https://....trycloudflare.com)
+    4. Adicionar no .env.local:
+       [ ] SHOPEE_API_PUBLIC_URL=https://....trycloudflare.com
+    
+    ⚠️  NÃO adicionar CLOUDFLARE_TUNNEL_TOKEN
+    ⚠️  Deixar PowerShell com cloudflared rodando
+
+
+════════════════════════════════════════════════════════════════════════════════
+✅ FASE 3: VERIFICAÇÃO
+────────────────────────────────────────────────────────────────────────────────
+
+[ ] 1. Verificar configuração
+    .\deploy\local\check-config.ps1
+    
+    Resultado: ________________
+
+[ ] 2. Verificar Docker
+    docker info
+    
+    Docker rodando? [ ] Sim [ ] Não
+
+
+════════════════════════════════════════════════════════════════════════════════
+🚀 FASE 4: INICIALIZAÇÃO
+────────────────────────────────────────────────────────────────────────────────
+
+[ ] 1. Iniciar bot
+    .\deploy\local\start-bot.ps1
+    
+    Resultado: ________________
+
+[ ] 2. Verificar status
+    .\deploy\local\status-bot.ps1
+    
+    Resultado: ________________
+
+[ ] 3. Testar health check
+    curl http://localhost:8787/health
+    
+    Resposta: ________________
+
+
+════════════════════════════════════════════════════════════════════════════════
+🔗 FASE 5: WEBHOOK E WHATSAPP
+────────────────────────────────────────────────────────────────────────────────
+
+[ ] 1. Configurar webhook
+    Invoke-RestMethod -Uri "http://localhost:8787/evolution/setup-webhook" -Method POST
+    
+    Resultado: ________________
+
+[ ] 2. Abrir Evolution
+    http://localhost:8080
+    
+    Abriu? [ ] Sim [ ] Não
+
+[ ] 3. Conectar WhatsApp
+    - Procurar instância: shopee_booster
+    - Escanear QR Code
+    
+    Conectou? [ ] Sim [ ] Não
+
+[ ] 4. Testar bot
+    Enviar no WhatsApp: /menu
+    
+    Respondeu? [ ] Sim [ ] Não
+
+
+════════════════════════════════════════════════════════════════════════════════
+🎯 FASE 6: TESTES COMPLETOS
+────────────────────────────────────────────────────────────────────────────────
+
+Testar comandos no WhatsApp:
+
+[ ] /menu → Respondeu?
+[ ] /status → Respondeu?
+[ ] /loja → Respondeu?
+[ ] /catalogo → Respondeu?
+[ ] /ia → Respondeu?
+[ ] /telegram → Respondeu?
+[ ] /sentinela status → Respondeu?
+
+
+════════════════════════════════════════════════════════════════════════════════
+⚙️ FASE 7: AUTO-START (OPCIONAL - SÓ DEPOIS QUE TUDO FUNCIONAR)
+────────────────────────────────────────────────────────────────────────────────
+
+⚠️  NÃO EXECUTAR AINDA! Só depois que tudo funcionar manualmente.
+
+[ ] 1. Instalar inicialização automática (como Administrador)
+    .\deploy\local\install-startup-task.ps1
+
+[ ] 2. Instalar watchdog (como Administrador)
+    .\deploy\local\install-watchdog-task.ps1
+
+[ ] 3. Verificar tarefas instaladas
+    Get-ScheduledTask | Where-Object { $_.TaskName -like "*ShopeeBooster*" }
+
+
+════════════════════════════════════════════════════════════════════════════════
+📊 RESUMO FINAL
+────────────────────────────────────────────────────────════════════════════════
+
+Status Geral:
+
+[ ] Chaves geradas
+[ ] .env.local configurado
+[ ] Cloudflare Tunnel configurado
+[ ] Docker rodando
+[ ] Containers iniciados
+[ ] Health check OK
+[ ] Webhook configurado
+[ ] WhatsApp conectado
+[ ] Bot respondendo
+
+Tudo funcionando? [ ] Sim [ ] Não
+
+Se SIM: Pode instalar auto-start (Fase 7)
+Se NÃO: Reportar erros para o Agente
+
+
+════════════════════════════════════════════════════════════════════════════════

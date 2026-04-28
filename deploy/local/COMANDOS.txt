@@ -1,0 +1,128 @@
+════════════════════════════════════════════════════════════════════════════════
+SHOPEE BOOSTER BOT - COMANDOS RÁPIDOS
+════════════════════════════════════════════════════════════════════════════════
+
+📋 SETUP INICIAL (Executar uma vez)
+────────────────────────────────────────────────────────────────────────────────
+
+1. Gerar chaves:
+   .\deploy\local\generate-keys.ps1
+
+2. Editar .env.local:
+   notepad .env.local
+
+3. Verificar configuração:
+   .\deploy\local\check-config.ps1
+
+4. Iniciar bot:
+   .\deploy\local\start-bot.ps1
+
+5. Conectar WhatsApp:
+   - Abra: http://localhost:8080
+   - Ou veja logs: docker compose -f docker-compose.local.yml --env-file .env.local logs -f evolution_api
+
+6. Testar no WhatsApp:
+   /menu
+
+
+════════════════════════════════════════════════════════════════════════════════
+🚀 USO DIÁRIO
+════════════════════════════════════════════════════════════════════════════════
+
+Ligar bot:
+.\deploy\local\start-bot.ps1
+
+Desligar bot:
+.\deploy\local\stop-bot.ps1
+
+Ver status:
+.\deploy\local\status-bot.ps1
+
+Ver logs:
+docker compose -f docker-compose.local.yml --env-file .env.local logs -f
+
+
+════════════════════════════════════════════════════════════════════════════════
+🔧 COMANDOS ÚTEIS
+════════════════════════════════════════════════════════════════════════════════
+
+Health check:
+curl http://localhost:8787/health
+
+Status da instância WhatsApp:
+Invoke-RestMethod -Uri "http://localhost:8787/evolution/instance-status" -Method Get
+
+Reconfigurar webhook:
+Invoke-RestMethod -Uri "http://localhost:8787/evolution/setup-webhook" -Method POST -Body '{"user_id":"admin","shop_uid":"setup"}' -ContentType "application/json"
+
+Ver QR Code:
+Invoke-RestMethod -Uri "http://localhost:8787/evolution/qrcode" -Method Get
+
+Ver containers:
+docker compose -f docker-compose.local.yml --env-file .env.local ps
+
+Ver logs específicos:
+docker compose -f docker-compose.local.yml --env-file .env.local logs -f shopee_api
+docker compose -f docker-compose.local.yml --env-file .env.local logs -f evolution_api
+docker compose -f docker-compose.local.yml --env-file .env.local logs -f cloudflared
+
+Reiniciar serviço específico:
+docker compose -f docker-compose.local.yml --env-file .env.local restart shopee_api
+docker compose -f docker-compose.local.yml --env-file .env.local restart evolution_api
+
+Rebuild completo:
+docker compose -f docker-compose.local.yml --env-file .env.local up -d --build --force-recreate
+
+
+════════════════════════════════════════════════════════════════════════════════
+⚙️ AUTO-START (Opcional - Executar como Administrador)
+════════════════════════════════════════════════════════════════════════════════
+
+Instalar inicialização automática:
+.\deploy\local\install-startup-task.ps1
+
+Instalar watchdog (monitora a cada 5 min):
+.\deploy\local\install-watchdog-task.ps1
+
+Ver tarefas instaladas:
+Get-ScheduledTask | Where-Object { $_.TaskName -like "*ShopeeBooster*" }
+
+Executar tarefa manualmente:
+Start-ScheduledTask -TaskName "ShopeeBooster Bot - Startup"
+Start-ScheduledTask -TaskName "ShopeeBooster Bot - Watchdog"
+
+Desinstalar tarefas:
+Unregister-ScheduledTask -TaskName "ShopeeBooster Bot - Startup" -Confirm:$false
+Unregister-ScheduledTask -TaskName "ShopeeBooster Bot - Watchdog" -Confirm:$false
+
+
+════════════════════════════════════════════════════════════════════════════════
+🔍 TROUBLESHOOTING
+════════════════════════════════════════════════════════════════════════════════
+
+Docker não está rodando:
+Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+Start-Sleep -Seconds 60
+docker info
+
+Limpar tudo e recomeçar:
+docker compose -f docker-compose.local.yml --env-file .env.local down -v
+.\deploy\local\start-bot.ps1
+
+Ver uso de recursos:
+docker stats
+
+Ver espaço em disco:
+Get-PSDrive C
+
+
+════════════════════════════════════════════════════════════════════════════════
+📚 DOCUMENTAÇÃO
+════════════════════════════════════════════════════════════════════════════════
+
+Guia rápido:        INICIAR_BOT_LOCAL.md
+Setup detalhado:    deploy/local/SETUP_RAPIDO.md
+README completo:    deploy/local/README.md
+
+
+════════════════════════════════════════════════════════════════════════════════

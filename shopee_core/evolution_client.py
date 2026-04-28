@@ -69,17 +69,77 @@ def _instance() -> str:
 # UTILITÁRIOS PÚBLICOS
 # ══════════════════════════════════════════════════════════════════
 
+def resolve_lid_to_jid(jid: str) -> str:
+    """
+    Resolve LID (Local Identifier) para JID (WhatsApp ID) real.
+    
+    Fontes de mapeamento (em ordem de prioridade):
+    1. data/lid_map.json
+    2. EVOLUTION_LID_MAP no .env
+    3. Se não encontrar, retorna None para evitar envio para número fake
+    """
+    if not jid or not jid.endswith("@lid"):
+        return jid
+    
+    import json
+    import os
+    
+    # 1. Tentar data/lid_map.json
+    lid_map_file = "data/lid_map.json"
+    if os.path.exists(lid_map_file):
+        try:
+            with open(lid_map_file, 'r', encoding='utf-8') as f:
+                lid_map = json.load(f)
+                if jid in lid_map:
+                    resolved = lid_map[jid]
+                    log.info(f"[LID] Mapeado via arquivo: {jid} → {resolved}")
+                    return resolved
+        except Exception as e:
+            log.warning(f"[LID] Erro ao ler {lid_map_file}: {e}")
+    
+    # 2. Tentar EVOLUTION_LID_MAP no .env
+    try:
+        cfg = load_app_config()
+        lid_map_env = cfg.get("evolution_lid_map", "")
+        if lid_map_env:
+            # Formato: "220035536678945@lid=5511988600050@s.whatsapp.net"
+            for mapping in lid_map_env.split(","):
+                if "=" in mapping:
+                    lid, real_jid = mapping.strip().split("=", 1)
+                    if lid == jid:
+                        log.info(f"[LID] Mapeado via env: {jid} → {real_jid}")
+                        return real_jid
+    except Exception as e:
+        log.warning(f"[LID] Erro ao ler EVOLUTION_LID_MAP: {e}")
+    
+    # 3. Se não encontrar mapeamento, logar erro e retornar None
+    log.error(f"[LID] ERRO: Não foi encontrado mapeamento para {jid}. "
+              f"Adicione no data/lid_map.json ou EVOLUTION_LID_MAP no .env.local")
+    return None
+
+
 def normalize_whatsapp_number(user_id: str) -> str:
     """
     Converte JID do WhatsApp em número puro (apenas dígitos).
+    Inclui resolução automática de LID → JID.
 
     Exemplos:
         "5511999999999@s.whatsapp.net" → "5511999999999"
+        "220035536678945@lid"          → "5511988600050" (via mapeamento)
         "5511999999999"                → "5511999999999"
         "+55 (11) 99999-9999"          → "5511999999999"
     """
     if not user_id:
         return ""
+    
+    # Resolver LID para JID real se necessário
+    resolved_jid = resolve_lid_to_jid(user_id)
+    if resolved_jid is None:
+        # LID sem mapeamento - não tentar enviar
+        return ""
+    
+    user_id = resolved_jid
+    
     # Remove sufixo JID (@s.whatsapp.net, @g.us etc.)
     number = user_id.split("@")[0]
     # Alguns IDs vêm como "5511...:63@s.whatsapp.net" (device/agent suffix).
@@ -251,25 +311,20 @@ def send_media(
 def set_webhook(webhook_url: str, events: list[str] | None = None) -> dict:
     """
     Configura o webhook da instância para receber eventos do WhatsApp.
-
-    Args:
-        webhook_url — URL pública que a Evolution API vai chamar
-                      Ex: "http://host.docker.internal:8787/webhook/evolution"
-        events      — Lista de eventos a receber (padrão: MESSAGES_UPSERT)
-
-    Returns dict com ok, status_code, data.
+    Compatível com Evolution API v1.x (formato com wrapper "webhook").
     """
     if events is None:
-        events = ["MESSAGES_UPSERT"]
+        events = ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "SEND_MESSAGE"]
 
     url = f"{_base_url()}/webhook/set/{_instance()}"
+
     payload = {
         "webhook": {
             "enabled": True,
             "url": webhook_url,
             "events": events,
             "webhookByEvents": False,
-            "webhookBase64": True,  # campo correto da Evolution API v2 para enviar mídia em base64
+            "webhookBase64": True,
         }
     }
 
@@ -282,20 +337,20 @@ def set_webhook(webhook_url: str, events: list[str] | None = None) -> dict:
             headers=_headers(),
             timeout=30,
         )
-        log.info(f"[EVO] set_webhook status={r.status_code} ok={r.ok}")
+
+        log.info(f"[EVO] set_webhook status={r.status_code} ok={r.ok} body={r.text[:500]}")
+
         return {
             "ok": r.ok,
             "status_code": r.status_code,
             "data": r.json() if r.content else {},
             "raw": r.text[:500] if not r.ok else "",
         }
+
     except requests.exceptions.ConnectionError:
         return {
             "ok": False,
-            "error": (
-                "Não foi possível conectar à Evolution API. "
-                "Verifique se o Docker está rodando."
-            ),
+            "error": "Não foi possível conectar à Evolution API. Verifique se o Docker está rodando.",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
