@@ -36,6 +36,9 @@ data/radar_assets_test_*.db-wal
 data/radar_relevance_test_*.db
 data/radar_relevance_test_*.db-shm
 data/radar_relevance_test_*.db-wal
+data/radar_patterns_test_*.db
+data/radar_patterns_test_*.db-shm
+data/radar_patterns_test_*.db-wal
 data/radar_r3_*_smoke.db
 data/radar_r3_*_smoke.db-shm
 data/radar_r3_*_smoke.db-wal
