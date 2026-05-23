@@ -124,11 +124,40 @@ python scripts/radar_collect_url.py "https://shopee.com.br/Mochila-Notebook-Gran
 python scripts/radar_inspect_db.py
 ```
 
+## Resultado da Tentativa de Login Manual
+
+O usuario tentou login manual no perfil persistente com:
+
+- Chromium padrao do Playwright;
+- Chrome instalado com `--browser-channel chrome`;
+- Microsoft Edge instalado com `--browser-channel msedge`;
+- fluxo por telefone.
+
+Resultados reportados:
+
+```text
+Nao foi possivel fazer o login
+Esse navegador ou app pode nao ser seguro.
+Tente usar outro navegador.
+```
+
+No fluxo por telefone:
+
+```text
+Erro de Carregamento
+Desculpe, estamos enfrentando alguns problemas ao carregar, por favor, tente novamente.
+```
+
+Interpretacao:
+
+A Shopee/login associado esta bloqueando ou quebrando o fluxo dentro do navegador controlado,
+mesmo quando o canal usa Chrome ou Edge instalados. O Radar nao deve tentar burlar esse
+bloqueio.
+
 ## Status Nesta Sessao
 
-O codigo da R2.2 foi preparado e testado, mas a validacao autenticada completa da Shopee
-nao foi concluida nesta sessao porque exige login/verificacao manual com credenciais do
-usuario.
+O codigo da R2.2 foi preparado e testado. A validacao autenticada completa da Shopee foi
+tentada manualmente, mas continuou bloqueada pelo provedor.
 
 Validacao tecnica executada:
 
@@ -139,11 +168,13 @@ python scripts/radar_open_browser_profile.py --marketplace shopee --auto-close-s
 Resultado: o Chromium abriu usando `data/browser_profile/` e fechou automaticamente apos o
 tempo configurado.
 
-Resultado conhecido ate agora, herdado da R2.1:
+Resultado conhecido:
 
 - o perfil persistente existe e e usado pelo coletor;
 - a Shopee abre em navegador visivel;
-- sem login/verificacao concluido, a Shopee retorna pagina de bloqueio/login;
+- Chrome e Edge instalados tambem recebem bloqueio de login nesse fluxo;
+- o fluxo por telefone retorna erro de carregamento;
+- sem login/verificacao concluido, a Shopee retorna pagina de bloqueio/login ou erro;
 - o coletor salva a tentativa em `radar.db` sem tentar bypass;
 - Mercado Livre ja foi aprovado com coleta real completa.
 
@@ -164,13 +195,14 @@ Desejaveis:
 - `image_urls`
 - registros em `radar_assets`
 
-## Conclusao Provisoria
+## Conclusao
 
-Conclusao atual: **C) Shopee ainda bloqueado no perfil atual sem login manual concluido.**
+Conclusao atual: **C) Shopee ainda bloqueado mesmo com tentativa de perfil persistente logado.**
 
-Proxima acao necessaria:
+Decisao recomendada:
 
-Executar o procedimento acima com login manual no navegador persistente. Se, depois do login,
-o produto retornar titulo/preco/imagens, a conclusao muda para **A) Shopee aprovado com perfil
-logado**. Se apenas parte dos campos vier preenchida, a conclusao muda para **B) Shopee
-parcialmente aprovado**.
+- R3 pode seguir primeiro para Mercado Livre, que ja passou no smoke real.
+- Shopee deve ficar marcada como modo assistido limitado/manual.
+- Antes de insistir em Shopee, testar um fluxo fora do Playwright, como usuario abrir a pagina
+  no navegador normal e o Radar receber HTML/arquivo/exportacao manual em uma fase propria.
+- Nao implementar bypass, stealth agressivo ou automacao de login.

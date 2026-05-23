@@ -468,6 +468,8 @@ def _needs_manual_intervention(page) -> bool:
         "entre na sua conta",
         "por seguranca",
         "complete esta etapa",
+        "erro de carregamento",
+        "problemas ao carregar",
         "access denied",
         "verify you are human",
     ]
@@ -716,6 +718,8 @@ def _looks_like_intervention_title(title: str | None) -> bool:
         for pattern in [
             "por seguranca",
             "complete esta etapa",
+            "erro de carregamento",
+            "problemas ao carregar",
             "fazer login",
             "captcha",
             "verificacao",
