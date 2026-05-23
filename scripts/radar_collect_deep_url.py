@@ -92,6 +92,12 @@ def main() -> int:
                 "Coleta bloqueada ou incompleta. Resolva login/verificacao "
                 "manualmente e tente novamente."
             )
+        quality = data.get("quality") if isinstance(data.get("quality"), dict) else None
+        if quality and not quality.get("ok"):
+            raise RuntimeError(
+                "Coleta de baixa qualidade: "
+                + "; ".join(str(error) for error in (quality.get("errors") or [])[:4])
+            )
         created = add_product_url(
             args.url,
             source_type=args.source_type,

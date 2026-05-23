@@ -16,7 +16,8 @@ from datetime import datetime
 from typing import Any
 
 from .radar_db import get_connection, init_db
-from .radar_service import classify_product, get_product, list_products
+from .radar_collector import validate_product_extraction
+from .radar_service import classify_product, get_product, list_product_assets, list_products
 
 
 MATCH_VERDICTS = {"competitor_direct", "competitor_partial", "rejected"}
@@ -270,6 +271,29 @@ def classify_candidate(own_product_uid: str, candidate_product_uid: str) -> dict
     if not candidate_product:
         raise ValueError(f"Candidato nao encontrado: {candidate_product_uid}")
 
+    quality = _product_quality(candidate_product)
+    if not quality.get("ok"):
+        comparison = _low_quality_comparison(candidate_product, quality)
+        match = _upsert_match(
+            own_product_uid=own_product_uid,
+            candidate_product_uid=candidate_product_uid,
+            comparison=comparison,
+        )
+        updated_candidate = classify_product(
+            candidate_product_uid,
+            "rejected",
+            comparison["score"],
+            rejection_reason="; ".join(comparison["reasons"][:4]),
+        )
+        return {
+            "match": match,
+            "own_product": own_product,
+            "candidate_product": updated_candidate,
+            "own_profile": build_product_profile(own_product),
+            "candidate_profile": build_product_profile(candidate_product),
+            **comparison,
+        }
+
     own_profile = build_product_profile(own_product)
     candidate_profile = build_product_profile(candidate_product)
     comparison = compare_product_profiles(own_profile, candidate_profile)
@@ -371,6 +395,52 @@ def get_matches_for_product(
         item["signals"] = _load_json_dict(item.get("signals_json"))
         matches.append(item)
     return matches
+
+
+def _product_quality(product: dict) -> dict:
+    raw = _load_raw_json(product.get("raw_json"))
+    data = dict(raw)
+    data.setdefault("url", product.get("url"))
+    data.setdefault("canonical_url", product.get("canonical_url"))
+    data.setdefault("marketplace", product.get("marketplace"))
+    data.setdefault("title", product.get("title"))
+    data.setdefault("price", product.get("price"))
+    data.setdefault("shop_name", product.get("shop_name"))
+    data.setdefault("image_urls", _coerce_list(raw.get("image_urls")))
+    data.setdefault("description_image_urls", _coerce_list(raw.get("description_image_urls")))
+    quality = validate_product_extraction(data, product.get("marketplace") or "")
+    asset_count = len(list_product_assets(product["product_uid"]))
+    if asset_count > 80:
+        quality = dict(quality)
+        quality["errors"] = list(quality.get("errors") or [])
+        quality["errors"].append(f"Assets demais registrados para um produto: {asset_count}.")
+        quality["ok"] = False
+        quality["quality_score"] = min(float(quality.get("quality_score") or 0), 0.5)
+    return quality
+
+
+def _low_quality_comparison(candidate_product: dict, quality: dict) -> dict:
+    errors = quality.get("errors") or ["extracao de baixa qualidade"]
+    warnings = quality.get("warnings") or []
+    reasons = ["Extracao de baixa qualidade: " + "; ".join(str(item) for item in errors[:4])]
+    if warnings:
+        reasons.append("Avisos de qualidade: " + "; ".join(str(item) for item in warnings[:3]))
+
+    return {
+        "score": 0.0,
+        "verdict": "rejected",
+        "confidence": "high",
+        "reasons": reasons,
+        "signals": {
+            "quality": quality,
+            "candidate": {
+                "title": candidate_product.get("title"),
+                "price": candidate_product.get("price"),
+            },
+            "points": 0.0,
+            "penalties": 100.0,
+        },
+    }
 
 
 def _upsert_match(

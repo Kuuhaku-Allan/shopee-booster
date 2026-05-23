@@ -33,6 +33,19 @@ from .radar_service import (
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 BROWSER_PROFILE_DIR = BASE_DIR / "data" / "browser_profile"
+MAX_PRODUCT_IMAGE_URLS = 20
+MAX_WARNING_IMAGE_URLS = 30
+MAX_ERROR_IMAGE_URLS = 80
+GENERIC_PRODUCT_TITLES = {
+    "mochilas",
+    "mochila",
+    "produtos",
+    "produto",
+    "mercado livre",
+    "resultado de busca",
+    "resultados de busca",
+    "ofertas",
+}
 
 
 def parse_price(text: str) -> float | None:
@@ -95,6 +108,108 @@ def normalize_image_urls(urls: list[str]) -> list[str]:
         normalized.append(clean_url)
 
     return normalized
+
+
+def filter_product_image_urls(image_urls: list[str]) -> list[str]:
+    """Keep likely product images, deduplicate them and cap noisy captures."""
+    filtered = []
+    seen_keys = set()
+
+    for url in normalize_image_urls(image_urls or []):
+        lowered = url.lower()
+        if _looks_like_layout_image_url(lowered):
+            continue
+
+        image_key = _product_image_key(url) or url.rstrip("/")
+        if image_key in seen_keys:
+            continue
+
+        seen_keys.add(image_key)
+        filtered.append(url)
+        if len(filtered) >= MAX_PRODUCT_IMAGE_URLS:
+            break
+
+    return filtered
+
+
+def is_plausible_price(price: float | None, category_hint: str | None = None) -> bool:
+    """Return True when a price looks usable for pattern analysis."""
+    value = _coerce_float(price)
+    if value is None:
+        return False
+
+    hint = _normalize_text(category_hint or "")
+    if hint == "mochila" or "mochila" in hint:
+        return 20 <= value <= 1500
+
+    return 10 <= value <= 5000
+
+
+def validate_product_extraction(data: dict, expected_marketplace: str) -> dict:
+    """Validate whether extracted data looks like a real product page."""
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    if not isinstance(data, dict):
+        return {
+            "ok": False,
+            "quality_score": 0.0,
+            "warnings": [],
+            "errors": ["Dados coletados nao sao um dict."],
+        }
+
+    marketplace = data.get("marketplace")
+    if expected_marketplace and marketplace != expected_marketplace:
+        errors.append(
+            f"Marketplace inesperado: {marketplace or 'vazio'}; esperado {expected_marketplace}."
+        )
+
+    if is_collection_blocked_or_empty(data):
+        errors.append("Pagina parece login/verificacao, bloqueio ou coleta vazia.")
+
+    title = data.get("title")
+    if not _clean_text(title):
+        errors.append("Titulo vazio.")
+    elif _is_generic_product_title(title):
+        errors.append(f"Titulo generico demais: {title}.")
+
+    canonical_url = data.get("canonical_url") or data.get("url")
+    if not _looks_like_product_url(canonical_url, expected_marketplace or marketplace):
+        errors.append("URL canonica nao parece pagina individual de produto.")
+
+    category_hint = _category_hint_from_data(data)
+    price = _coerce_float(data.get("price"))
+    if not is_plausible_price(price, category_hint=category_hint):
+        errors.append(
+            f"Preco suspeito para {category_hint or 'marketplace'}: {price}."
+        )
+
+    image_count = len(data.get("image_urls") or [])
+    description_image_count = len(data.get("description_image_urls") or [])
+    total_image_count = image_count + description_image_count
+    if image_count > MAX_WARNING_IMAGE_URLS:
+        warnings.append(f"Imagens principais demais: {image_count}.")
+    if total_image_count > MAX_ERROR_IMAGE_URLS:
+        errors.append(f"Assets/imagens demais para um produto: {total_image_count}.")
+
+    quality_score = 1.0
+    quality_score -= min(0.75, len(errors) * 0.25)
+    quality_score -= min(0.25, len(warnings) * 0.05)
+    quality_score = round(max(0.0, quality_score), 4)
+
+    return {
+        "ok": not errors,
+        "quality_score": quality_score,
+        "warnings": warnings,
+        "errors": errors,
+    }
+
+
+def _quality_error_message(quality: dict) -> str:
+    errors = quality.get("errors") or []
+    if not errors:
+        return "Coleta de baixa qualidade."
+    return "Coleta de baixa qualidade: " + "; ".join(str(error) for error in errors[:4])
 
 
 def collect_product_page(
@@ -168,6 +283,7 @@ def collect_product_page(
                 data = collect_shopee_product(page, canonical_url)
             else:
                 data = collect_mercadolivre_product(page, canonical_url)
+            data = _finalize_collected_data(data, detected_marketplace)
 
             if (interactive or browser_mode == "cdp") and _needs_interactive_retry(data):
                 _wait_for_manual_confirmation(
@@ -182,6 +298,7 @@ def collect_product_page(
                     data = collect_shopee_product(page, canonical_url)
                 else:
                     data = collect_mercadolivre_product(page, canonical_url)
+                data = _finalize_collected_data(data, detected_marketplace)
 
             return data
         finally:
@@ -277,12 +394,19 @@ def collect_mercadolivre_product(page, url: str) -> dict:
     """Collect deep Mercado Livre product data from an already loaded page."""
     body_text = _body_text(page)
     page_title = _page_title(page)
-    title = (
-        _first_text(page, ["h1.ui-pdp-title", "h1", "[data-testid='title']"])
-        or _first_meta(page, ["meta[property='og:title']", "meta[name='title']"])
+    json_ld_product = _extract_json_ld_product(page)
+    title = _best_product_title(
+        [
+            _first_text(page, ["h1.ui-pdp-title", "[data-testid='title']"]),
+            json_ld_product.get("name"),
+            _first_meta(page, ["meta[property='og:title']", "meta[name='title']"]),
+            _first_text(page, ["h1"]),
+            page_title.split("|")[0].strip() if page_title else None,
+        ]
     )
     if _looks_like_intervention_title(title) and page_title:
         title = page_title.split("|")[0].strip()
+    json_ld_price = _coerce_float(json_ld_product.get("price"))
     price_text = (
         _first_meta(page, ["meta[itemprop='price']", "meta[property='product:price:amount']"])
         or _first_text(
@@ -296,6 +420,7 @@ def collect_mercadolivre_product(page, url: str) -> dict:
         )
         or _first_price_text(body_text)
     )
+    parsed_price = json_ld_price if json_ld_price is not None else parse_price(price_text or "")
     original_price_text = _first_text(
         page,
         [
@@ -334,12 +459,16 @@ def collect_mercadolivre_product(page, url: str) -> dict:
         ],
     )
     image_urls, video_urls = _collect_media_urls(page)
-    gallery_image_urls = _collect_mercadolivre_gallery_image_urls(page)
+    gallery_image_urls = (
+        _collect_mercadolivre_gallery_image_urls(page)
+        or json_ld_product.get("image_urls")
+        or []
+    )
     if gallery_image_urls:
-        image_urls = _normalize_mercadolivre_image_urls(gallery_image_urls)
+        image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(gallery_image_urls))
     else:
-        image_urls = _normalize_mercadolivre_image_urls(image_urls)
-    description_image_urls = _collect_description_image_urls(page)
+        image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(image_urls))
+    description_image_urls = filter_product_image_urls(_collect_description_image_urls(page))
     attributes = _extract_mercadolivre_attributes(page)
     category_path = _extract_category_path(page)
     variation_labels = _extract_variation_labels(page)
@@ -354,7 +483,7 @@ def collect_mercadolivre_product(page, url: str) -> dict:
         "original_price_text": original_price_text,
         "discount_text": discount_text,
         "title": _clean_text(title),
-        "price": parse_price(price_text or ""),
+        "price": parsed_price,
         "original_price": original_price,
         "discount_percent": discount_percent,
         "shop_name": _clean_text(shop_name),
@@ -365,9 +494,10 @@ def collect_mercadolivre_product(page, url: str) -> dict:
         "description": _clean_text(description),
         "attributes": attributes,
         "category_path": category_path,
-        "image_urls": normalize_image_urls(image_urls),
-        "description_image_urls": normalize_image_urls(description_image_urls),
+        "image_urls": filter_product_image_urls(image_urls),
+        "description_image_urls": filter_product_image_urls(description_image_urls),
         "variation_labels": variation_labels,
+        "json_ld_product": json_ld_product,
         "body_excerpt": body_text[:5000],
     }
 
@@ -375,7 +505,7 @@ def collect_mercadolivre_product(page, url: str) -> dict:
         url=url,
         marketplace="mercadolivre",
         title=title,
-        price=parse_price(price_text or ""),
+        price=parsed_price,
         shop_name=shop_name,
         rating=rating,
         review_count=review_count,
@@ -392,7 +522,7 @@ def collect_mercadolivre_product(page, url: str) -> dict:
             "seller_reputation": seller_reputation,
             "attributes": attributes,
             "category_path": category_path,
-            "description_image_urls": normalize_image_urls(description_image_urls),
+            "description_image_urls": filter_product_image_urls(description_image_urls),
             "variation_labels": variation_labels,
         }
     )
@@ -453,6 +583,9 @@ def collect_pending_jobs(
                     "Coleta bloqueada ou incompleta. Resolva login/verificacao "
                     "manualmente e tente novamente."
                 )
+            quality = data.get("quality") if isinstance(data.get("quality"), dict) else None
+            if quality and not quality.get("ok"):
+                raise RuntimeError(_quality_error_message(quality))
             product = mark_product_collected(product_uid, data)
             assets = _persist_collected_assets(
                 product_uid,
@@ -706,6 +839,10 @@ def _needs_manual_intervention(page) -> bool:
 def _needs_interactive_retry(data: dict) -> bool:
     title = data.get("title")
     marketplace = data.get("marketplace")
+    quality = data.get("quality") if isinstance(data.get("quality"), dict) else {}
+
+    if quality and not quality.get("ok"):
+        return True
 
     if not title or _looks_like_intervention_title(title):
         return True
@@ -753,6 +890,90 @@ def _result(
         "video_urls": normalize_image_urls(video_urls),
         "raw": raw,
     }
+
+
+def _finalize_collected_data(data: dict, expected_marketplace: str) -> dict:
+    if not isinstance(data, dict):
+        return data
+
+    if data.get("marketplace") == "mercadolivre":
+        data["image_urls"] = filter_product_image_urls(data.get("image_urls") or [])
+        data["description_image_urls"] = filter_product_image_urls(
+            data.get("description_image_urls") or []
+        )
+        raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
+        raw["image_urls"] = data["image_urls"]
+        raw["description_image_urls"] = data["description_image_urls"]
+        raw["price"] = data.get("price")
+        raw["title"] = data.get("title")
+        data["raw"] = raw
+
+    quality = validate_product_extraction(data, expected_marketplace)
+    data["quality"] = quality
+    raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
+    raw["quality"] = quality
+    data["raw"] = raw
+    return data
+
+
+def _best_product_title(candidates: list[str | None]) -> str | None:
+    fallback = None
+    for candidate in candidates:
+        clean = _clean_mercadolivre_title(candidate)
+        if not clean:
+            continue
+        if fallback is None:
+            fallback = clean
+        if not _is_generic_product_title(clean) and not _looks_like_intervention_title(clean):
+            return clean
+    return fallback
+
+
+def _clean_mercadolivre_title(title: str | None) -> str | None:
+    clean = _clean_text(title)
+    if not clean:
+        return None
+    clean = re.sub(r"\s*\|\s*Mercado\s*Livre.*$", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\s*\|\s*MercadoLivre.*$", "", clean, flags=re.IGNORECASE)
+    return _clean_text(clean)
+
+
+def _extract_json_ld_product(page) -> dict:
+    try:
+        data = page.evaluate(
+            """
+            () => {
+                const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+                const flatten = (value) => {
+                    if (!value) return [];
+                    if (Array.isArray(value)) return value.flatMap(flatten);
+                    if (value['@graph']) return flatten(value['@graph']);
+                    return [value];
+                };
+                for (const script of scripts) {
+                    try {
+                        const parsed = JSON.parse(script.textContent || '{}');
+                        for (const item of flatten(parsed)) {
+                            const type = item['@type'];
+                            const types = Array.isArray(type) ? type : [type];
+                            if (!types.map(String).some((entry) => entry.toLowerCase() === 'product')) continue;
+                            const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers || {};
+                            const images = Array.isArray(item.image) ? item.image : (item.image ? [item.image] : []);
+                            return {
+                                name: item.name || null,
+                                price: offers.price || offers.lowPrice || null,
+                                image_urls: images.filter(Boolean)
+                            };
+                        }
+                    } catch (_) {}
+                }
+                return {};
+            }
+            """
+        )
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _first_text(page, selectors: list[str]) -> str | None:
@@ -872,8 +1093,8 @@ def _collect_description_image_urls(page) -> list[str]:
         urls = page.evaluate(
             """
             () => {
-                const scope = document.querySelector('#description, .ui-pdp-description')
-                    || document.body;
+                const scope = document.querySelector('#description, .ui-pdp-description');
+                if (!scope) return [];
                 const absolutize = (value) => {
                     if (!value) return null;
                     try { return new URL(value.trim(), location.href).href; }
@@ -1145,6 +1366,108 @@ def _parse_count(text: str) -> int | None:
         return int(float(clean) * multiplier)
     except ValueError:
         return None
+
+
+def _looks_like_layout_image_url(lowered_url: str) -> bool:
+    blocked_fragments = [
+        ".svg",
+        "sprite",
+        "logo",
+        "icon",
+        "favicon",
+        "placeholder",
+        "transparent",
+        "frontend-assets",
+        "navigation",
+        "avatar",
+        "profile",
+        "banner",
+        "ads",
+        "advertis",
+        "negative_traffic",
+        "backgr_logo",
+    ]
+    if any(fragment in lowered_url for fragment in blocked_fragments):
+        return True
+
+    if "http2.mlstatic.com" in lowered_url:
+        return "d_nq_np" not in lowered_url and "-ml" not in lowered_url
+
+    return False
+
+
+def _product_image_key(url: str) -> str | None:
+    match = re.search(r"(\d+-ML[A-Z]\d+_\d+)", url, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).lower()
+    match = re.search(r"(D_NQ_NP[_-][^/?]+)", url, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).lower()
+    return None
+
+
+def _is_generic_product_title(title: str | None) -> bool:
+    normalized = _normalize_text(title or "")
+    if not normalized:
+        return True
+    if normalized in GENERIC_PRODUCT_TITLES:
+        return True
+    tokens = [token for token in normalized.split() if token]
+    return len(tokens) <= 1 and tokens[0] in {"mochila", "mochilas", "produto", "produtos"}
+
+
+def _looks_like_product_url(url: str | None, marketplace: str | None) -> bool:
+    if not url:
+        return False
+    normalized_url = str(url).strip().lower()
+    if any(fragment in normalized_url for fragment in ["/lista/", "/categorias/", "/ofertas", "/search"]):
+        return False
+
+    detected = detect_marketplace(normalized_url)
+    if marketplace and detected != marketplace:
+        return False
+    if detected == "mercadolivre":
+        return bool(re.search(r"/MLB-[a-z0-9]+", normalized_url, flags=re.IGNORECASE))
+    if detected == "shopee":
+        return "/i." in normalized_url or "/product/" in normalized_url or bool(
+            re.search(r"i\.\d+\.\d+", normalized_url)
+        )
+    return False
+
+
+def _category_hint_from_data(data: dict) -> str | None:
+    text_parts = [
+        data.get("title") or "",
+        data.get("description") or "",
+        " ".join(str(item) for item in data.get("category_path") or []),
+    ]
+    raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
+    text_parts.extend(
+        [
+            raw.get("title") or "",
+            raw.get("description") or "",
+            " ".join(str(item) for item in raw.get("category_path") or []),
+        ]
+    )
+    normalized = _normalize_text(" ".join(text_parts))
+    if "mochila" in normalized:
+        return "mochila"
+    return None
+
+
+def _coerce_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_text(text: str) -> str:
+    folded = unicodedata.normalize("NFKD", str(text or ""))
+    ascii_text = "".join(char for char in folded if not unicodedata.combining(char))
+    return re.sub(r"\s+", " ", ascii_text.lower()).strip()
 
 
 def _clean_text(text: str | None) -> str | None:

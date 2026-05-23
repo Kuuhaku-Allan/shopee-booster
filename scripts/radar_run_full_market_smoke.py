@@ -25,7 +25,11 @@ from shopee_core.radar_browser_service import (
     is_cdp_available,
     open_radar_browser_instructions,
 )
-from shopee_core.radar_collector import collect_product_page, is_collection_blocked_or_empty
+from shopee_core.radar_collector import (
+    collect_product_page,
+    is_collection_blocked_or_empty,
+    validate_product_extraction,
+)
 from shopee_core.radar_patterns_service import generate_pattern_report
 from shopee_core.radar_relevance_service import classify_candidate, get_matches_for_product
 from shopee_core.radar_service import (
@@ -60,6 +64,7 @@ def main() -> int:
     parser.add_argument("--urls-file", default=str(DEFAULT_URLS_PATH))
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--min-success", type=int, default=8)
+    parser.add_argument("--min-quality-ok", type=int, default=12)
     parser.add_argument("--min-direct", type=int, default=5)
     parser.add_argument("--min-report-direct", type=int, default=5)
     parser.add_argument(
@@ -166,6 +171,12 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    if summary["quality_ok"] < args.min_quality_ok:
+        print(
+            f"\nERRO: apenas {summary['quality_ok']} coletas com qualidade OK; minimo esperado {args.min_quality_ok}.",
+            file=sys.stderr,
+        )
+        return 1
     if summary["direct"] < args.min_direct:
         print(
             f"\nERRO: apenas {summary['direct']} concorrentes diretos; minimo esperado {args.min_direct}.",
@@ -195,6 +206,29 @@ def _check_cdp_or_fail(cdp_url: str) -> None:
     raise RuntimeError(
         "Chrome do Radar nao esta aberto. Rode deploy/local/start-radar-chrome.ps1 "
         "e faca login manual antes de usar --browser-mode cdp."
+    )
+
+
+def _ensure_quality(data: dict, product: dict) -> dict:
+    data = dict(data)
+    data.setdefault("url", product.get("url"))
+    data.setdefault("canonical_url", product.get("canonical_url"))
+    data.setdefault("marketplace", product.get("marketplace"))
+    data.setdefault("title", product.get("title"))
+    data.setdefault("price", product.get("price"))
+    quality = data.get("quality")
+    if not isinstance(quality, dict):
+        quality = validate_product_extraction(data, product.get("marketplace") or "mercadolivre")
+        data["quality"] = quality
+        raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
+        raw["quality"] = quality
+        data["raw"] = raw
+    return data
+
+
+def _quality_error_message(quality: dict) -> str:
+    return "Coleta de baixa qualidade: " + "; ".join(
+        str(error) for error in (quality.get("errors") or ["sem detalhe"])[:4]
     )
 
 
@@ -255,21 +289,30 @@ def _process_candidate_url(
 
     if product.get("raw_json") and product.get("status") == "collected" and not refresh:
         data = json.loads(product["raw_json"])
-        mark_product_collected(product_uid, data)
-        assets = _persist_assets(product_uid, data, save_assets=save_assets)
-        local_assets = [asset for asset in assets if asset.get("local_path")]
-        asset_errors = [asset for asset in assets if asset.get("error")]
-        print(f"[R5.1] Reaproveitado: {product.get('title')}", flush=True)
-        return {
-            "url": url,
-            "product_uid": product_uid,
-            "ok": True,
-            "reused": True,
-            "title": product.get("title"),
-            "assets_saved": len(assets),
-            "assets_downloaded": len(local_assets),
-            "asset_errors": len(asset_errors),
-        }
+        data = _ensure_quality(data, product)
+        if data["quality"].get("ok"):
+            mark_product_collected(product_uid, data)
+            assets = _persist_assets(product_uid, data, save_assets=save_assets)
+            local_assets = [asset for asset in assets if asset.get("local_path")]
+            asset_errors = [asset for asset in assets if asset.get("error")]
+            print(f"[R5.1] Reaproveitado: {product.get('title')}", flush=True)
+            return {
+                "url": url,
+                "product_uid": product_uid,
+                "ok": True,
+                "reused": True,
+                "title": product.get("title"),
+                "price": product.get("price"),
+                "quality": data["quality"],
+                "assets_saved": len(assets),
+                "assets_downloaded": len(local_assets),
+                "asset_errors": len(asset_errors),
+            }
+        print(
+            "[R5.1] Recoletando por baixa qualidade: "
+            + "; ".join(data["quality"].get("errors") or []),
+            flush=True,
+        )
 
     job = created.get("job")
     try:
@@ -282,6 +325,26 @@ def _process_candidate_url(
         )
         if is_collection_blocked_or_empty(data):
             raise RuntimeError("Coleta bloqueada ou incompleta")
+        quality = data.get("quality") or validate_product_extraction(data, "mercadolivre")
+        if not quality.get("ok"):
+            error = _quality_error_message(quality)
+            mark_product_failed(product_uid, error)
+            if job and job.get("job_uid"):
+                mark_job_failed(job["job_uid"], error)
+            print(f"[R5.1] Ignorado por baixa qualidade: {error}", flush=True)
+            return {
+                "url": url,
+                "product_uid": product_uid,
+                "ok": False,
+                "low_quality": True,
+                "quality": quality,
+                "error": error,
+                "title": data.get("title"),
+                "price": data.get("price"),
+                "assets_saved": 0,
+                "assets_downloaded": 0,
+                "asset_errors": 0,
+            }
 
         product = mark_product_collected(product_uid, data)
         assets = _persist_assets(product_uid, data, save_assets=save_assets)
@@ -301,6 +364,7 @@ def _process_candidate_url(
             "reused": False,
             "title": product.get("title"),
             "price": product.get("price"),
+            "quality": quality,
             "assets_saved": len(assets),
             "assets_downloaded": len(local_assets),
             "asset_errors": len(asset_errors),
@@ -364,6 +428,25 @@ def _build_summary(
     collected_success = sum(1 for item in collection_results if item.get("ok"))
     reused = sum(1 for item in collection_results if item.get("reused"))
     failures = [item for item in collection_results if not item.get("ok")]
+    quality_ok = sum(
+        1
+        for item in collection_results
+        if item.get("ok") and (item.get("quality") or {}).get("ok")
+    )
+    quality_warnings = sum(
+        1
+        for item in collection_results
+        if item.get("ok") and (item.get("quality") or {}).get("warnings")
+    )
+    ignored_low_quality = sum(1 for item in collection_results if item.get("low_quality"))
+    generic_title_count = _count_quality_problem(collection_results, "Titulo generico")
+    suspicious_price_count = _count_quality_problem(collection_results, "Preco suspeito")
+    too_many_assets_count = _count_quality_problem(collection_results, "Assets/imagens demais")
+    asset_counts = [
+        int(item.get("assets_saved") or 0)
+        for item in collection_results
+        if item.get("ok")
+    ]
     verdict_counts = {"competitor_direct": 0, "competitor_partial": 0, "rejected": 0}
     for item in classification_results:
         verdict = item.get("verdict")
@@ -375,6 +458,13 @@ def _build_summary(
         "own_product_uid": own["product_uid"],
         "total_urls": len(urls),
         "collected_success": collected_success,
+        "quality_ok": quality_ok,
+        "quality_warnings": quality_warnings,
+        "ignored_low_quality": ignored_low_quality,
+        "generic_title_count": generic_title_count,
+        "suspicious_price_count": suspicious_price_count,
+        "too_many_assets_count": too_many_assets_count,
+        "avg_assets_per_product": round(sum(asset_counts) / len(asset_counts), 2) if asset_counts else 0,
         "reused": reused,
         "failures": len(failures),
         "direct": verdict_counts["competitor_direct"],
@@ -404,11 +494,28 @@ def _average_score(results: list[dict]) -> float:
     return round(sum(scores) / len(scores), 4) if scores else 0.0
 
 
+def _count_quality_problem(collection_results: list[dict], needle: str) -> int:
+    total = 0
+    for item in collection_results:
+        quality = item.get("quality") or {}
+        messages = list(quality.get("errors") or []) + list(quality.get("warnings") or [])
+        if any(needle in str(message) for message in messages):
+            total += 1
+    return total
+
+
 def _print_summary(summary: dict, report: dict) -> None:
     print("\n===== R5.1 Smoke Mercado Livre =====")
     print(f"Produto proprio: {summary['own_product_uid']}")
     print(f"Total URLs recebidas: {summary['total_urls']}")
     print(f"Coletadas com sucesso: {summary['collected_success']} (reaproveitadas: {summary['reused']})")
+    print(f"Coletadas com qualidade OK: {summary['quality_ok']}")
+    print(f"Coletadas com warnings: {summary['quality_warnings']}")
+    print(f"Ignoradas por baixa qualidade: {summary['ignored_low_quality']}")
+    print(f"Assets medios por produto OK: {summary['avg_assets_per_product']}")
+    print(f"Titulos genericos: {summary['generic_title_count']}")
+    print(f"Precos suspeitos: {summary['suspicious_price_count']}")
+    print(f"Produtos com assets demais: {summary['too_many_assets_count']}")
     print(f"Falhas: {summary['failures']}")
     print(f"Diretos: {summary['direct']}")
     print(f"Parciais: {summary['partial']}")

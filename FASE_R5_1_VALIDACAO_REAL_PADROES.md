@@ -62,7 +62,9 @@ Mochila Infantil Princesa Rosa Escolar Feminina Grande
 
 ## Resultados
 
-Primeira tentativa com o navegador persistente Playwright:
+### Antes do Chrome real via CDP
+
+Tentativa com o navegador persistente Playwright:
 
 - URLs recebidas: 18
 - Coletadas com sucesso: 1
@@ -72,16 +74,71 @@ Primeira tentativa com o navegador persistente Playwright:
 
 Resultado observado: o Mercado Livre exibiu login/verificacao em grande parte das URLs. Isso invalida a conclusao estatistica da R5.1, porque a base coletada ficou pequena demais.
 
+### Antes do Data Quality Gate
+
+Tentativa com Chrome real dedicado via CDP:
+
+- URLs recebidas: 18
+- Coletadas com sucesso: 18
+- Falhas: 0
+
+O CDP resolveu o bloqueio operacional, mas o resultado ainda nao foi aprovado para R6 por problemas de qualidade:
+
+- Alguns produtos vieram com titulo generico `Mochilas`.
+- Alguns produtos tiveram assets demais, como `assets=171`.
+- O relatorio gerou preco minimo `R$ 3.00`, provavelmente parcela/frete/numero lateral.
+- A feature `notebook` apareceu forte demais para um recorte infantil/feminino.
+
 ## Ajustes feitos
 
 - A R5.1 nao foi considerada aprovada.
 - Foi criada a fase intermediaria R5.1A para usar um Chrome real dedicado via CDP.
-- O smoke deve ser repetido com:
+- Foi criada a R5.1B para adicionar Data Quality Gate antes de R6.
+
+### Correcoes R5.1B
+
+- `validate_product_extraction()` valida titulo, URL de produto, preco plausivel, excesso de imagens e bloqueio/login.
+- `filter_product_image_urls()` remove imagens de layout, deduplica e limita imagens principais a 20.
+- Precos de mochila abaixo de `R$ 20` ou acima de `R$ 1500` sao considerados suspeitos.
+- R4 rejeita candidatos com baixa qualidade em vez de classificar como `competitor_direct`.
+- R5 ignora concorrentes diretos antigos que tenham baixa qualidade.
+- `scripts/radar_quality_report.py` lista titulos genericos, precos suspeitos, assets demais e principais problemas.
+- O smoke R5.1 agora imprime qualidade OK, warnings, ignorados por baixa qualidade, media de assets, titulos genericos e precos suspeitos.
+
+## Como repetir depois do Data Quality Gate
+
+Com o Chrome do Radar aberto e logado:
 
 ```bash
 python scripts/radar_run_full_market_smoke.py --browser-mode cdp --manual-login-check
 ```
 
+Relatorio de qualidade:
+
+```bash
+python scripts/radar_quality_report.py
+```
+
+Resultado local apos implementar a R5.1B, antes de repetir o smoke completo:
+
+- O relatorio de qualidade passou a identificar produtos antigos com `Mochilas`, preco `R$ 3.00` e assets excessivos.
+- O relatorio R5 passou a avisar quando concorrentes diretos antigos sao ignorados por baixa qualidade.
+- A aprovacao da R5.1 ainda depende de uma nova rodada completa com `--browser-mode cdp`.
+
+Export Markdown:
+
+```bash
+python scripts/radar_export_market_smoke_report.py
+```
+
 ## Conclusao
 
-R5.1 segue pendente. A validacao real deve ser repetida depois que o usuario fizer login manual no Chrome dedicado do Radar.
+R5.1 segue pendente ate uma nova rodada com o Data Quality Gate.
+
+Criterios para aprovar R5.1 rumo a R6:
+
+- Pelo menos 12 produtos com `quality.ok = true`.
+- Nenhum produto com titulo `Mochilas` usado como concorrente direto.
+- Nenhum preco abaixo de `R$ 20` usado na analise de preco.
+- Nenhum produto com mais de 30 imagens principais.
+- Produtos executivos/notebook devem ser rejeitados ou ficar parciais baixos quando nao competirem com mochila infantil/feminina.

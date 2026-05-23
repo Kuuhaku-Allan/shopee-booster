@@ -17,6 +17,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
+from .radar_collector import is_plausible_price, validate_product_extraction
 from .radar_db import get_connection, init_db
 from .radar_relevance_service import get_matches_for_product
 from .radar_service import get_product, list_product_assets
@@ -87,6 +88,7 @@ DESCRIPTION_ARGUMENTS = {
 def get_direct_competitors_for_analysis(
     own_product_uid: str,
     include_partial: bool = False,
+    include_low_quality: bool = False,
 ) -> list[dict]:
     """Load matched direct competitors with raw data and assets."""
     verdicts = ["competitor_direct"]
@@ -127,6 +129,9 @@ def get_direct_competitors_for_analysis(
         product["assets"] = list_product_assets(product["product_uid"])
         product["match_reasons"] = _load_json_list(product.get("match_reasons_json"))
         product["match_signals"] = _load_json_dict(product.get("match_signals_json"))
+        product["quality"] = _product_quality(product, raw)
+        if not include_low_quality and not product["quality"].get("ok"):
+            continue
         products.append(product)
 
     return products
@@ -137,7 +142,8 @@ def analyze_price_patterns(products: list[dict]) -> dict:
     prices = [
         float(product["price"])
         for product in products
-        if _coerce_float(product.get("price")) is not None and float(product["price"]) > 0
+        if _coerce_float(product.get("price")) is not None
+        and is_plausible_price(_coerce_float(product.get("price")), _category_hint(product))
     ]
     if not prices:
         return {
@@ -445,12 +451,21 @@ def generate_pattern_report(
     if not own_product:
         raise ValueError(f"Produto proprio nao encontrado: {own_product_uid}")
 
-    competitors = get_direct_competitors_for_analysis(
+    all_competitors = get_direct_competitors_for_analysis(
         own_product_uid,
         include_partial=include_partial,
+        include_low_quality=True,
     )
-    direct_count = _count_matches(own_product_uid, "competitor_direct")
-    partial_count = _count_matches(own_product_uid, "competitor_partial")
+    competitors = [
+        product for product in all_competitors if product.get("quality", {}).get("ok")
+    ]
+    ignored_low_quality = len(all_competitors) - len(competitors)
+    direct_count = sum(
+        1 for product in competitors if product.get("match_verdict") == "competitor_direct"
+    )
+    partial_count = sum(
+        1 for product in competitors if product.get("match_verdict") == "competitor_partial"
+    )
 
     analyses = {
         "price": analyze_price_patterns(competitors),
@@ -464,6 +479,8 @@ def generate_pattern_report(
         warnings.append("Base pequena. Recomendacoes podem ser pouco confiaveis.")
     if direct_count < min_direct:
         warnings.append(f"Concorrentes diretos abaixo do minimo solicitado ({min_direct}).")
+    if ignored_low_quality:
+        warnings.append(f"{ignored_low_quality} produtos ignorados por baixa qualidade de extracao.")
     warnings.extend(analyses["images"].get("warnings") or [])
 
     confidence = "high"
@@ -479,6 +496,7 @@ def generate_pattern_report(
         "analyses": analyses,
         "confidence": confidence,
         "include_partial": include_partial,
+        "ignored_low_quality": ignored_low_quality,
     }
     report = {
         "report_uid": str(uuid.uuid4()),
@@ -498,6 +516,7 @@ def generate_pattern_report(
         "recommendations": recommendations,
         "raw": raw,
         "confidence": confidence,
+        "ignored_low_quality": ignored_low_quality,
     }
 
     if save:
@@ -578,7 +597,30 @@ def _decode_report_row(row: dict) -> dict:
     row["recommendations"] = _load_json_list(row.pop("recommendations_json", None))
     row["raw"] = _load_json_dict(row.pop("raw_json", None))
     row["confidence"] = row["raw"].get("confidence")
+    row["ignored_low_quality"] = row["raw"].get("ignored_low_quality", 0)
     return row
+
+
+def _product_quality(product: dict, raw: dict | None = None) -> dict:
+    raw = raw if raw is not None else _load_json_dict(product.get("raw_json"))
+    data = dict(raw)
+    data.setdefault("url", product.get("url"))
+    data.setdefault("canonical_url", product.get("canonical_url"))
+    data.setdefault("marketplace", product.get("marketplace"))
+    data.setdefault("title", product.get("title"))
+    data.setdefault("price", product.get("price"))
+    data.setdefault("shop_name", product.get("shop_name"))
+    data.setdefault("image_urls", _product_image_urls(raw))
+    data.setdefault("description_image_urls", raw.get("description_image_urls") or [])
+    quality = validate_product_extraction(data, product.get("marketplace") or "")
+    asset_count = len(product.get("assets") or [])
+    if asset_count > 80:
+        quality = dict(quality)
+        quality["errors"] = list(quality.get("errors") or [])
+        quality["errors"].append(f"Assets demais registrados para um produto: {asset_count}.")
+        quality["ok"] = False
+        quality["quality_score"] = min(float(quality.get("quality_score") or 0), 0.5)
+    return quality
 
 
 def _count_matches(own_product_uid: str, verdict: str) -> int:
@@ -662,6 +704,13 @@ def _product_full_text(product: dict) -> str:
         _attributes_text(product.get("attributes") or _product_attributes(raw)),
     ]
     return _normalize_text(" ".join(parts))
+
+
+def _category_hint(product: dict) -> str | None:
+    text = _product_full_text(product)
+    if "mochila" in text:
+        return "mochila"
+    return None
 
 
 def _attributes_text(attributes: dict) -> str:

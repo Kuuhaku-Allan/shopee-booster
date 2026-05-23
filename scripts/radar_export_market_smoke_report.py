@@ -90,6 +90,7 @@ def _render_markdown(own_product: dict, report: dict, matches: list[dict]) -> st
         f"- Concorrentes diretos: {len(direct)}",
         f"- Concorrentes parciais: {len(partial)}",
         f"- Rejeitados: {len(rejected)}",
+        f"- Ignorados por baixa qualidade no ultimo relatorio: {report.get('ignored_low_quality', 0)}",
         f"- Relatorio: `{report['report_uid']}`",
         "",
         "## Concorrentes Diretos",
