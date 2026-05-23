@@ -44,10 +44,12 @@ data/radar_r3_*_smoke.db-shm
 data/radar_r3_*_smoke.db-wal
 data/radar_assets/
 data/browser_profile/
+data/chrome_radar_profile/
 
 # Relatórios gerados (não commitar dados de produção)
 data/reports/*.png
 data/reports/*.csv
+data/reports/*.md
 
 # Catálogos importados (podem conter dados sensíveis)
 uploads/catalogs/*.csv

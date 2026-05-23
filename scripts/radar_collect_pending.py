@@ -41,6 +41,17 @@ def main() -> int:
         default=None,
         help="Usa Chromium padrao, Google Chrome ou Microsoft Edge instalado",
     )
+    parser.add_argument(
+        "--browser-mode",
+        choices=["persistent", "cdp"],
+        default="persistent",
+        help="persistent abre perfil Playwright; cdp conecta no Chrome real do Radar",
+    )
+    parser.add_argument(
+        "--cdp-url",
+        default="http://127.0.0.1:9222",
+        help="Endpoint CDP quando --browser-mode cdp",
+    )
     args = parser.parse_args()
 
     try:
@@ -48,6 +59,8 @@ def main() -> int:
             limit=args.limit,
             save_assets_to_disk=args.save_assets,
             browser_channel=args.browser_channel,
+            browser_mode=args.browser_mode,
+            cdp_url=args.cdp_url,
         )
         if args.deep:
             summary["mode"] = "deep"

@@ -1,0 +1,21 @@
+# R5.1 - URLs reais Mercado Livre para smoke de mochilas
+# Mistura proposital: concorrentes diretos/parciais e itens que devem ser rejeitados.
+
+https://produto.mercadolivre.com.br/MLB-3576237953-kit-mochila-infantil-feminina-rodinha-minnie-mouse-3d-rosa-_JM
+https://produto.mercadolivre.com.br/MLB-2807757623-mochila-de-rodinhas-infantil-luxcel-margarida-rosa-_JM
+https://produto.mercadolivre.com.br/MLB-5180192522-mochila-stitch-angel-escolar-rosa-infantil-juvenil-rodinhas-_JM
+https://produto.mercadolivre.com.br/MLB-5288120488-mochila-bolsa-infantil-escolar-stitch-rosa-com-rodinhas-kit-_JM
+https://produto.mercadolivre.com.br/MLB-4964318778-mochila-lilo-stitch-infantil-feminina-rodinhas-escolar-grand-cor-rosa-desenho-do-tecido-lilo-stitch-_JM
+https://produto.mercadolivre.com.br/MLB-5885616148-mochila-escolar-infantil-rodinha-feminina-sweeties-rosa-_JM
+https://produto.mercadolivre.com.br/MLB-1398435708-mochila-infantil-feminina-escolar-rosa-com-flor-e-borboleta-_JM
+https://produto.mercadolivre.com.br/MLB-2839309097-mochila-bolsa-juvenil-feminina-de-rodinhas-escolar-resistent-_JM
+https://produto.mercadolivre.com.br/MLB-3267548835-kit-mochila-escolar-infantil-barbie-g-rodinhas-meninas-f5-_JM
+https://produto.mercadolivre.com.br/MLB-5998267832-mochila-rodinha-feminina-infantil-escolar-emily-vicky-tiktok-_JM
+https://produto.mercadolivre.com.br/MLB-4107662505-mochila-rosa-rodinha-infantil-unicornio-menina-escolar-_JM
+https://produto.mercadolivre.com.br/MLB-3092178007-mochila-de-rodinhas-escolar-capricho-rosa-claro-flores-_JM
+https://produto.mercadolivre.com.br/MLB-3341432595-mochila-masculina-executiva-preta-notebook-cabo-de-aco-_JM
+https://produto.mercadolivre.com.br/MLB-4739087138-mochila-executiva-notebook-samsonite-ikonn-ii-pretaazul-_JM
+https://produto.mercadolivre.com.br/MLB-4919241412-lancheira-termica-rosa-infantil-escolar-clio-pets-original-_JM
+https://produto.mercadolivre.com.br/MLB-3654086873-estojo-escolar-infantil-rebecca-bonbon-clio-style-rosa-_JM
+https://produto.mercadolivre.com.br/MLB-4081718648-mala-de-viagem-infantil-rosa-com-rodinhas-_JM
+https://produto.mercadolivre.com.br/MLB-4332171863-mala-infantil-stitch-angel-3d-rodinhas-ohana-disney-rosa-_JM

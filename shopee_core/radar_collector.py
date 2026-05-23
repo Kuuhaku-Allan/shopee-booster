@@ -17,6 +17,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Callable
 
+from .radar_browser_service import DEFAULT_CDP_URL, connect_to_cdp_browser
 from .radar_service import (
     detect_marketplace,
     get_pending_jobs,
@@ -102,10 +103,13 @@ def collect_product_page(
     interactive: bool = False,
     interactive_wait_seconds: int | None = None,
     browser_channel: str | None = None,
+    browser_mode: str = "persistent",
+    cdp_url: str = DEFAULT_CDP_URL,
 ) -> dict:
     """Open a visible browser, collect one product page and return normalized data."""
     canonical_url = normalize_product_url(url)
     detected_marketplace = marketplace or detect_marketplace(canonical_url)
+    browser_mode = _normalize_browser_mode(browser_mode)
 
     if detected_marketplace == "unknown":
         raise ValueError(
@@ -129,11 +133,14 @@ def collect_product_page(
     manual_wait_ms = _manual_wait_seconds() * 1000
 
     with sync_playwright() as playwright:
-        context = playwright.chromium.launch_persistent_context(
-            **_browser_context_options(browser_channel=browser_channel)
-        )
-
-        page = context.pages[0] if context.pages else context.new_page()
+        browser = None
+        if browser_mode == "cdp":
+            browser, context, page = connect_to_cdp_browser(playwright, cdp_url=cdp_url)
+        else:
+            context = playwright.chromium.launch_persistent_context(
+                **_browser_context_options(browser_channel=browser_channel)
+            )
+            page = context.pages[0] if context.pages else context.new_page()
 
         try:
             try:
@@ -145,10 +152,10 @@ def collect_product_page(
                 page.wait_for_timeout(manual_wait_ms)
 
             if _needs_manual_intervention(page):
-                if interactive:
+                if interactive or browser_mode == "cdp":
                     _wait_for_manual_confirmation(
                         page,
-                        "Resolva login/verificacao no navegador e pressione ENTER para continuar.",
+                        _manual_intervention_message(browser_mode),
                         timeout_seconds=interactive_wait_seconds,
                     )
                     _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
@@ -162,10 +169,10 @@ def collect_product_page(
             else:
                 data = collect_mercadolivre_product(page, canonical_url)
 
-            if interactive and _needs_interactive_retry(data):
+            if (interactive or browser_mode == "cdp") and _needs_interactive_retry(data):
                 _wait_for_manual_confirmation(
                     page,
-                    "Dados essenciais vieram vazios. Confira a pagina no navegador e pressione ENTER para tentar novamente.",
+                    _empty_data_retry_message(browser_mode),
                     timeout_seconds=interactive_wait_seconds,
                 )
                 _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
@@ -178,7 +185,16 @@ def collect_product_page(
 
             return data
         finally:
-            context.close()
+            if browser_mode == "cdp":
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                # Do not close the user's Chrome. Leaving the CDP connection to
+                # end with sync_playwright keeps the dedicated profile alive.
+                browser = None
+            else:
+                context.close()
 
 
 def collect_shopee_product(page, url: str) -> dict:
@@ -404,12 +420,19 @@ def collect_pending_jobs(
     collector_func: Callable[[str], dict] | None = None,
     save_assets_to_disk: bool = False,
     browser_channel: str | None = None,
+    browser_mode: str = "persistent",
+    cdp_url: str = DEFAULT_CDP_URL,
 ) -> dict:
     """Collect pending radar jobs and persist product data/assets."""
     if collector_func:
         collector = collector_func
     else:
-        collector = lambda url: collect_product_page(url, browser_channel=browser_channel)
+        collector = lambda url: collect_product_page(
+            url,
+            browser_channel=browser_channel,
+            browser_mode=browser_mode,
+            cdp_url=cdp_url,
+        )
     jobs = get_pending_jobs(limit=limit)
     summary = {
         "total": len(jobs),
@@ -487,9 +510,13 @@ def is_collection_blocked_or_empty(data: dict) -> bool:
     blocked_patterns = [
         "captcha",
         "verificacao",
+        "para continuar acesse sua conta",
+        "acesse sua conta",
+        "ja tenho conta",
         "fazer login",
         "entre na sua conta",
         "iniciar sessao",
+        "account-verification",
         "e-mail ou telefone",
         "recaptcha",
         "negative_traffic",
@@ -564,6 +591,31 @@ def _manual_wait_seconds() -> int:
         return 8
 
 
+def _normalize_browser_mode(browser_mode: str | None) -> str:
+    mode = (browser_mode or "persistent").strip().lower()
+    if mode not in {"persistent", "cdp"}:
+        raise ValueError("browser_mode invalido. Use: persistent ou cdp")
+    return mode
+
+
+def _manual_intervention_message(browser_mode: str) -> str:
+    if browser_mode == "cdp":
+        return "Resolva a verificacao/login no Chrome do Radar e pressione ENTER para continuar."
+    return "Resolva login/verificacao no navegador e pressione ENTER para continuar."
+
+
+def _empty_data_retry_message(browser_mode: str) -> str:
+    if browser_mode == "cdp":
+        return (
+            "Dados essenciais vieram vazios. Confira a pagina no Chrome do Radar "
+            "e pressione ENTER para tentar novamente."
+        )
+    return (
+        "Dados essenciais vieram vazios. Confira a pagina no navegador e pressione "
+        "ENTER para tentar novamente."
+    )
+
+
 def _browser_context_options(browser_channel: str | None = None) -> dict:
     channel = (browser_channel or os.getenv("RADAR_BROWSER_CHANNEL", "")).strip().lower()
     options = {
@@ -635,8 +687,12 @@ def _needs_manual_intervention(page) -> bool:
         "captcha",
         "verificacao",
         "verifique",
+        "para continuar acesse sua conta",
+        "acesse sua conta",
+        "ja tenho conta",
         "fazer login",
         "entre na sua conta",
+        "account-verification",
         "por seguranca",
         "complete esta etapa",
         "erro de carregamento",
@@ -1111,6 +1167,10 @@ def _looks_like_intervention_title(title: str | None) -> bool:
             "problemas ao carregar",
             "fazer login",
             "iniciar sessao",
+            "para continuar acesse sua conta",
+            "acesse sua conta",
+            "ja tenho conta",
+            "account-verification",
             "e-mail ou telefone",
             "recaptcha",
             "captcha",
