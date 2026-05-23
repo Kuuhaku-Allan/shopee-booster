@@ -24,6 +24,12 @@ data/bot_state.db-wal
 data/radar.db
 data/radar.db-shm
 data/radar.db-wal
+data/radar_collector_test_*.db
+data/radar_collector_test_*.db-shm
+data/radar_collector_test_*.db-wal
+data/radar_service_test_*.db
+data/radar_service_test_*.db-shm
+data/radar_service_test_*.db-wal
 data/browser_profile/
 
 # Relatórios gerados (não commitar dados de produção)

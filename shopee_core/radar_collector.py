@@ -231,10 +231,13 @@ def collect_shopee_product(page, url: str) -> dict:
 def collect_mercadolivre_product(page, url: str) -> dict:
     """Collect basic Mercado Livre product data from an already loaded page."""
     body_text = _body_text(page)
+    page_title = _page_title(page)
     title = (
         _first_text(page, ["h1.ui-pdp-title", "h1", "[data-testid='title']"])
         or _first_meta(page, ["meta[property='og:title']", "meta[name='title']"])
     )
+    if _looks_like_intervention_title(title) and page_title:
+        title = page_title.split("|")[0].strip()
     price_text = (
         _first_meta(page, ["meta[itemprop='price']", "meta[property='product:price:amount']"])
         or _first_text(
@@ -282,7 +285,7 @@ def collect_mercadolivre_product(page, url: str) -> dict:
         image_urls=image_urls,
         video_urls=video_urls,
         raw={
-            "page_title": _page_title(page),
+            "page_title": page_title,
             "price_text": price_text,
             "body_excerpt": body_text[:3000],
         },
@@ -377,6 +380,8 @@ def _needs_manual_intervention(page) -> bool:
         "verifique",
         "fazer login",
         "entre na sua conta",
+        "por seguranca",
+        "complete esta etapa",
         "access denied",
         "verify you are human",
     ]
@@ -595,6 +600,22 @@ def _clean_text(text: str | None) -> str | None:
         return None
     clean = re.sub(r"\s+", " ", str(text)).strip()
     return clean or None
+
+
+def _looks_like_intervention_title(title: str | None) -> bool:
+    if not title:
+        return False
+    folded = _strip_accents(title).lower()
+    return any(
+        pattern in folded
+        for pattern in [
+            "por seguranca",
+            "complete esta etapa",
+            "fazer login",
+            "captcha",
+            "verificacao",
+        ]
+    )
 
 
 def _strip_accents(text: str) -> str:

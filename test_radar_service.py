@@ -9,7 +9,13 @@ Run:
 from __future__ import annotations
 
 import json
+import os
 import uuid
+from pathlib import Path
+
+
+RUN_ID = uuid.uuid4().hex
+os.environ["SHOPEE_RADAR_DB_PATH"] = str(Path("data") / f"radar_service_test_{RUN_ID}.db")
 
 from shopee_core.radar_db import DB_PATH
 from shopee_core.radar_service import (
@@ -21,9 +27,6 @@ from shopee_core.radar_service import (
     list_products,
     mark_product_collected,
 )
-
-
-RUN_ID = uuid.uuid4().hex
 
 
 def _url_shopee(suffix: str) -> str:

@@ -20,7 +20,12 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from shopee_core.radar_collector import collect_product_page
-from shopee_core.radar_service import add_product_url, mark_product_collected, save_product_assets
+from shopee_core.radar_service import (
+    add_product_url,
+    mark_job_done,
+    mark_product_collected,
+    save_product_assets,
+)
 
 
 def main() -> int:
@@ -65,6 +70,9 @@ def main() -> int:
                 image_urls=data.get("image_urls") or [],
                 video_urls=data.get("video_urls") or [],
             )
+            job = created.get("job")
+            if job and job.get("job_uid"):
+                mark_job_done(job["job_uid"])
             data["_saved"] = {
                 "product_uid": product_uid,
                 "status": product["status"],

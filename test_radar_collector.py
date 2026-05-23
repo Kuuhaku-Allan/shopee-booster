@@ -10,7 +10,15 @@ Run:
 
 from __future__ import annotations
 
+import os
 import uuid
+from pathlib import Path
+
+
+RUN_ID = uuid.uuid4().hex
+os.environ["SHOPEE_RADAR_DB_PATH"] = str(
+    Path("data") / f"radar_collector_test_{RUN_ID}.db"
+)
 
 from shopee_core.radar_collector import (
     collect_pending_jobs,
@@ -27,9 +35,6 @@ from shopee_core.radar_service import (
     mark_product_collected,
     save_product_assets,
 )
-
-
-RUN_ID = uuid.uuid4().hex
 
 
 def _fake_collected_data(url: str) -> dict:
