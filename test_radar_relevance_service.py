@@ -8,6 +8,7 @@ Run:
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from pathlib import Path
@@ -115,6 +116,28 @@ def test_sem_descricao_classifica_usando_titulo():
     return True
 
 
+def test_tipo_produto_prioriza_titulo_antes_de_categoria():
+    profile = build_product_profile(
+        {
+            "product_uid": "fake-lancheira",
+            "title": "Lancheira Infantil Rosa Princesa Termica",
+            "price": 39.9,
+            "marketplace": "mercadolivre",
+            "shop_name": "Loja Teste",
+            "raw_json": json.dumps(
+                {
+                    "description": "Lancheira termica infantil para lanche escolar.",
+                    "category_path": ["Moda", "Mochilas e Bolsas", "Escolar"],
+                    "attributes": {"Tipo": "lancheira"},
+                },
+                ensure_ascii=False,
+            ),
+        }
+    )
+    assert profile["product_type"] == "lancheira"
+    return True
+
+
 def test_preco_muito_distante_reduz_score():
     close = _compare(
         "Mochila infantil rosa escolar com rodinhas",
@@ -189,6 +212,7 @@ if __name__ == "__main__":
         ("mochila infantil vs lancheira infantil", test_mochila_vs_lancheira_rejected_or_low_partial),
         ("minimalista branca vs casual branca", test_minimalista_branca_vs_casual_branca_direct_or_partial),
         ("sem descricao usa titulo", test_sem_descricao_classifica_usando_titulo),
+        ("tipo prioriza titulo antes de categoria", test_tipo_produto_prioriza_titulo_antes_de_categoria),
         ("preco distante reduz score", test_preco_muito_distante_reduz_score),
         ("classify_candidate salva match", test_classify_candidate_salva_match),
         ("classify_candidates_for_product classifica lote", test_classify_candidates_for_product_classifica_lote),

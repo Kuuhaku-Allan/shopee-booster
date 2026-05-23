@@ -160,7 +160,7 @@ def extract_product_signals(text: str, raw_json: dict | None = None) -> dict:
         )
 
     normalized = _normalize_text(f"{text or ''} {extra_text}")
-    product_type = _first_matching_label(normalized, _PRODUCT_TYPE_RULES)
+    product_type = _best_matching_label_by_position(normalized, _PRODUCT_TYPE_RULES)
 
     return {
         "product_type": product_type,
@@ -464,13 +464,19 @@ def _score_overlap(
 def _audience_penalty(own_values: list[str], candidate_values: list[str]) -> float:
     own_set = set(own_values)
     candidate_set = set(candidate_values)
-    if not own_set or not candidate_set or own_set & candidate_set:
+    if not own_set or not candidate_set:
         return 0.0
 
     child = {"infantil", "bebe"}
     adult = {"adulto"}
     if (own_set & child and candidate_set & adult) or (candidate_set & child and own_set & adult):
         return 25.0
+    if ("infantil" in own_set and "juvenil" in candidate_set and "infantil" not in candidate_set) or (
+        "infantil" in candidate_set and "juvenil" in own_set and "infantil" not in own_set
+    ):
+        return 12.0
+    if own_set & candidate_set:
+        return 0.0
     if ("feminino" in own_set and "masculino" in candidate_set) or (
         "masculino" in own_set and "feminino" in candidate_set
     ):
@@ -552,11 +558,18 @@ def _public_profile_signals(profile: dict) -> dict:
     }
 
 
-def _first_matching_label(normalized_text: str, rules: dict[str, list[str]]) -> str | None:
+def _best_matching_label_by_position(normalized_text: str, rules: dict[str, list[str]]) -> str | None:
+    matches = []
     for label, patterns in rules.items():
-        if any(_has_pattern(normalized_text, pattern) for pattern in patterns):
-            return label
-    return None
+        for pattern in patterns:
+            position = _pattern_position(normalized_text, pattern)
+            if position is not None:
+                matches.append((position, label))
+                break
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item[0])
+    return matches[0][1]
 
 
 def _matching_labels(normalized_text: str, rules: dict[str, list[str]]) -> list[str]:
@@ -569,10 +582,16 @@ def _matching_labels(normalized_text: str, rules: dict[str, list[str]]) -> list[
 
 
 def _has_pattern(normalized_text: str, pattern: str) -> bool:
+    return _pattern_position(normalized_text, pattern) is not None
+
+
+def _pattern_position(normalized_text: str, pattern: str) -> int | None:
     normalized_pattern = _normalize_text(pattern)
     if " " in normalized_pattern:
-        return normalized_pattern in normalized_text
-    return re.search(rf"\b{re.escape(normalized_pattern)}\b", normalized_text) is not None
+        position = normalized_text.find(normalized_pattern)
+        return position if position >= 0 else None
+    match = re.search(rf"\b{re.escape(normalized_pattern)}\b", normalized_text)
+    return match.start() if match else None
 
 
 def _tokenize(text: str) -> list[str]:
