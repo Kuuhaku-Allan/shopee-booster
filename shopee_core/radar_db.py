@@ -106,6 +106,26 @@ def init_db() -> None:
         )
 
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS radar_competitor_matches (
+                match_uid TEXT PRIMARY KEY,
+                own_product_uid TEXT NOT NULL,
+                candidate_product_uid TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                relevance_score REAL NOT NULL,
+                confidence TEXT,
+                reasons_json TEXT,
+                signals_json TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(own_product_uid, candidate_product_uid),
+                FOREIGN KEY (own_product_uid) REFERENCES radar_products(product_uid),
+                FOREIGN KEY (candidate_product_uid) REFERENCES radar_products(product_uid)
+            )
+            """
+        )
+
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_radar_products_source_type "
             "ON radar_products(source_type)"
         )
@@ -136,4 +156,16 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_radar_jobs_status "
             "ON radar_collection_jobs(status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_matches_own_product_uid "
+            "ON radar_competitor_matches(own_product_uid)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_matches_candidate_product_uid "
+            "ON radar_competitor_matches(candidate_product_uid)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_matches_verdict "
+            "ON radar_competitor_matches(verdict)"
         )
