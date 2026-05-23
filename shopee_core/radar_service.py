@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .radar_db import get_connection, init_db
 from .radar_types import (
+    ASSET_TYPES,
     JOB_STATUSES,
     JOB_TYPES,
     MARKETPLACES,
@@ -151,6 +152,11 @@ def _get_job(job_uid: str) -> Optional[dict]:
             (job_uid,),
         ).fetchone()
         return _row_to_dict(row)
+
+
+def get_collection_job(job_uid: str) -> dict | None:
+    """Return one collection job by UID."""
+    return _get_job(job_uid)
 
 
 def add_product_url(
@@ -365,6 +371,103 @@ def mark_product_collected(product_uid: str, data: dict) -> dict:
         )
 
     return get_product(product_uid)
+
+
+def add_product_asset(
+    product_uid: str,
+    asset_type: str,
+    source_url: str | None = None,
+    local_path: str | None = None,
+) -> dict:
+    """Register one product asset reference without downloading the file."""
+    _validate_allowed(asset_type, ASSET_TYPES, "asset_type")
+
+    product = get_product(product_uid)
+    if not product:
+        raise ValueError(f"Produto nao encontrado: {product_uid}")
+
+    if not source_url and not local_path:
+        raise ValueError("source_url ou local_path precisa ser informado")
+
+    init_db()
+    with get_connection() as conn:
+        existing = conn.execute(
+            """
+            SELECT * FROM radar_assets
+            WHERE product_uid = ?
+              AND asset_type = ?
+              AND COALESCE(source_url, '') = COALESCE(?, '')
+              AND COALESCE(local_path, '') = COALESCE(?, '')
+            LIMIT 1
+            """,
+            (product_uid, asset_type, source_url, local_path),
+        ).fetchone()
+
+        if existing:
+            return dict(existing)
+
+        asset_uid = str(uuid.uuid4())
+        now = _now()
+        conn.execute(
+            """
+            INSERT INTO radar_assets (
+                asset_uid, product_uid, asset_type, source_url, local_path,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (asset_uid, product_uid, asset_type, source_url, local_path, now),
+        )
+
+        row = conn.execute(
+            "SELECT * FROM radar_assets WHERE asset_uid = ?",
+            (asset_uid,),
+        ).fetchone()
+        return dict(row)
+
+
+def save_product_assets(
+    product_uid: str,
+    image_urls: list[str] | None = None,
+    video_urls: list[str] | None = None,
+) -> list[dict]:
+    """Persist image/video URLs as radar_assets rows."""
+    assets = []
+
+    for image_url in image_urls or []:
+        if image_url:
+            assets.append(add_product_asset(product_uid, "image", source_url=image_url))
+
+    for video_url in video_urls or []:
+        if video_url:
+            assets.append(add_product_asset(product_uid, "video", source_url=video_url))
+
+    return assets
+
+
+def list_product_assets(product_uid: str, asset_type: str | None = None) -> list[dict]:
+    """List assets registered for one product."""
+    if asset_type is not None:
+        _validate_allowed(asset_type, ASSET_TYPES, "asset_type")
+
+    init_db()
+    filters = ["product_uid = ?"]
+    params: list[Any] = [product_uid]
+
+    if asset_type is not None:
+        filters.append("asset_type = ?")
+        params.append(asset_type)
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM radar_assets
+            WHERE {' AND '.join(filters)}
+            ORDER BY created_at ASC
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def mark_product_failed(product_uid: str, error: str) -> dict:

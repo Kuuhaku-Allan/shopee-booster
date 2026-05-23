@@ -24,6 +24,7 @@ data/bot_state.db-wal
 data/radar.db
 data/radar.db-shm
 data/radar.db-wal
+data/browser_profile/
 
 # Relatórios gerados (não commitar dados de produção)
 data/reports/*.png
