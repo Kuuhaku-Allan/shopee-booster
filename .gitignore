@@ -21,6 +21,9 @@ infra/evolution/.env
 data/bot_state.db
 data/bot_state.db-shm
 data/bot_state.db-wal
+data/radar.db
+data/radar.db-shm
+data/radar.db-wal
 
 # Relatórios gerados (não commitar dados de produção)
 data/reports/*.png
