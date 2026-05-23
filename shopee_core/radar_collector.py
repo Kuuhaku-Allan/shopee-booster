@@ -258,7 +258,7 @@ def collect_shopee_product(page, url: str) -> dict:
 
 
 def collect_mercadolivre_product(page, url: str) -> dict:
-    """Collect basic Mercado Livre product data from an already loaded page."""
+    """Collect deep Mercado Livre product data from an already loaded page."""
     body_text = _body_text(page)
     page_title = _page_title(page)
     title = (
@@ -280,6 +280,23 @@ def collect_mercadolivre_product(page, url: str) -> dict:
         )
         or _first_price_text(body_text)
     )
+    original_price_text = _first_text(
+        page,
+        [
+            ".ui-pdp-price__original-value",
+            ".andes-money-amount--previous",
+            "s.andes-money-amount",
+            "span:has-text('Antes')",
+        ],
+    )
+    discount_text = _first_text(
+        page,
+        [
+            ".andes-money-amount__discount",
+            ".ui-pdp-price__second-line__label",
+            "span:has-text('% OFF')",
+        ],
+    )
     shop_name = _first_text(
         page,
         [
@@ -289,6 +306,7 @@ def collect_mercadolivre_product(page, url: str) -> dict:
             "a[href*='/loja/']",
         ],
     )
+    seller_reputation = _extract_seller_reputation(page, body_text)
     description = _first_text(
         page,
         [
@@ -300,42 +318,98 @@ def collect_mercadolivre_product(page, url: str) -> dict:
         ],
     )
     image_urls, video_urls = _collect_media_urls(page)
+    gallery_image_urls = _collect_mercadolivre_gallery_image_urls(page)
+    if gallery_image_urls:
+        image_urls = _normalize_mercadolivre_image_urls(gallery_image_urls)
+    else:
+        image_urls = _normalize_mercadolivre_image_urls(image_urls)
+    description_image_urls = _collect_description_image_urls(page)
+    attributes = _extract_mercadolivre_attributes(page)
+    category_path = _extract_category_path(page)
+    variation_labels = _extract_variation_labels(page)
+    rating = _parse_rating(body_text)
+    review_count = _parse_count_near_keywords(body_text, ["avaliacoes", "avaliacao", "opinioes"])
+    sold_count = _parse_count_near_keywords(body_text, ["vendidos", "vendido"])
+    original_price = parse_price(original_price_text or "")
+    discount_percent = _parse_discount_percent(discount_text or body_text)
+    raw = {
+        "page_title": page_title,
+        "price_text": price_text,
+        "original_price_text": original_price_text,
+        "discount_text": discount_text,
+        "title": _clean_text(title),
+        "price": parse_price(price_text or ""),
+        "original_price": original_price,
+        "discount_percent": discount_percent,
+        "shop_name": _clean_text(shop_name),
+        "seller_reputation": seller_reputation,
+        "rating": rating,
+        "review_count": review_count,
+        "sold_count": sold_count,
+        "description": _clean_text(description),
+        "attributes": attributes,
+        "category_path": category_path,
+        "image_urls": normalize_image_urls(image_urls),
+        "description_image_urls": normalize_image_urls(description_image_urls),
+        "variation_labels": variation_labels,
+        "body_excerpt": body_text[:5000],
+    }
 
-    return _result(
+    data = _result(
         url=url,
         marketplace="mercadolivre",
         title=title,
         price=parse_price(price_text or ""),
         shop_name=shop_name,
-        rating=_parse_rating(body_text),
-        review_count=_parse_count_near_keywords(body_text, ["avaliacoes", "avaliacao", "opinioes"]),
-        sold_count=_parse_count_near_keywords(body_text, ["vendidos", "vendido"]),
+        rating=rating,
+        review_count=review_count,
+        sold_count=sold_count,
         description=description,
         image_urls=image_urls,
         video_urls=video_urls,
-        raw={
-            "page_title": page_title,
-            "price_text": price_text,
-            "body_excerpt": body_text[:3000],
-        },
+        raw=raw,
     )
+    data.update(
+        {
+            "original_price": original_price,
+            "discount_percent": discount_percent,
+            "seller_reputation": seller_reputation,
+            "attributes": attributes,
+            "category_path": category_path,
+            "description_image_urls": normalize_image_urls(description_image_urls),
+            "variation_labels": variation_labels,
+        }
+    )
+    return data
 
 
 def scroll_product_page(page) -> None:
     """Scroll gradually to trigger lazy images and visible description content."""
     for _ in range(8):
-        page.evaluate("window.scrollBy(0, Math.floor(window.innerHeight * 0.8))")
+        try:
+            page.evaluate("window.scrollBy(0, Math.floor(window.innerHeight * 0.8))")
+        except Exception:
+            page.wait_for_timeout(1000)
+            continue
         page.wait_for_timeout(700)
-    page.evaluate("window.scrollTo(0, 0)")
+    try:
+        page.evaluate("window.scrollTo(0, 0)")
+    except Exception:
+        pass
     page.wait_for_timeout(500)
 
 
 def collect_pending_jobs(
     limit: int = 5,
     collector_func: Callable[[str], dict] | None = None,
+    save_assets_to_disk: bool = False,
+    browser_channel: str | None = None,
 ) -> dict:
     """Collect pending radar jobs and persist product data/assets."""
-    collector = collector_func or collect_product_page
+    if collector_func:
+        collector = collector_func
+    else:
+        collector = lambda url: collect_product_page(url, browser_channel=browser_channel)
     jobs = get_pending_jobs(limit=limit)
     summary = {
         "total": len(jobs),
@@ -351,12 +425,18 @@ def collect_pending_jobs(
         try:
             running_job = mark_job_running(job_uid)
             data = collector(running_job["url"])
+            if is_collection_blocked_or_empty(data):
+                raise RuntimeError(
+                    "Coleta bloqueada ou incompleta. Resolva login/verificacao "
+                    "manualmente e tente novamente."
+                )
             product = mark_product_collected(product_uid, data)
-            assets = save_product_assets(
+            assets = _persist_collected_assets(
                 product_uid,
-                image_urls=data.get("image_urls") or [],
-                video_urls=data.get("video_urls") or [],
+                data,
+                save_assets_to_disk=save_assets_to_disk,
             )
+            asset_errors = [asset for asset in assets if asset.get("error")]
             done_job = mark_job_done(job_uid)
 
             summary["done"] += 1
@@ -364,7 +444,8 @@ def collect_pending_jobs(
                 {
                     "job": done_job,
                     "product": product,
-                    "assets_saved": len(assets),
+                    "assets_saved": len(assets) - len(asset_errors),
+                    "asset_errors": len(asset_errors),
                     "ok": True,
                 }
             )
@@ -383,6 +464,96 @@ def collect_pending_jobs(
             summary["results"].append({"job": failed_job, "ok": False, "error": error})
 
     return summary
+
+
+def is_collection_blocked_or_empty(data: dict) -> bool:
+    """Return True when the page is login/verification instead of a product."""
+    if not isinstance(data, dict):
+        return True
+
+    marketplace = data.get("marketplace")
+    title = data.get("title")
+    raw = data.get("raw") or {}
+    raw_text = " ".join(
+        str(value or "")
+        for value in [
+            title,
+            raw.get("page_title"),
+            raw.get("body_excerpt"),
+        ]
+    )
+    folded = _strip_accents(raw_text).lower()
+
+    blocked_patterns = [
+        "captcha",
+        "verificacao",
+        "fazer login",
+        "entre na sua conta",
+        "iniciar sessao",
+        "e-mail ou telefone",
+        "recaptcha",
+        "negative_traffic",
+        "access denied",
+        "verify you are human",
+    ]
+    if any(pattern in folded for pattern in blocked_patterns):
+        return True
+
+    if _looks_like_intervention_title(title):
+        return True
+
+    if marketplace == "mercadolivre":
+        return not data.get("title") or (
+            data.get("price") is None
+            and not data.get("description")
+            and not data.get("image_urls")
+        )
+
+    return False
+
+
+def _persist_collected_assets(
+    product_uid: str,
+    data: dict,
+    save_assets_to_disk: bool = False,
+) -> list[dict]:
+    if save_assets_to_disk and data.get("marketplace") == "mercadolivre":
+        from .radar_assets_service import download_asset, download_product_images
+
+        assets = download_product_images(product_uid, data.get("image_urls") or [])
+        for image_url in data.get("description_image_urls") or []:
+            try:
+                assets.append(download_asset(image_url, product_uid, "description_image"))
+            except Exception as exc:
+                assets.append(_asset_download_error(product_uid, "description_image", image_url, exc))
+        for video_url in data.get("video_urls") or []:
+            try:
+                assets.append(download_asset(video_url, product_uid, "video"))
+            except Exception as exc:
+                assets.append(_asset_download_error(product_uid, "video", video_url, exc))
+        return assets
+
+    return save_product_assets(
+        product_uid,
+        image_urls=data.get("image_urls") or [],
+        video_urls=data.get("video_urls") or [],
+    )
+
+
+def _asset_download_error(
+    product_uid: str,
+    asset_type: str,
+    source_url: str,
+    exc: Exception,
+) -> dict:
+    return {
+        "product_uid": product_uid,
+        "asset_type": asset_type,
+        "source_url": source_url,
+        "local_path": None,
+        "downloaded": False,
+        "error": str(exc),
+    }
 
 
 def _manual_wait_seconds() -> int:
@@ -640,6 +811,224 @@ def _collect_media_urls(page) -> tuple[list[str], list[str]]:
     return data.get("images", []), data.get("videos", [])
 
 
+def _collect_description_image_urls(page) -> list[str]:
+    try:
+        urls = page.evaluate(
+            """
+            () => {
+                const scope = document.querySelector('#description, .ui-pdp-description')
+                    || document.body;
+                const absolutize = (value) => {
+                    if (!value) return null;
+                    try { return new URL(value.trim(), location.href).href; }
+                    catch (_) { return null; }
+                };
+                const images = [];
+                scope.querySelectorAll('img').forEach((img) => {
+                    [img.currentSrc, img.src, img.getAttribute('data-src'), img.getAttribute('data-lazy')]
+                        .forEach((value) => {
+                            const url = absolutize(value);
+                            if (url) images.push(url);
+                        });
+                });
+                return images;
+            }
+            """
+        )
+    except Exception:
+        return []
+
+    return urls or []
+
+
+def _collect_mercadolivre_gallery_image_urls(page) -> list[str]:
+    try:
+        urls = page.evaluate(
+            """
+            () => {
+                const absolutize = (value) => {
+                    if (!value) return null;
+                    try { return new URL(value.trim(), location.href).href; }
+                    catch (_) { return null; }
+                };
+                const urls = [];
+                const selectors = [
+                    'meta[property="og:image"]',
+                    '.ui-pdp-gallery img',
+                    '.ui-pdp-gallery__figure img',
+                    '.ui-pdp-image',
+                    '.ui-pdp-thumbnail img',
+                    '[data-testid="image-gallery"] img'
+                ];
+
+                selectors.forEach((selector) => {
+                    document.querySelectorAll(selector).forEach((node) => {
+                        if (node.tagName === 'META') {
+                            const url = absolutize(node.getAttribute('content'));
+                            if (url) urls.push(url);
+                            return;
+                        }
+
+                        [node.currentSrc, node.src, node.getAttribute('data-src'), node.getAttribute('data-lazy')]
+                            .forEach((value) => {
+                                const url = absolutize(value);
+                                if (url) urls.push(url);
+                            });
+
+                        const srcset = node.getAttribute('srcset') || '';
+                        srcset.split(',').forEach((part) => {
+                            const value = part.trim().split(/\\s+/)[0];
+                            const url = absolutize(value);
+                            if (url) urls.push(url);
+                        });
+                    });
+                });
+
+                return urls;
+            }
+            """
+        )
+    except Exception:
+        return []
+
+    return normalize_image_urls(urls or [])
+
+
+def _normalize_mercadolivre_image_urls(urls: list[str]) -> list[str]:
+    normalized = []
+    seen_keys = set()
+
+    for url in normalize_image_urls(urls):
+        lowered = url.lower()
+        if lowered.endswith(".svg") or "frontend-assets" in lowered:
+            continue
+        if "negative_traffic" in lowered or "backgr_logo" in lowered:
+            continue
+
+        image_key = _mercadolivre_image_key(url) or url
+        if image_key in seen_keys:
+            continue
+
+        seen_keys.add(image_key)
+        normalized.append(url)
+
+    return normalized
+
+
+def _mercadolivre_image_key(url: str) -> str | None:
+    match = re.search(r"(\d+-ML[A-Z]\d+_\d+)", url)
+    return match.group(1) if match else None
+
+
+def _extract_mercadolivre_attributes(page) -> dict[str, str]:
+    try:
+        data = page.evaluate(
+            """
+            () => {
+                const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+                const attrs = {};
+
+                document.querySelectorAll(
+                    '.andes-table tr, .ui-pdp-striped-specs__row, .ui-vpp-striped-specs__row, tr'
+                ).forEach((row) => {
+                    const cells = Array.from(row.querySelectorAll('th, td, .andes-table__header, .andes-table__column'));
+                    if (cells.length < 2) return;
+                    const key = clean(cells[0].innerText).replace(/:$/, '');
+                    const value = clean(cells.slice(1).map((cell) => cell.innerText).join(' '));
+                    if (key && value && key.length <= 80 && value.length <= 300) attrs[key] = value;
+                });
+
+                document.querySelectorAll('.ui-pdp-specs__table, .ui-pdp-specs').forEach((section) => {
+                    section.querySelectorAll('p, span, div').forEach((node) => {
+                        const text = clean(node.innerText);
+                        const match = text.match(/^([^:]{2,80}):\\s*(.{1,300})$/);
+                        if (match) attrs[clean(match[1])] = clean(match[2]);
+                    });
+                });
+
+                return attrs;
+            }
+            """
+        )
+    except Exception:
+        return {}
+
+    return {str(key): str(value) for key, value in (data or {}).items() if key and value}
+
+
+def _extract_category_path(page) -> list[str]:
+    try:
+        data = page.evaluate(
+            """
+            () => Array.from(document.querySelectorAll(
+                '.andes-breadcrumb__link, .ui-pdp-breadcrumb__link, nav[aria-label*="breadcrumb"] a'
+            ))
+                .map((node) => (node.innerText || '').replace(/\\s+/g, ' ').trim())
+                .filter(Boolean)
+            """
+        )
+    except Exception:
+        return []
+    return data or []
+
+
+def _extract_variation_labels(page) -> list[str]:
+    try:
+        data = page.evaluate(
+            """
+            () => {
+                const labels = new Set();
+                document.querySelectorAll(
+                    '.ui-pdp-variations label, .ui-pdp-variations button, [class*="variation"] label, [class*="variation"] button'
+                ).forEach((node) => {
+                    const text = (node.innerText || node.getAttribute('aria-label') || '')
+                        .replace(/\\s+/g, ' ')
+                        .trim();
+                    if (text && text.length <= 120) labels.add(text);
+                });
+                return Array.from(labels);
+            }
+            """
+        )
+    except Exception:
+        return []
+    return data or []
+
+
+def _extract_seller_reputation(page, body_text: str) -> str | None:
+    reputation = _first_text(
+        page,
+        [
+            ".ui-pdp-seller__reputation-info",
+            ".ui-pdp-seller__status-title",
+            ".ui-pdp-seller__reputation",
+            "section:has-text('Reputacao')",
+        ],
+    )
+    if reputation:
+        return reputation
+
+    folded = _strip_accents(body_text)
+    match = re.search(
+        r"(MercadoLider(?:\s+Gold|\s+Platinum)?|Reputacao\s+[^\n.]{1,80})",
+        folded,
+        flags=re.IGNORECASE,
+    )
+    return _clean_text(match.group(1)) if match else None
+
+
+def _parse_discount_percent(text: str) -> int | None:
+    if not text:
+        return None
+    match = re.search(r"(\d{1,2})\s*%\s*OFF", _strip_accents(text), flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 def _parse_rating(text: str) -> float | None:
     if not text:
         return None
@@ -721,6 +1110,9 @@ def _looks_like_intervention_title(title: str | None) -> bool:
             "erro de carregamento",
             "problemas ao carregar",
             "fazer login",
+            "iniciar sessao",
+            "e-mail ou telefone",
+            "recaptcha",
             "captcha",
             "verificacao",
         ]
