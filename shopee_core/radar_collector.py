@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlsplit
 
 from .radar_service import (
     detect_marketplace,
@@ -95,7 +96,12 @@ def normalize_image_urls(urls: list[str]) -> list[str]:
     return normalized
 
 
-def collect_product_page(url: str, marketplace: str | None = None) -> dict:
+def collect_product_page(
+    url: str,
+    marketplace: str | None = None,
+    interactive: bool = False,
+    interactive_wait_seconds: int | None = None,
+) -> dict:
     """Open a visible browser, collect one product page and return normalized data."""
     canonical_url = normalize_product_url(url)
     detected_marketplace = marketplace or detect_marketplace(canonical_url)
@@ -141,13 +147,38 @@ def collect_product_page(url: str, marketplace: str | None = None) -> dict:
                 page.wait_for_timeout(manual_wait_ms)
 
             if _needs_manual_intervention(page):
-                page.wait_for_timeout(_manual_intervention_seconds() * 1000)
+                if interactive:
+                    _wait_for_manual_confirmation(
+                        page,
+                        "Resolva login/verificacao no navegador e pressione ENTER para continuar.",
+                        timeout_seconds=interactive_wait_seconds,
+                    )
+                    _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
+                else:
+                    page.wait_for_timeout(_manual_intervention_seconds() * 1000)
 
             scroll_product_page(page)
 
             if detected_marketplace == "shopee":
-                return collect_shopee_product(page, canonical_url)
-            return collect_mercadolivre_product(page, canonical_url)
+                data = collect_shopee_product(page, canonical_url)
+            else:
+                data = collect_mercadolivre_product(page, canonical_url)
+
+            if interactive and _needs_interactive_retry(data):
+                _wait_for_manual_confirmation(
+                    page,
+                    "Dados essenciais vieram vazios. Confira a pagina no navegador e pressione ENTER para tentar novamente.",
+                    timeout_seconds=interactive_wait_seconds,
+                )
+                _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
+                scroll_product_page(page)
+
+                if detected_marketplace == "shopee":
+                    data = collect_shopee_product(page, canonical_url)
+                else:
+                    data = collect_mercadolivre_product(page, canonical_url)
+
+            return data
         finally:
             context.close()
 
@@ -372,6 +403,50 @@ def _manual_intervention_seconds() -> int:
         return 60
 
 
+def _reload_product_page(page, url: str, timeout_error_cls) -> None:
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    except timeout_error_cls:
+        page.goto(url, wait_until="load", timeout=60000)
+
+    wait_ms = _manual_wait_seconds() * 1000
+    if wait_ms > 0:
+        page.wait_for_timeout(wait_ms)
+
+
+def _wait_for_manual_confirmation(
+    page,
+    message: str,
+    timeout_seconds: int | None = None,
+) -> None:
+    print(f"\n[RADAR] {message}", flush=True)
+    print("[RADAR] O coletor nao preenche senha, captcha ou token automaticamente.", flush=True)
+    if timeout_seconds:
+        print(f"[RADAR] Continuarei automaticamente em {timeout_seconds}s se ENTER nao for usado.", flush=True)
+
+    done = threading.Event()
+
+    def wait_for_enter() -> None:
+        try:
+            input()
+        except EOFError:
+            return
+        done.set()
+
+    threading.Thread(target=wait_for_enter, daemon=True).start()
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds else None
+
+    while not done.is_set():
+        if deadline is not None and time.monotonic() >= deadline:
+            print("[RADAR] Tempo de espera manual encerrado; tentando extrair novamente.", flush=True)
+            done.set()
+            break
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            done.set()
+
+
 def _needs_manual_intervention(page) -> bool:
     text = _strip_accents((_body_text(page) or "").lower())
     patterns = [
@@ -386,6 +461,25 @@ def _needs_manual_intervention(page) -> bool:
         "verify you are human",
     ]
     return any(pattern in text for pattern in patterns)
+
+
+def _needs_interactive_retry(data: dict) -> bool:
+    title = data.get("title")
+    marketplace = data.get("marketplace")
+
+    if not title or _looks_like_intervention_title(title):
+        return True
+
+    if marketplace == "shopee" and (
+        data.get("price") is None
+        or "shopee brasil | ofertas" in _strip_accents(title).lower()
+    ):
+        return True
+
+    if marketplace == "mercadolivre" and data.get("price") is None:
+        return True
+
+    return False
 
 
 def _result(

@@ -5,6 +5,7 @@ Collect one Radar product URL in a visible browser.
 Usage:
     python scripts/radar_collect_url.py "https://shopee.com.br/produto..."
     python scripts/radar_collect_url.py "https://produto.mercadolivre.com.br/..." --save
+    python scripts/radar_collect_url.py "https://shopee.com.br/produto..." --save --interactive
 """
 
 from __future__ import annotations
@@ -50,11 +51,26 @@ def main() -> int:
     )
     parser.add_argument("--owner-user-id", default=None)
     parser.add_argument("--niche", default=None)
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Pausa para login/verificacao manual e tenta extrair novamente",
+    )
+    parser.add_argument(
+        "--interactive-wait-seconds",
+        type=int,
+        default=None,
+        help="Em modo interativo, aguarda este tempo antes de tentar extrair novamente",
+    )
 
     args = parser.parse_args()
 
     try:
-        data = collect_product_page(args.url)
+        data = collect_product_page(
+            args.url,
+            interactive=args.interactive,
+            interactive_wait_seconds=args.interactive_wait_seconds,
+        )
 
         if args.save:
             created = add_product_url(
