@@ -20,6 +20,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from shopee_core.radar_collector import BROWSER_PROFILE_DIR
+from shopee_core.radar_collector import _browser_context_options
 
 
 MARKETPLACE_URLS = {
@@ -49,6 +50,12 @@ def main() -> int:
         default=None,
         help="Opcional: fecha automaticamente apos N segundos",
     )
+    parser.add_argument(
+        "--browser-channel",
+        choices=["chromium", "chrome", "msedge"],
+        default=None,
+        help="Usa Chromium padrao, Google Chrome ou Microsoft Edge instalado",
+    )
     args = parser.parse_args()
 
     try:
@@ -63,16 +70,14 @@ def main() -> int:
     BROWSER_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"[RADAR] Perfil persistente: {BROWSER_PROFILE_DIR}")
+    print(f"[RADAR] Navegador: {args.browser_channel or 'chromium'}")
     print("[RADAR] Faca login/verificacao manualmente.")
     print("[RADAR] Quando terminar, feche o navegador ou pressione ENTER no terminal.")
     print("[RADAR] O sistema nao preenche senha, captcha ou token automaticamente.")
 
     with sync_playwright() as playwright:
         context = playwright.chromium.launch_persistent_context(
-            user_data_dir=str(BROWSER_PROFILE_DIR),
-            headless=False,
-            viewport={"width": 1366, "height": 900},
-            locale="pt-BR",
+            **_browser_context_options(browser_channel=args.browser_channel)
         )
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(target_url, wait_until="domcontentloaded", timeout=60000)

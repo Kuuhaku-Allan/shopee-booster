@@ -101,6 +101,7 @@ def collect_product_page(
     marketplace: str | None = None,
     interactive: bool = False,
     interactive_wait_seconds: int | None = None,
+    browser_channel: str | None = None,
 ) -> dict:
     """Open a visible browser, collect one product page and return normalized data."""
     canonical_url = normalize_product_url(url)
@@ -129,10 +130,7 @@ def collect_product_page(
 
     with sync_playwright() as playwright:
         context = playwright.chromium.launch_persistent_context(
-            user_data_dir=str(BROWSER_PROFILE_DIR),
-            headless=False,
-            viewport={"width": 1366, "height": 900},
-            locale="pt-BR",
+            **_browser_context_options(browser_channel=browser_channel)
         )
 
         page = context.pages[0] if context.pages else context.new_page()
@@ -393,6 +391,19 @@ def _manual_wait_seconds() -> int:
         return max(0, int(raw_value))
     except ValueError:
         return 8
+
+
+def _browser_context_options(browser_channel: str | None = None) -> dict:
+    channel = (browser_channel or os.getenv("RADAR_BROWSER_CHANNEL", "")).strip().lower()
+    options = {
+        "user_data_dir": str(BROWSER_PROFILE_DIR),
+        "headless": False,
+        "viewport": {"width": 1366, "height": 900},
+        "locale": "pt-BR",
+    }
+    if channel and channel != "chromium":
+        options["channel"] = channel
+    return options
 
 
 def _manual_intervention_seconds() -> int:

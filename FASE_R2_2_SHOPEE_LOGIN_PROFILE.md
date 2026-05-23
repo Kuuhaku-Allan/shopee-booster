@@ -85,6 +85,23 @@ https://shopee.com.br/Mochila-Notebook-Grande-15-6-I-Connect-Sestini--i.83327500
 python scripts/radar_open_browser_profile.py --marketplace shopee
 ```
 
+Se o login via Google mostrar a mensagem `Esse navegador ou app pode nao ser seguro`,
+isso e um bloqueio do provedor contra navegadores controlados por automacao. Nao tentar
+burlar. Use uma destas alternativas seguras:
+
+- Entrar na Shopee por telefone/e-mail/senha ou QR Code, se disponivel.
+- Abrir com Chrome ou Edge instalado, mantendo o mesmo perfil persistente:
+
+```powershell
+python scripts/radar_open_browser_profile.py --marketplace shopee --browser-channel chrome
+```
+
+ou:
+
+```powershell
+python scripts/radar_open_browser_profile.py --marketplace shopee --browser-channel msedge
+```
+
 2. Fazer login/verificacao manualmente na Shopee.
 
 3. Fechar o navegador ou pressionar ENTER no terminal.
@@ -93,6 +110,12 @@ python scripts/radar_open_browser_profile.py --marketplace shopee
 
 ```powershell
 python scripts/radar_collect_url.py "https://shopee.com.br/Mochila-Notebook-Grande-15-6-I-Connect-Sestini--i.833275000.58209898331" --save --interactive --interactive-wait-seconds 90
+```
+
+Se o login foi feito usando Chrome ou Edge, usar o mesmo canal tambem na coleta:
+
+```powershell
+python scripts/radar_collect_url.py "https://shopee.com.br/Mochila-Notebook-Grande-15-6-I-Connect-Sestini--i.833275000.58209898331" --save --interactive --interactive-wait-seconds 90 --browser-channel chrome
 ```
 
 5. Inspecionar o banco:

@@ -62,6 +62,12 @@ def main() -> int:
         default=None,
         help="Em modo interativo, aguarda este tempo antes de tentar extrair novamente",
     )
+    parser.add_argument(
+        "--browser-channel",
+        choices=["chromium", "chrome", "msedge"],
+        default=None,
+        help="Usa Chromium padrao, Google Chrome ou Microsoft Edge instalado",
+    )
 
     args = parser.parse_args()
 
@@ -70,6 +76,7 @@ def main() -> int:
             args.url,
             interactive=args.interactive,
             interactive_wait_seconds=args.interactive_wait_seconds,
+            browser_channel=args.browser_channel,
         )
 
         if args.save:
