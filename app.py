@@ -279,11 +279,12 @@ with st.sidebar:
 
     nav = st.radio(
         "nav",
-        options=["auditoria", "chatbot", "sentinela"],
+        options=["auditoria", "chatbot", "sentinela", "espelho_loja"],
         format_func=lambda x: (
             "🕵️  Auditoria Pro" if x == "auditoria"
             else "🤖  Chatbot Concierge" if x == "chatbot"
-            else "📡  Sentinela"
+            else "📡  Sentinela" if x == "sentinela"
+            else "🏪  Espelho da Loja"
         ),
         key="nav_partition",
         label_visibility="collapsed",
@@ -3206,11 +3207,152 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
                 _sp.Popen(["explorer", diag["runtime_dir"]])
 
 # ══════════════════════════════════════════════════════════════════════════
+# ESPELHO DA LOJA
+# ══════════════════════════════════════════════════════════════════════════
+def render_espelho_loja():
+    from shopee_core.radar_store_ui_service import (
+        get_db_diagnostic, list_store_mirrors, format_store_label,
+        get_store_mirror_summary, list_store_mirror_products
+    )
+    import pandas as pd
+    
+    st.markdown("""
+    <div class="page-header">
+        <div class="page-header-icon">🏪</div>
+        <div>
+            <div class="page-header-title">Espelho da Loja</div>
+            <div class="page-header-sub">Produtos próprios salvos localmente no Radar. Use este espelho como fallback quando a Shopee bloquear ou falhar.</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    diag = get_db_diagnostic()
+    
+    st.markdown("### 📊 Diagnóstico do Banco")
+    with st.expander("Ver detalhes do radar.db", expanded=False):
+        st.write(f"**Caminho Absoluto:** `{diag['db_path']}`")
+        st.write(f"**Existe:** {'✅ Sim' if diag['db_exists'] else '❌ Não'}")
+        if diag['db_exists']:
+            st.write(f"**Tamanho:** {diag['db_size_bytes'] / 1024:.2f} KB")
+            st.write(f"**Lojas (`radar_stores`):** {diag['total_stores']}")
+            st.write(f"**Produtos (`radar_store_products`):** {diag['total_store_products']}")
+            st.write(f"**Próprios (`radar_products`):** {diag['total_own_products']}")
+
+    st.markdown("---")
+    
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("🔄 Recarregar espelho", use_container_width=True):
+            st.rerun()
+    with col_btn2:
+        if st.button("🧪 Ativar instrução de fallback", use_container_width=True):
+            st.info('Para forçar fallback temporariamente:\n\n`$env:SHOPEE_FORCE_RADAR_STORE_FALLBACK="true"`\n\n`streamlit run app.py`')
+
+    st.markdown("---")
+    
+    stores = list_store_mirrors()
+    if not stores:
+        st.info("Nenhuma loja salva no espelho.")
+        return
+
+    # Selectbox de loja
+    store_options = {s["store_uid"]: format_store_label(s) for s in stores}
+    selected_store_uid = st.selectbox(
+        "Selecione uma Loja",
+        options=list(store_options.keys()),
+        format_func=lambda x: store_options[x]
+    )
+
+    if not selected_store_uid:
+        return
+
+    summary = get_store_mirror_summary(selected_store_uid)
+    if not summary.get("ok"):
+        st.error("Erro ao carregar detalhes da loja.")
+        return
+
+    if summary.get("is_outdated"):
+        st.warning("⚠️ **Espelho pode estar desatualizado** (Mais de 7 dias desde o último snapshot). Considere fazer uma nova auditoria normal sem fallback forçado.")
+    else:
+        st.success("✅ Espelho recente (menos de 7 dias).")
+
+    st.markdown("### 📈 Métricas da Loja")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Produtos", summary.get("total_products", 0))
+    c2.metric("Ativos", summary.get("active", 0))
+    c3.metric("Alterados", summary.get("changed", 0))
+    c4.metric("Ausentes/Removidos", summary.get("missing", 0) + summary.get("removed", 0))
+    
+    st.markdown("---")
+    st.markdown("### 📦 Produtos do Espelho")
+    
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        status_filter = st.selectbox("Status", ["Todos", "active", "changed", "missing", "removed", "unknown"])
+    with col_f2:
+        text_filter = st.text_input("Buscar no título")
+
+    products = list_store_mirror_products(
+        selected_store_uid, 
+        status_filter=status_filter if status_filter != "Todos" else None
+    )
+
+    if text_filter:
+        products = [p for p in products if text_filter.lower() in (p.get("title") or "").lower()]
+
+    if not products:
+        st.info("Nenhum produto encontrado para este filtro.")
+    else:
+        df_data = []
+        for p in products:
+            df_data.append({
+                "Status": p.get("cache_status"),
+                "Título": p.get("title"),
+                "Preço": f"R$ {p.get('price', 0):.2f}",
+                "Fonte/Origem": p.get("display_source"),
+                "Marketplace ID": p.get("marketplace_product_id"),
+                "Radar UID": p.get("radar_product_uid"),
+                "Last Seen": str(p.get("last_seen_at", ""))[:16],
+                "Last Changed": str(p.get("last_changed_at", ""))[:16],
+            })
+        st.dataframe(pd.DataFrame(df_data), use_container_width=True)
+
+        st.markdown("### 🔎 Detalhe do Produto")
+        product_options = {p["store_product_uid"]: f"[{p.get('cache_status')}] {p.get('title')}" for p in products}
+        selected_prod_uid = st.selectbox(
+            "Selecione um produto para inspecionar",
+            options=list(product_options.keys()),
+            format_func=lambda x: product_options[x]
+        )
+
+        if selected_prod_uid:
+            prod = next((p for p in products if p["store_product_uid"] == selected_prod_uid), None)
+            if prod:
+                c_img, c_info = st.columns([1, 2])
+                with c_img:
+                    img_url = prod.get("image_url")
+                    if img_url:
+                        st.image(img_url, use_container_width=True)
+                    else:
+                        st.caption("Sem imagem")
+                with c_info:
+                    st.write(f"**Título:** {prod.get('title')}")
+                    st.write(f"**Preço:** R$ {prod.get('price', 0):.2f}")
+                    st.text_input("store_product_uid", prod.get("store_product_uid") or "", disabled=False)
+                    st.text_input("radar_product_uid", prod.get("radar_product_uid") or "", disabled=False)
+                    st.text_input("canonical_url", prod.get("canonical_url") or "", disabled=False)
+                
+                with st.expander("JSON Bruto (raw_json)"):
+                    st.json(prod.get("raw_json_parsed", {}))
+
+# ══════════════════════════════════════════════════════════════════════════
 # ROTEAMENTO DE PARTIÇÕES
 # ══════════════════════════════════════════════════════════════════════════
 if st.session_state.nav_partition == "auditoria":
     render_auditoria()
 elif st.session_state.nav_partition == "chatbot":
     render_chatbot()
+elif st.session_state.nav_partition == "espelho_loja":
+    render_espelho_loja()
 else:
     render_sentinela()
