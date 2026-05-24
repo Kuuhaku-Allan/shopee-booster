@@ -743,7 +743,14 @@ asyncio.run(run())
 # GERAÇÃO DE CONTEÚDO COM GEMINI
 # ══════════════════════════════════════════════════════════════════
 
-def generate_full_optimization(product: dict, competitors_df, reviews: list, segmento: str, api_key: str = None) -> str:
+def generate_full_optimization(
+    product: dict,
+    competitors_df,
+    reviews: list,
+    segmento: str,
+    api_key: str = None,
+    radar_context_block: str | None = None,
+) -> str:
     """
     Gera otimização completa do produto usando Gemini.
     
@@ -753,6 +760,7 @@ def generate_full_optimization(product: dict, competitors_df, reviews: list, seg
         reviews: Lista de avaliações
         segmento: Segmento de mercado
         api_key: Gemini API Key opcional (usa GOOGLE_API_KEY se None)
+        radar_context_block: Contexto do Radar opcional (R6.2)
     
     Returns:
         Texto da otimização gerada
@@ -777,8 +785,13 @@ def generate_full_optimization(product: dict, competitors_df, reviews: list, seg
     if reviews:
         reviews_text = "\n".join(f"• {r}" for r in reviews[:8])
 
-    prompt = f"""Você é um especialista em e-commerce Shopee brasileiro com foco em maximizar CTR e conversão orgânica.
+    # R6.2: Incluir contexto do Radar se disponível
+    radar_section = ""
+    if radar_context_block:
+        radar_section = f"\n\n{radar_context_block}\n\n"
 
+    prompt = f"""Você é um especialista em e-commerce Shopee brasileiro com foco em maximizar CTR e conversão orgânica.
+{radar_section}
 PRODUTO ATUAL DA LOJA:
 - Nome: {nome}
 - Preço atual: R$ {preco:.2f}
@@ -792,6 +805,8 @@ AVALIAÇÕES DO MERCADO (reclamações reais de compradores de produtos similare
 
 Com base nessa análise completa, gere uma otimização de listing para Shopee 2026.
 Seja específico, use as fraquezas dos concorrentes como diferenciais.
+
+{"IMPORTANTE: Use o contexto do Radar como evidência de mercado. Não invente dados que não estejam no Radar. Não recomende features marcadas como off-niche ou avoid. Se houver conflito entre Radar e dados do produto, explique com cuidado." if radar_context_block else ""}
 
 Responda EXATAMENTE neste formato:
 

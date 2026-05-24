@@ -72,17 +72,24 @@ def load_shop_from_url(shop_url: str) -> dict:
     }
 
 
-def generate_product_optimization(product: dict, segmento: str, api_key: str = None) -> dict:
+def generate_product_optimization(
+    product: dict,
+    segmento: str,
+    api_key: str = None,
+    radar_own_product_uid: str | None = None,
+) -> dict:
     """
     Executa o fluxo completo de otimização para um produto:
       1. Busca concorrentes via competitor_service (Shopee + Mercado Livre fallback)
       2. Busca avaliações no Mercado Livre (Playwright)
-      3. Gera o listing otimizado com Gemini
+      3. Tenta carregar contexto do Radar (opcional)
+      4. Gera o listing otimizado com Gemini
 
     Args:
         product: Dados do produto
         segmento: Segmento de mercado
         api_key: Gemini API Key opcional (usa GOOGLE_API_KEY se None)
+        radar_own_product_uid: UID do produto no Radar (opcional)
 
     Retorna AuditResponse-compatível.
     """
@@ -129,7 +136,36 @@ def generate_product_optimization(product: dict, segmento: str, api_key: str = N
     
     log.info(f"[AUDIT] Avaliações coletadas: {len(reviews or [])}")
 
-    # 3. Otimização Gemini (passa api_key)
+    # 3. Contexto do Radar (opcional - R6.2)
+    radar_context_block = None
+    radar_status = None
+    
+    if radar_own_product_uid:
+        log.info(f"[AUDIT] Tentando carregar contexto do Radar: {radar_own_product_uid}")
+        try:
+            from shopee_core.radar_audit_context_service import (
+                get_radar_audit_context_status,
+                build_radar_audit_context,
+                build_radar_prompt_block,
+            )
+            
+            radar_status = get_radar_audit_context_status(radar_own_product_uid)
+            
+            if radar_status.get("can_use"):
+                log.info(f"[AUDIT] Radar disponível: {radar_status.get('reason')}")
+                context = build_radar_audit_context(radar_own_product_uid)
+                if context.get("ok"):
+                    radar_context_block = build_radar_prompt_block(context)
+                    log.info(f"[AUDIT] Contexto do Radar carregado: {len(radar_context_block)} caracteres")
+                else:
+                    log.warning(f"[AUDIT] Radar context falhou: {context.get('error')}")
+            else:
+                log.info(f"[AUDIT] Radar não disponível: {radar_status.get('reason')}")
+        except Exception as e:
+            log.warning(f"[AUDIT] Erro ao carregar Radar: {e}")
+            # Continua sem Radar
+
+    # 4. Otimização Gemini (passa api_key e radar_context_block)
     log.info(f"[AUDIT] Gerando otimização com Gemini...")
     from backend_core import generate_full_optimization
     optimization_text = generate_full_optimization(
@@ -137,7 +173,8 @@ def generate_product_optimization(product: dict, segmento: str, api_key: str = N
         competitors_df=df_competitors,
         reviews=reviews or [],
         segmento=segmento,
-        api_key=api_key,  # Passa api_key opcional
+        api_key=api_key,
+        radar_context_block=radar_context_block,  # R6.2: Passa contexto do Radar
     )
     
     log.info(f"[AUDIT] Otimização gerada: {len(optimization_text)} caracteres")
@@ -155,6 +192,8 @@ def generate_product_optimization(product: dict, segmento: str, api_key: str = N
             "competitors": competitors,  # Lista original para contador
             "reviews": reviews or [],
             "review_logs": logs,
+            "radar_used": radar_context_block is not None,  # R6.2: Indica se Radar foi usado
+            "radar_status": radar_status,  # R6.2: Status do Radar
         },
     }
 
