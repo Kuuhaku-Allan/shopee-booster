@@ -3219,7 +3219,8 @@ def render_radar_workflow():
         list_own_products_for_radar, format_own_product_label,
         add_competitor_urls_for_product, get_radar_queue_summary,
         get_competitor_table_for_product, classify_linked_candidates_for_product,
-        run_pattern_analysis_for_product, run_linked_collection_for_product
+        run_pattern_analysis_for_product, run_linked_collection_for_product,
+        ensure_collection_jobs_for_linked_candidates
     )
     import shopee_core.radar_collector as rc
     import time
@@ -3271,6 +3272,7 @@ def render_radar_workflow():
                 
     st.divider()
     st.write("##### Fila de Coleta")
+    ensure_collection_jobs_for_linked_candidates(selected_uid)
     summary = get_radar_queue_summary(selected_uid)
     
     if "radar_collection_result" in st.session_state:
