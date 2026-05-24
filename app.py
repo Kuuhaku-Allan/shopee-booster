@@ -728,22 +728,32 @@ def render_auditoria():
                 # Fluxo normal - chamar IA
                 print(f"[R6.3B] Enviando radar_own_product_uid para auditoria: {radar_uid}")
                 
-                # R6.3B: Construir contexto do Radar se disponível
+                # R6.3C: Construir contexto do Radar com guardrails reforçados
                 radar_context_block = None
                 if radar_uid:
                     try:
                         from shopee_core.radar_audit_context_service import build_radar_audit_context
                         
-                        print(f"[R6.3B] Construindo contexto do Radar...")
+                        print(f"[R6.3C] Construindo contexto do Radar com guardrails...")
                         context = build_radar_audit_context(radar_uid)
                         
                         if context.get("ok"):
-                            # Formatar contexto para o prompt
+                            # Formatar contexto para o prompt com regras rígidas
                             market = context.get("market_summary", {})
                             title_strat = context.get("title_strategy", {})
                             feature_strat = context.get("feature_strategy", {})
                             desc_strat = context.get("description_strategy", {})
                             warnings = context.get("warnings", [])
+                            
+                            # R6.3C: Formatar preços corretamente (R$ XX,XX)
+                            def format_brl(value):
+                                if value is None:
+                                    return "N/A"
+                                return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            
+                            # R6.3C: Separar features recomendadas e off-niche visualmente
+                            recommended = ', '.join(feature_strat.get('recommended_features', [])[:10])
+                            off_niche = ', '.join(feature_strat.get('off_niche_features', []))
                             
                             radar_context_block = f"""
 ═══════════════════════════════════════════════════════════════════
@@ -753,17 +763,20 @@ def render_auditoria():
 RESUMO DO MERCADO:
 - Confiança da análise: {market.get('confidence', 'N/A')}
 - Concorrentes diretos analisados: {market.get('competitor_count', 0)}
-- Faixa de preço: R$ {market.get('price_min', 0):.2f} - R$ {market.get('price_max', 0):.2f}
-- Preço médio: R$ {market.get('price_avg', 0):.2f}
-- Preço mediano: R$ {market.get('price_median', 0):.2f}
+- Faixa de preço: {format_brl(market.get('price_min'))} - {format_brl(market.get('price_max'))}
+- Preço médio: {format_brl(market.get('price_avg'))}
+- Preço mediano: {format_brl(market.get('price_median'))}
 
 ESTRATÉGIA DE TÍTULO:
-- Termos fortes (usar): {', '.join(title_strat.get('strong_terms', [])[:10])}
+- Termos fortes (USAR): {', '.join(title_strat.get('strong_terms', [])[:10])}
 - Termos fracos (evitar): {', '.join(title_strat.get('weak_terms', [])[:5])}
 
 ESTRATÉGIA DE FEATURES:
-- Features recomendadas: {', '.join(feature_strat.get('recommended_features', [])[:10])}
-- Features off-niche (EVITAR): {', '.join(feature_strat.get('off_niche_features', []))}
+✅ FEATURES RECOMENDADAS (usar como diferenciais):
+   {recommended}
+
+❌ FEATURES OFF-NICHE / A EVITAR (NÃO usar como diferenciais):
+   {off_niche}
 
 ESTRATÉGIA DE DESCRIÇÃO:
 - Argumentos comerciais: {', '.join(desc_strat.get('commercial_arguments', [])[:5])}
@@ -771,22 +784,44 @@ ESTRATÉGIA DE DESCRIÇÃO:
 WARNINGS:
 {chr(10).join(f'⚠️ {w}' for w in warnings) if warnings else '(nenhum)'}
 
-INSTRUÇÕES IMPORTANTES:
-1. Use os termos fortes identificados no título e descrição
-2. Destaque as features recomendadas como diferenciais
-3. NÃO mencione ou destaque as features off-niche como vantagens
-4. Se mencionar features off-niche, seja apenas para esclarecer que o produto não é para esse uso
-5. Considere a faixa de preço do mercado para posicionamento
+═══════════════════════════════════════════════════════════════════
+⚠️ REGRAS CRÍTICAS - LEIA COM ATENÇÃO:
+═══════════════════════════════════════════════════════════════════
+
+1. FEATURES OFF-NICHE ({off_niche}):
+   - NÃO podem ser usadas como argumento de venda
+   - NÃO podem ser descritas como foco do mercado
+   - NÃO podem justificar preço, título, descrição ou tags
+   - NÃO podem ser mencionadas como diferenciais ou vantagens
+   - Se mencionar, mencione APENAS como algo que o produto NÃO é para esse uso
+   - NUNCA escreva frases como "o mercado foca em [feature off-niche]"
+
+2. ESTRATÉGIA CORRETA:
+   - Base sua análise nas FEATURES RECOMENDADAS: {recommended}
+   - Use os TERMOS FORTES: {', '.join(title_strat.get('strong_terms', [])[:5])}
+   - Justifique preço com base no nicho correto (features recomendadas)
+   - Destaque apenas as features recomendadas como diferenciais
+
+3. CONFIANÇA DA ANÁLISE:
+   - Confiança atual: {market.get('confidence', 'N/A')}
+   - Se confiança for "medium" ou "low", use linguagem cautelosa:
+     * "os dados sugerem", "a amostra indica", "vale testar"
+     * Evite conclusões absolutas como "o mercado definitivamente..."
+
+4. FORMATAÇÃO DE MOEDA:
+   - SEMPRE use o formato: R$ XX,XX (exemplo: R$ 139,90)
+   - NUNCA use: R XX,XX ou R$ XX.XX
 
 ═══════════════════════════════════════════════════════════════════
 """
-                            print(f"[R6.3B] Contexto do Radar construído: {len(radar_context_block)} caracteres")
-                            print(f"[R6.3B] Off-niche features: {feature_strat.get('off_niche_features', [])}")
+                            print(f"[R6.3C] Contexto do Radar construído: {len(radar_context_block)} caracteres")
+                            print(f"[R6.3C] Features recomendadas: {feature_strat.get('recommended_features', [])[:5]}")
+                            print(f"[R6.3C] Features off-niche: {feature_strat.get('off_niche_features', [])}")
                         else:
-                            print(f"[R6.3B] Erro ao construir contexto: {context.get('error')}")
+                            print(f"[R6.3C] Erro ao construir contexto: {context.get('error')}")
                     
                     except Exception as e:
-                        print(f"[R6.3B] Exceção ao construir contexto do Radar: {e}")
+                        print(f"[R6.3C] Exceção ao construir contexto do Radar: {e}")
                         import traceback
                         traceback.print_exc()
                 
