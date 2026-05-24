@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 import pytest
 from pathlib import Path
@@ -571,7 +572,7 @@ def test_extraction_timeout_raises_extract_timeout_after_25s(mock_collect):
 
 @patch("shopee_core.radar_collector.collect_product_page")
 @patch("shopee_core.radar_collector._persist_collected_assets")
-def test_assets_timeout_raises_assets_timeout_after_30s(mock_persist, mock_collect):
+def test_assets_timeout_does_not_fail_product(mock_persist, mock_collect):
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
@@ -583,10 +584,18 @@ def test_assets_timeout_raises_assets_timeout_after_30s(mock_persist, mock_colle
         "quality": {"ok": True}
     }
     mock_persist.side_effect = TimeoutError("assets_timeout_after_30s")
-    
-    res = run_linked_collection_for_product("own-1", limit=1)
-    assert res["failed"] == 1
-    assert "assets_timeout_after_30s" in res["errors"][0]["error"]
+
+    res = run_linked_collection_for_product("own-1", limit=1, save_assets=True)
+    assert res["failed"] == 0
+    assert res["succeeded"] == 1
+    assert "assets_timeout_after_30s" in res["asset_warnings"][0]["error"]
+
+    with get_connection() as conn:
+        prod = conn.execute("SELECT status, raw_json FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
+        assert prod["status"] == "collected"
+        raw = json.loads(prod["raw_json"])
+        assert raw["raw"]["asset_status"] == "warning"
+        assert raw["raw"]["asset_errors"][0]["error"] == "assets_timeout_after_30s"
 
 @patch("shopee_core.radar_collector.collect_product_page")
 def test_partial_collection_saves_collected(mock_collect):
@@ -623,9 +632,130 @@ def test_assets_failure_does_not_fail_product(mock_persist, mock_collect):
         "quality": {"ok": True}
     }
     mock_persist.return_value = [{"product_uid": "cand", "asset_type": "image", "source_url": "url", "error": "connection refused"}]
-    
-    res = run_linked_collection_for_product("own-1", limit=1)
+
+    res = run_linked_collection_for_product("own-1", limit=1, save_assets=True)
     assert res["succeeded"] == 1
+    assert res["asset_warnings"][0]["error"] == "connection refused"
+    with get_connection() as conn:
+        prod = conn.execute("SELECT status, raw_json FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
+        assert prod["status"] == "collected"
+        raw = json.loads(prod["raw_json"])
+        assert raw["raw"]["asset_status"] == "warning"
+        assert raw["raw"]["asset_errors"][0]["error"] == "connection refused"
+
+@patch("shopee_core.radar_collector.collect_product_page")
+@patch("shopee_core.radar_collector._persist_collected_assets")
+def test_save_assets_false_skips_asset_persistence(mock_persist, mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    mock_collect.return_value = {
+        "url": "https://shopee.com.br/product/1/1",
+        "marketplace": "shopee",
+        "title": "Mochila",
+        "price": 10.0,
+        "image_urls": ["http://img1.jpg"],
+        "quality": {"ok": True}
+    }
+
+    res = run_linked_collection_for_product("own-1", limit=1, save_assets=False)
+
+    assert res["succeeded"] == 1
+    assert res["assets_skipped"] == 1
+    assert res["asset_warnings"][0]["status"] == "skipped"
+    mock_persist.assert_not_called()
+    assert mock_collect.call_args.kwargs["collect_image_urls"] is False
+
+    with get_connection() as conn:
+        prod = conn.execute("SELECT status, raw_json FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
+        assert prod["status"] == "collected"
+        raw = json.loads(prod["raw_json"])
+        assert raw["raw"]["asset_status"] == "skipped"
+
+@patch("shopee_core.radar_collector.collect_product_page")
+@patch("shopee_core.radar_collector._persist_collected_assets")
+def test_assets_timeout_does_not_block_next_url(mock_persist, mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1\nhttps://shopee.com.br/product/2/2")
+    mock_collect.side_effect = [
+        {
+            "url": "https://shopee.com.br/product/1/1",
+            "marketplace": "shopee",
+            "title": "Produto 1",
+            "price": 10.0,
+            "quality": {"ok": True}
+        },
+        {
+            "url": "https://shopee.com.br/product/2/2",
+            "marketplace": "shopee",
+            "title": "Produto 2",
+            "price": 20.0,
+            "quality": {"ok": True}
+        }
+    ]
+    mock_persist.side_effect = [TimeoutError("assets_timeout_after_30s"), []]
+
+    res = run_linked_collection_for_product("own-1", limit=2, save_assets=True)
+
+    assert res["processed"] == 2
+    assert res["succeeded"] == 2
+    assert res["failed"] == 0
+    assert "assets_timeout_after_30s" in res["asset_warnings"][0]["error"]
+
+    with get_connection() as conn:
+        jobs = conn.execute("SELECT status FROM radar_collection_jobs ORDER BY url ASC").fetchall()
+        assert [job["status"] for job in jobs] == ["done", "done"]
+
+@patch("shopee_core.radar_assets_service.download_asset")
+def test_max_images_per_product_limits_asset_downloads(mock_download):
+    import shopee_core.radar_collector as rc
+
+    def fake_download(url, product_uid, asset_type, timeout=30):
+        return {
+            "product_uid": product_uid,
+            "asset_type": asset_type,
+            "source_url": url,
+            "local_path": "fake.jpg",
+            "downloaded": True,
+        }
+
+    mock_download.side_effect = fake_download
+    data = {
+        "marketplace": "mercadolivre",
+        "image_urls": [f"https://img.example.com/{i}.jpg" for i in range(7)],
+        "description_image_urls": ["https://img.example.com/desc.jpg"],
+    }
+
+    assets = rc._persist_collected_assets(
+        "product-1",
+        data,
+        save_assets_to_disk=True,
+        max_images_per_product=5,
+        per_image_timeout=5.0,
+    )
+
+    assert len(assets) == 5
+    assert mock_download.call_count == 5
+    assert all(call.kwargs["timeout"] == 5.0 for call in mock_download.call_args_list)
+
+def test_stale_running_job_with_saved_title_or_price_stays_collected():
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+
+    from datetime import datetime, timedelta
+    old_time = (datetime.utcnow() - timedelta(minutes=15)).isoformat()
+
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE radar_products SET title = 'Mochila salva', price = 90.0 WHERE source_type = 'competitor_candidate'"
+        )
+        conn.execute("UPDATE radar_collection_jobs SET status = 'running', updated_at = ?", (old_time,))
+
+    recovered = mark_stale_running_jobs_as_pending_or_failed(max_age_minutes=10)
+    assert recovered == 1
+
     with get_connection() as conn:
         prod = conn.execute("SELECT status FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
         assert prod["status"] == "collected"

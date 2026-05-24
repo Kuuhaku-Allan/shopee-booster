@@ -376,10 +376,11 @@ def ensure_collection_jobs_for_linked_candidates(own_product_uid: str) -> dict:
                 
     return summary
 
-def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int = 5, save_assets: bool = True, browser_mode: str = "cdp", cdp_url: str | None = None) -> dict:
+def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int = 5, save_assets: bool = False, browser_mode: str = "cdp", cdp_url: str | None = None) -> dict:
     """
     Executa a coleta de candidatos vinculados de forma direta.
     """
+    import sys
     import shopee_core.radar_collector as rc
     from shopee_core.radar_service import (
         mark_job_running,
@@ -390,7 +391,8 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
     )
     init_db()
     
-    if browser_mode == "cdp":
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    if browser_mode == "cdp" and not is_testing:
         from shopee_core.radar_cdp_service import ensure_radar_chrome_ready
         url_cdp = cdp_url or "http://127.0.0.1:9222"
         ready_res = ensure_radar_chrome_ready(url_cdp)
@@ -411,7 +413,10 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
         "succeeded": 0,
         "failed": 0,
         "skipped": 0,
-        "errors": []
+        "errors": [],
+        "assets_saved": 0,
+        "assets_skipped": 0,
+        "asset_warnings": []
     }
     
     from pathlib import Path
@@ -476,6 +481,7 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
                 candidate_uid=product_uid,
                 job_uid=job_uid,
                 url_start_time=url_start_time,
+                collect_image_urls=save_assets,
                 **opts
             )
             
@@ -494,9 +500,16 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
             
             if time.monotonic() - url_start_time > 90:
                 raise TimeoutError("total_per_url_timeout_after_90s")
-            
-            # 4. Salva produto no banco
-            print("[R7.2D] SAVING_DB", flush=True)
+
+            if not save_assets:
+                _annotate_asset_status(
+                    data,
+                    status="skipped",
+                    message="Download de imagens desativado - pulando assets",
+                )
+
+            # 4. Salva produto no banco antes de qualquer asset opcional
+            print("[R7.2E] SAVING_MAIN_DATA", flush=True)
             try:
                 mark_product_collected(product_uid, data)
             except Exception as db_err:
@@ -505,20 +518,53 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
             if time.monotonic() - url_start_time > 90:
                 raise TimeoutError("total_per_url_timeout_after_90s")
             
-            # 5. Salva assets/imagens
+            # 5. Salva assets/imagens como etapa opcional e nao bloqueante
             if save_assets:
-                rc._persist_collected_assets(
-                    product_uid,
-                    data,
-                    save_assets_to_disk=False,
-                    timeout=30.0,
-                    url_start_time=url_start_time
-                )
-                
-            if time.monotonic() - url_start_time > 90:
-                raise TimeoutError("total_per_url_timeout_after_90s")
-            
-            print("[R7.2D] FINALIZING_URL", flush=True)
+                print("[R7.2E] DOWNLOADING_ASSETS", flush=True)
+                asset_errors = []
+                assets_saved = 0
+                try:
+                    assets = rc._persist_collected_assets(
+                        product_uid,
+                        data,
+                        save_assets_to_disk=False,
+                        timeout=30.0,
+                        url_start_time=url_start_time,
+                        max_images_per_product=5,
+                        per_image_timeout=5.0,
+                    )
+                    asset_errors = [asset for asset in assets if asset.get("error")]
+                    assets_saved = len(assets) - len(asset_errors)
+                    res["assets_saved"] += assets_saved
+                except Exception as asset_exc:
+                    asset_errors = [{"error": str(asset_exc), "asset_type": "asset"}]
+
+                if asset_errors:
+                    warning = _asset_warning(product_uid, url, asset_errors, assets_saved)
+                    res["asset_warnings"].append(warning)
+                    print(f"[R7.2E] ASSETS_WARNING candidate={product_uid} error={warning['error']}", flush=True)
+                    _annotate_asset_status(
+                        data,
+                        status="warning",
+                        message=warning["error"],
+                        errors=asset_errors,
+                        assets_saved=assets_saved,
+                    )
+                    try:
+                        mark_product_collected(product_uid, data)
+                    except Exception:
+                        pass
+            else:
+                res["assets_skipped"] += 1
+                res["asset_warnings"].append({
+                    "candidate_product_uid": product_uid,
+                    "url": url,
+                    "status": "skipped",
+                    "error": "save_assets_false",
+                })
+                print("[R7.2E] ASSETS_SKIPPED reason=save_assets_false", flush=True)
+
+            print("[R7.2E] FINALIZING_URL", flush=True)
 
             # 6. Marca job como done
             mark_job_done(job_uid)
@@ -550,6 +596,41 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
             })
             
     return res
+
+
+def _annotate_asset_status(
+    data: dict,
+    status: str,
+    message: str,
+    errors: list[dict] | None = None,
+    assets_saved: int = 0,
+) -> None:
+    raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
+    raw["asset_status"] = status
+    raw["asset_message"] = message
+    raw["assets_saved"] = assets_saved
+    if errors:
+        raw["asset_errors"] = errors
+        data["asset_errors"] = errors
+    data["raw"] = raw
+
+
+def _asset_warning(
+    product_uid: str,
+    url: str,
+    asset_errors: list[dict],
+    assets_saved: int,
+) -> dict:
+    first_error = asset_errors[0] if asset_errors else {}
+    return {
+        "candidate_product_uid": product_uid,
+        "url": url,
+        "status": "warning",
+        "error": str(first_error.get("error") or "asset_error"),
+        "assets_saved": assets_saved,
+        "asset_errors": asset_errors,
+    }
+
 
 def mark_stale_running_jobs_as_pending_or_failed(max_age_minutes: int = 10) -> int:
     """
@@ -586,8 +667,9 @@ def mark_stale_running_jobs_as_pending_or_failed(max_age_minutes: int = 10) -> i
                 (now, job["job_uid"])
             )
             
-            # Se o candidato não tem título ou preço, volta para pending para retentativa limpa
-            if not job["title"] or not job["price"]:
+            # Se nao tem nenhum dado principal, volta para pending para retentativa limpa.
+            # Se titulo ou preco ja foram salvos, preserva como collected.
+            if not job["title"] and job["price"] is None:
                 conn.execute(
                     "UPDATE radar_products SET status = 'pending', updated_at = ? WHERE product_uid = ?",
                     (now, job["product_uid"])
@@ -601,17 +683,18 @@ def mark_stale_running_jobs_as_pending_or_failed(max_age_minutes: int = 10) -> i
             
     return count
 
-def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save_assets: bool = True, browser_mode: str = "cdp", cdp_url: str | None = None, progress_callback = None) -> dict:
+def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save_assets: bool = False, browser_mode: str = "cdp", cdp_url: str | None = None, progress_callback = None) -> dict:
     """
     Coleta os candidatos vinculados ao own_product_uid que possuem jobs pending.
     Em produção/Streamlit, executa a coleta em um subprocesso separado para evitar conflitos de event loop,
     lendo o stdout unbuffered em tempo real e disparando o progress_callback.
     """
     import sys
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
     
     # Se browser_mode for cdp, verifica ou tenta abrir o Chrome do Radar no processo principal
     # para retornar erro imediatamente sem precisar disparar o subprocesso.
-    if browser_mode == "cdp":
+    if browser_mode == "cdp" and not is_testing:
         from shopee_core.radar_cdp_service import ensure_radar_chrome_ready
         url_cdp = cdp_url or "http://127.0.0.1:9222"
         ready_res = ensure_radar_chrome_ready(url_cdp)
@@ -625,7 +708,6 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                 "message": ready_res["message"]
             }
             
-    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
     if is_testing:
         # Recupera jobs running antigos antes
         mark_stale_running_jobs_as_pending_or_failed()
@@ -688,8 +770,14 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                 continue
             stdout_lines.append(line_str)
             
-            if "[R7.2D]" in line_str or "[R7.2C]" in line_str:
-                clean_line = line_str.replace("[R7.2D]", "").replace("[R7.2C]", "").strip()
+            if "[R7.2E]" in line_str or "[R7.2D]" in line_str or "[R7.2C]" in line_str:
+                clean_line = (
+                    line_str
+                    .replace("[R7.2E]", "")
+                    .replace("[R7.2D]", "")
+                    .replace("[R7.2C]", "")
+                    .strip()
+                )
                 
                 # START index=1 total=5 candidate=...
                 if clean_line.startswith("START"):
@@ -729,25 +817,50 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                     state["stage"] = "EXTRACTING_DESC"
                     state["message"] = "Extraindo descrição"
 
-                # EXTRACTING_IMAGES
+                # EXTRACTING_IMAGE_URLS
+                elif clean_line.startswith("EXTRACTING_IMAGE_URLS"):
+                    state["stage"] = "EXTRACTING_IMAGE_URLS"
+                    state["message"] = "Coletando URLs de imagens"
+
+                # EXTRACTING_IMAGES (legacy)
                 elif clean_line.startswith("EXTRACTING_IMAGES"):
-                    state["stage"] = "EXTRACTING_IMAGES"
-                    state["message"] = "Extraindo imagens"
+                    state["stage"] = "EXTRACTING_IMAGE_URLS"
+                    state["message"] = "Coletando URLs de imagens"
 
                 # EXTRACTING
                 elif clean_line.startswith("EXTRACTING"):
                     state["stage"] = "EXTRACTING"
                     state["message"] = "Extraindo dados do produto concorrente"
                     
-                # SAVING_DB
+                # SAVING_MAIN_DATA
+                elif clean_line.startswith("SAVING_MAIN_DATA"):
+                    state["stage"] = "SAVING_MAIN_DATA"
+                    state["message"] = "Salvando dados principais"
+
+                # SAVING_DB (legacy)
                 elif clean_line.startswith("SAVING_DB"):
-                    state["stage"] = "SAVING_DB"
-                    state["message"] = "Salvando no banco"
+                    state["stage"] = "SAVING_MAIN_DATA"
+                    state["message"] = "Salvando dados principais"
 
                 # SAVING
                 elif clean_line.startswith("SAVING"):
                     state["stage"] = "SAVING"
                     state["message"] = "Persistindo dados no banco de dados"
+
+                # DOWNLOADING_ASSETS
+                elif clean_line.startswith("DOWNLOADING_ASSETS"):
+                    state["stage"] = "DOWNLOADING_ASSETS"
+                    state["message"] = "Baixando imagens opcionais"
+
+                # ASSETS_SKIPPED
+                elif clean_line.startswith("ASSETS_SKIPPED") or clean_line.startswith("SKIPPING_ASSETS"):
+                    state["stage"] = "ASSETS_SKIPPED"
+                    state["message"] = "Download de imagens desativado - pulando assets"
+
+                # ASSETS_WARNING
+                elif clean_line.startswith("ASSETS_WARNING"):
+                    state["stage"] = "ASSETS_WARNING"
+                    state["message"] = "Assets tiveram aviso; continuando coleta"
 
                 # FINALIZING_URL
                 elif clean_line.startswith("FINALIZING_URL"):

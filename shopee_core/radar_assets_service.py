@@ -110,7 +110,12 @@ def guess_extension_from_url_or_content_type(url, content_type) -> str:
     return ".bin"
 
 
-def download_asset(url: str, product_uid: str, asset_type: str) -> dict:
+def download_asset(
+    url: str,
+    product_uid: str,
+    asset_type: str,
+    timeout: int | float = 30,
+) -> dict:
     """Download one asset and register its local path in radar_assets."""
     if asset_type not in ASSET_TYPES:
         allowed = ", ".join(sorted(ASSET_TYPES))
@@ -131,7 +136,7 @@ def download_asset(url: str, product_uid: str, asset_type: str) -> dict:
 
     response = requests.get(
         clean_url,
-        timeout=30,
+        timeout=timeout,
         headers={
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

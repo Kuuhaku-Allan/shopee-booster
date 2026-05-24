@@ -3313,17 +3313,27 @@ def render_radar_workflow():
                                 except Exception:
                                     pass
                         st.divider()
+            if res_coleta.get("asset_warnings"):
+                with st.expander("Avisos de imagens/assets", expanded=False):
+                    for warn in res_coleta["asset_warnings"]:
+                        st.markdown(f"**URL:** {warn.get('url', '')}")
+                        st.markdown(f"**Status:** `{warn.get('status', 'warning')}`")
+                        st.markdown(f"**Aviso:** `{warn.get('error', '')}`")
+                        st.divider()
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Jobs Pendentes", summary["jobs_pending"])
     col2.metric("Candidatos Vinculados", summary["candidates"])
     col3.metric("Concorrentes Diretos", summary["competitor_direct"])
     
-    c_lim, c_mode, c_btn = st.columns([1, 1, 2])
+    c_lim, c_mode, c_assets, c_btn = st.columns([1, 1, 2, 2])
     with c_lim:
         limit = st.selectbox("Limite de coleta:", [1, 3, 5, 10], index=2)
     with c_mode:
         browser_mode = st.selectbox("Modo do Navegador:", ["cdp", "persistent"], index=0)
+    with c_assets:
+        save_assets = st.checkbox("Baixar imagens/assets", value=False)
+        st.caption("Recomendado deixar desmarcado durante a coleta inicial. Imagens podem ser baixadas depois.")
     with c_btn:
         st.write("")
         st.write("")
@@ -3390,10 +3400,15 @@ def render_radar_workflow():
                             "SCROLLING": "Fazendo scroll",
                             "EXTRACTING_TITLE_PRICE": "Extraindo título e preço",
                             "EXTRACTING_DESC": "Extraindo descrição",
-                            "EXTRACTING_IMAGES": "Extraindo imagens",
+                            "EXTRACTING_IMAGE_URLS": "Coletando URLs de imagens",
+                            "EXTRACTING_IMAGES": "Coletando URLs de imagens",
                             "EXTRACTING": "Extraindo dados",
-                            "SAVING_DB": "Salvando no banco",
+                            "SAVING_MAIN_DATA": "Salvando dados principais",
+                            "SAVING_DB": "Salvando dados principais",
                             "SAVING": "Salvando no banco",
+                            "DOWNLOADING_ASSETS": "Baixando imagens opcionais",
+                            "ASSETS_SKIPPED": "Download de imagens desativado",
+                            "ASSETS_WARNING": "Aviso nos assets",
                             "FINALIZING_URL": "Finalizando URL",
                             "DONE": "Coleta concluída",
                             "FAILED": "Falha na coleta"
@@ -3417,7 +3432,7 @@ def render_radar_workflow():
                         res_coleta = run_linked_collection_for_product(
                             own_product_uid=selected_uid,
                             limit=limit,
-                            save_assets=True,
+                            save_assets=save_assets,
                             browser_mode=browser_mode,
                             progress_callback=progress_cb
                         )

@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from .radar_browser_service import DEFAULT_CDP_URL, connect_to_cdp_browser
 from .radar_service import (
+    add_product_asset,
     detect_marketplace,
     get_pending_jobs,
     mark_job_done,
@@ -27,7 +28,6 @@ from .radar_service import (
     mark_product_collected,
     mark_product_failed,
     normalize_product_url,
-    save_product_assets,
 )
 
 
@@ -36,6 +36,9 @@ BROWSER_PROFILE_DIR = BASE_DIR / "data" / "browser_profile"
 MAX_PRODUCT_IMAGE_URLS = 20
 MAX_WARNING_IMAGE_URLS = 30
 MAX_ERROR_IMAGE_URLS = 80
+MAX_ASSET_IMAGES_PER_PRODUCT = 5
+ASSET_IMAGE_TIMEOUT_SECONDS = 5.0
+ASSET_TOTAL_TIMEOUT_SECONDS = 30.0
 GENERIC_PRODUCT_TITLES = {
     "mochilas",
     "mochila",
@@ -223,6 +226,7 @@ def collect_product_page(
     candidate_uid: str | None = None,
     job_uid: str | None = None,
     url_start_time: float | None = None,
+    collect_image_urls: bool = True,
 ) -> dict:
     """Open a visible browser, collect one product page and return normalized data."""
     if url_start_time is None:
@@ -302,9 +306,19 @@ def collect_product_page(
 
             print("[R7.2D] EXTRACTING", flush=True)
             if detected_marketplace == "shopee":
-                data = collect_shopee_product(page, canonical_url, url_start_time=url_start_time)
+                data = collect_shopee_product(
+                    page,
+                    canonical_url,
+                    url_start_time=url_start_time,
+                    collect_image_urls=collect_image_urls,
+                )
             else:
-                data = collect_mercadolivre_product(page, canonical_url, url_start_time=url_start_time)
+                data = collect_mercadolivre_product(
+                    page,
+                    canonical_url,
+                    url_start_time=url_start_time,
+                    collect_image_urls=collect_image_urls,
+                )
             data = _finalize_collected_data(data, detected_marketplace)
 
             if time.monotonic() - url_start_time > 90:
@@ -370,7 +384,12 @@ def collect_product_page(
                     pass
 
 
-def collect_shopee_product(page, url: str, url_start_time: float | None = None) -> dict:
+def collect_shopee_product(
+    page,
+    url: str,
+    url_start_time: float | None = None,
+    collect_image_urls: bool = True,
+) -> dict:
     """Collect basic Shopee product data from an already loaded page."""
     extract_start = time.monotonic()
     if url_start_time is None:
@@ -462,9 +481,16 @@ def collect_shopee_product(page, url: str, url_start_time: float | None = None) 
         if time.monotonic() - url_start_time > 90:
             raise TimeoutError("total_per_url_timeout_after_90s")
 
-        current_stage = "Extraindo imagens"
-        print("[R7.2D] EXTRACTING_IMAGES", flush=True)
-        image_urls, video_urls = _collect_media_urls(page)
+        image_urls = []
+        video_urls = []
+        if collect_image_urls:
+            current_stage = "Coletando URLs de imagens"
+            print("[R7.2E] EXTRACTING_IMAGE_URLS", flush=True)
+            image_urls, video_urls = _collect_media_urls(page)
+        else:
+            print("[R7.2E] SKIPPING_ASSETS reason=save_assets_false", flush=True)
+            meta_image = _first_meta(page, ["meta[property='og:image']", "meta[name='twitter:image']"])
+            image_urls = normalize_image_urls([meta_image] if meta_image else [])
         rating_text = _first_text(
             page,
             [
@@ -506,7 +532,12 @@ def collect_shopee_product(page, url: str, url_start_time: float | None = None) 
         raise e
 
 
-def collect_mercadolivre_product(page, url: str, url_start_time: float | None = None) -> dict:
+def collect_mercadolivre_product(
+    page,
+    url: str,
+    url_start_time: float | None = None,
+    collect_image_urls: bool = True,
+) -> dict:
     """Collect deep Mercado Livre product data from an already loaded page."""
     extract_start = time.monotonic()
     if url_start_time is None:
@@ -622,19 +653,28 @@ def collect_mercadolivre_product(page, url: str, url_start_time: float | None = 
         if time.monotonic() - url_start_time > 90:
             raise TimeoutError("total_per_url_timeout_after_90s")
 
-        current_stage = "Extraindo imagens"
-        print("[R7.2D] EXTRACTING_IMAGES", flush=True)
-        image_urls, video_urls = _collect_media_urls(page)
-        gallery_image_urls = (
-            _collect_mercadolivre_gallery_image_urls(page)
-            or json_ld_product.get("image_urls")
-            or []
-        )
-        if gallery_image_urls:
-            image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(gallery_image_urls))
+        image_urls = []
+        video_urls = []
+        description_image_urls = []
+        if collect_image_urls:
+            current_stage = "Coletando URLs de imagens"
+            print("[R7.2E] EXTRACTING_IMAGE_URLS", flush=True)
+            image_urls, video_urls = _collect_media_urls(page)
+            gallery_image_urls = (
+                _collect_mercadolivre_gallery_image_urls(page)
+                or json_ld_product.get("image_urls")
+                or []
+            )
+            if gallery_image_urls:
+                image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(gallery_image_urls))
+            else:
+                image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(image_urls))
+            description_image_urls = filter_product_image_urls(_collect_description_image_urls(page))
         else:
-            image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(image_urls))
-        description_image_urls = filter_product_image_urls(_collect_description_image_urls(page))
+            print("[R7.2E] SKIPPING_ASSETS reason=save_assets_false", flush=True)
+            image_urls = filter_product_image_urls(
+                _normalize_mercadolivre_image_urls(json_ld_product.get("image_urls") or [])
+            )
         attributes = _extract_mercadolivre_attributes(page)
         category_path = _extract_category_path(page)
         variation_labels = _extract_variation_labels(page)
@@ -858,8 +898,10 @@ def _persist_collected_assets(
     product_uid: str,
     data: dict,
     save_assets_to_disk: bool = False,
-    timeout: float = 30.0,
+    timeout: float = ASSET_TOTAL_TIMEOUT_SECONDS,
     url_start_time: float | None = None,
+    max_images_per_product: int = MAX_ASSET_IMAGES_PER_PRODUCT,
+    per_image_timeout: float = ASSET_IMAGE_TIMEOUT_SECONDS,
 ) -> list[dict]:
     start_time = time.monotonic()
 
@@ -868,55 +910,101 @@ def _persist_collected_assets(
 
         assets = []
         seen = set()
+        image_items = _limited_asset_image_items(data, max_images_per_product)
 
-        for image_url in data.get("image_urls") or []:
-            if time.monotonic() - start_time > timeout:
-                raise TimeoutError("assets_timeout_after_30s")
-            if url_start_time and time.monotonic() - url_start_time > 90:
-                raise TimeoutError("total_per_url_timeout_after_90s")
+        for asset_type, image_url in image_items:
+            timeout_error = _asset_timeout_error(
+                product_uid,
+                asset_type,
+                image_url,
+                start_time,
+                timeout,
+                url_start_time,
+            )
+            if timeout_error:
+                assets.append(timeout_error)
+                break
             clean_url = str(image_url or "").strip()
             if not clean_url or clean_url in seen:
                 continue
             seen.add(clean_url)
             try:
-                assets.append(download_asset(clean_url, product_uid, "image"))
+                assets.append(
+                    download_asset(
+                        clean_url,
+                        product_uid,
+                        asset_type,
+                        timeout=per_image_timeout,
+                    )
+                )
             except Exception as exc:
-                assets.append(_asset_download_error(product_uid, "image", clean_url, exc))
-
-        for image_url in data.get("description_image_urls") or []:
-            if time.monotonic() - start_time > timeout:
-                raise TimeoutError("assets_timeout_after_30s")
-            if url_start_time and time.monotonic() - url_start_time > 90:
-                raise TimeoutError("total_per_url_timeout_after_90s")
-            clean_url = str(image_url or "").strip()
-            if not clean_url or clean_url in seen:
-                continue
-            seen.add(clean_url)
-            try:
-                assets.append(download_asset(clean_url, product_uid, "description_image"))
-            except Exception as exc:
-                assets.append(_asset_download_error(product_uid, "description_image", clean_url, exc))
-
-        for video_url in data.get("video_urls") or []:
-            if time.monotonic() - start_time > timeout:
-                raise TimeoutError("assets_timeout_after_30s")
-            if url_start_time and time.monotonic() - url_start_time > 90:
-                raise TimeoutError("total_per_url_timeout_after_90s")
-            clean_url = str(video_url or "").strip()
-            if not clean_url or clean_url in seen:
-                continue
-            seen.add(clean_url)
-            try:
-                assets.append(download_asset(clean_url, product_uid, "video"))
-            except Exception as exc:
-                assets.append(_asset_download_error(product_uid, "video", clean_url, exc))
+                assets.append(_asset_download_error(product_uid, asset_type, clean_url, exc))
         return assets
 
-    return save_product_assets(
-        product_uid,
-        image_urls=data.get("image_urls") or [],
-        video_urls=data.get("video_urls") or [],
-    )
+    assets = []
+    seen = set()
+    try:
+        for asset_type, image_url in _limited_asset_image_items(data, max_images_per_product):
+            timeout_error = _asset_timeout_error(
+                product_uid,
+                asset_type,
+                image_url,
+                start_time,
+                timeout,
+                url_start_time,
+            )
+            if timeout_error:
+                assets.append(timeout_error)
+                break
+            clean_url = str(image_url or "").strip()
+            if not clean_url or clean_url in seen:
+                continue
+            seen.add(clean_url)
+            assets.append(add_product_asset(product_uid, asset_type, source_url=clean_url))
+    except Exception as exc:
+        assets.append(_asset_download_error(product_uid, "image", "", exc))
+
+    return assets
+
+
+def _limited_asset_image_items(data: dict, max_images_per_product: int) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    max_images = max(0, int(max_images_per_product or 0))
+    for image_url in data.get("image_urls") or []:
+        if len(items) >= max_images:
+            break
+        items.append(("image", image_url))
+    if len(items) < max_images:
+        for image_url in data.get("description_image_urls") or []:
+            if len(items) >= max_images:
+                break
+            items.append(("description_image", image_url))
+    return items
+
+
+def _asset_timeout_error(
+    product_uid: str,
+    asset_type: str,
+    source_url: str,
+    start_time: float,
+    timeout: float,
+    url_start_time: float | None,
+) -> dict | None:
+    if time.monotonic() - start_time > timeout:
+        return _asset_download_error(
+            product_uid,
+            asset_type,
+            source_url,
+            TimeoutError("assets_timeout_after_30s"),
+        )
+    if url_start_time and time.monotonic() - url_start_time > 90:
+        return _asset_download_error(
+            product_uid,
+            asset_type,
+            source_url,
+            TimeoutError("total_per_url_timeout_after_90s"),
+        )
+    return None
 
 
 def _asset_download_error(
@@ -1276,6 +1364,8 @@ def _collect_media_urls(page) -> tuple[list[str], list[str]]:
         data = page.evaluate(
             """
             () => {
+                const MAX_IMAGES = 30;
+                const MAX_VIDEOS = 5;
                 const absolutize = (value) => {
                     if (!value) return null;
                     try { return new URL(value.trim(), location.href).href; }
@@ -1284,36 +1374,31 @@ def _collect_media_urls(page) -> tuple[list[str], list[str]]:
                 const images = [];
                 const videos = [];
 
-                document.querySelectorAll('img').forEach((img) => {
+                const pushImage = (value) => {
+                    if (images.length >= MAX_IMAGES) return;
+                    const url = absolutize(value);
+                    if (url) images.push(url);
+                };
+                const pushVideo = (value) => {
+                    if (videos.length >= MAX_VIDEOS) return;
+                    const url = absolutize(value);
+                    if (url) videos.push(url);
+                };
+
+                Array.from(document.images || []).slice(0, MAX_IMAGES).forEach((img) => {
                     [img.currentSrc, img.src, img.getAttribute('data-src'), img.getAttribute('data-lazy')]
-                        .forEach((value) => {
-                            const url = absolutize(value);
-                            if (url) images.push(url);
-                        });
+                        .forEach(pushImage);
 
                     const srcset = img.getAttribute('srcset') || '';
                     srcset.split(',').forEach((part) => {
                         const value = part.trim().split(/\\s+/)[0];
-                        const url = absolutize(value);
-                        if (url) images.push(url);
+                        pushImage(value);
                     });
                 });
 
-                document.querySelectorAll('[style]').forEach((el) => {
-                    const bg = getComputedStyle(el).backgroundImage || '';
-                    const matches = bg.matchAll(/url\\(["']?([^"')]+)["']?\\)/g);
-                    for (const match of matches) {
-                        const url = absolutize(match[1]);
-                        if (url) images.push(url);
-                    }
-                });
-
-                document.querySelectorAll('video, video source').forEach((video) => {
+                Array.from(document.querySelectorAll('video, video source')).slice(0, MAX_VIDEOS).forEach((video) => {
                     [video.currentSrc, video.src, video.getAttribute('src')]
-                        .forEach((value) => {
-                            const url = absolutize(value);
-                            if (url) videos.push(url);
-                        });
+                        .forEach(pushVideo);
                 });
 
                 return { images, videos };
@@ -1339,7 +1424,7 @@ def _collect_description_image_urls(page) -> list[str]:
                     catch (_) { return null; }
                 };
                 const images = [];
-                scope.querySelectorAll('img').forEach((img) => {
+                Array.from(scope.querySelectorAll('img')).slice(0, 10).forEach((img) => {
                     [img.currentSrc, img.src, img.getAttribute('data-src'), img.getAttribute('data-lazy')]
                         .forEach((value) => {
                             const url = absolutize(value);
@@ -1377,7 +1462,9 @@ def _collect_mercadolivre_gallery_image_urls(page) -> list[str]:
                 ];
 
                 selectors.forEach((selector) => {
-                    document.querySelectorAll(selector).forEach((node) => {
+                    if (urls.length >= 20) return;
+                    Array.from(document.querySelectorAll(selector)).slice(0, 20).forEach((node) => {
+                        if (urls.length >= 20) return;
                         if (node.tagName === 'META') {
                             const url = absolutize(node.getAttribute('content'));
                             if (url) urls.push(url);
