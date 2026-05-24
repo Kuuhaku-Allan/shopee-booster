@@ -3249,7 +3249,7 @@ def render_radar_workflow():
         st.caption("Você pode copiar essas sugestões e pesquisar no Mercado Livre ou Shopee:")
         
         # Sugestões simples por token
-        title = prod["title"]
+        title = prod.get("title") or ""
         tokens = [t for t in title.lower().split() if len(t) > 3]
         if len(tokens) >= 2:
             st.code(" ".join(tokens[:3]))
