@@ -235,6 +235,7 @@ def collect_product_page(
     canonical_url = normalize_product_url(url)
     detected_marketplace = marketplace or detect_marketplace(canonical_url)
     browser_mode = _normalize_browser_mode(browser_mode)
+    fast_primary_collection = not collect_image_urls
 
     if detected_marketplace == "unknown":
         raise ValueError(
@@ -321,6 +322,10 @@ def collect_product_page(
                 )
             data = _finalize_collected_data(data, detected_marketplace)
 
+            if fast_primary_collection:
+                print("[R7.2F] FAST_PRIMARY_READY", flush=True)
+                return data
+
             if time.monotonic() - url_start_time > 90:
                 raise TimeoutError("total_per_url_timeout_after_90s")
 
@@ -342,9 +347,19 @@ def collect_product_page(
                         raise TimeoutError("total_per_url_timeout_after_90s")
 
                     if detected_marketplace == "shopee":
-                        data = collect_shopee_product(page, canonical_url, url_start_time=url_start_time)
+                        data = collect_shopee_product(
+                            page,
+                            canonical_url,
+                            url_start_time=url_start_time,
+                            collect_image_urls=collect_image_urls,
+                        )
                     else:
-                        data = collect_mercadolivre_product(page, canonical_url, url_start_time=url_start_time)
+                        data = collect_mercadolivre_product(
+                            page,
+                            canonical_url,
+                            url_start_time=url_start_time,
+                            collect_image_urls=collect_image_urls,
+                        )
                     data = _finalize_collected_data(data, detected_marketplace)
 
             return data
@@ -372,10 +387,9 @@ def collect_product_page(
             raise e
         finally:
             if browser_mode == "cdp":
-                try:
-                    page.close()
-                except Exception:
-                    pass
+                # Closing a CDP tab can hang on busy marketplace pages and block
+                # persistence. Let the Playwright CDP connection drop instead.
+                print("[R7.2F] CDP_PAGE_RELEASED", flush=True)
                 browser = None
             else:
                 try:
@@ -924,6 +938,13 @@ def is_collection_blocked_or_empty(data: dict) -> bool:
     marketplace = data.get("marketplace")
     title = data.get("title")
     raw = data.get("raw") or {}
+    if (
+        isinstance(raw, dict)
+        and raw.get("optional_details_status") == "skipped_fast_primary_collection"
+        and data.get("title")
+    ):
+        return False
+
     raw_text = " ".join(
         str(value or "")
         for value in [

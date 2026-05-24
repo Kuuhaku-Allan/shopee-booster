@@ -25,6 +25,7 @@ from shopee_core.radar_collector import (
     collect_mercadolivre_product,
     collect_pending_jobs,
     collect_product_page,
+    is_collection_blocked_or_empty,
     normalize_image_urls,
     parse_price,
 )
@@ -35,6 +36,7 @@ from shopee_core.radar_service import (
     get_product,
     list_product_assets,
     mark_product_collected,
+    mark_product_failed,
     save_product_assets,
 )
 
@@ -132,6 +134,26 @@ def test_fake_collected_data_saved():
     return True
 
 
+def test_mark_product_collected_clears_previous_rejection_reason():
+    created = add_product_url(
+        f"https://shopee.com.br/product/999/{RUN_ID}clear-rejection",
+        "competitor_candidate",
+    )
+    product_uid = created["product"]["product_uid"]
+
+    failed = mark_product_failed(product_uid, "previous_error")
+    assert failed["rejection_reason"] == "previous_error"
+
+    collected = mark_product_collected(
+        product_uid,
+        _fake_collected_data(created["product"]["canonical_url"]),
+    )
+
+    assert collected["status"] == "collected"
+    assert collected["rejection_reason"] is None
+    return True
+
+
 def test_pending_job_done_after_mock_collection():
     created = add_product_url(
         f"https://produto.mercadolivre.com.br/MLB-{RUN_ID[:8]}-mock-job-_JM",
@@ -176,6 +198,85 @@ def test_mercadolivre_fast_collection_skips_description_details():
     return True
 
 
+def test_collect_product_page_fast_mode_skips_interactive_retry():
+    class FakePage:
+        url = "about:blank"
+
+        def __init__(self):
+            self.close_called = False
+
+        def set_default_timeout(self, _timeout):
+            pass
+
+        def set_default_navigation_timeout(self, _timeout):
+            pass
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.url = url
+
+        def wait_for_timeout(self, _timeout):
+            pass
+
+        def close(self):
+            self.close_called = True
+
+    class FakePlaywrightContext:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_page = FakePage()
+    fast_data = {
+        "url": "https://produto.mercadolivre.com.br/MLB-123-mochila-_JM",
+        "canonical_url": "https://produto.mercadolivre.com.br/MLB-123-mochila-_JM",
+        "marketplace": "mercadolivre",
+        "title": "Mochila Infantil",
+        "price": None,
+        "shop_name": None,
+        "rating": None,
+        "review_count": None,
+        "sold_count": None,
+        "description": None,
+        "image_urls": [],
+        "video_urls": [],
+        "raw": {"optional_details_status": "skipped_fast_primary_collection"},
+    }
+
+    with patch("playwright.sync_api.sync_playwright", return_value=FakePlaywrightContext()), \
+        patch("shopee_core.radar_collector.connect_to_cdp_browser", return_value=(object(), object(), fake_page)), \
+        patch("shopee_core.radar_collector._needs_manual_intervention", return_value=False), \
+        patch("shopee_core.radar_collector.scroll_product_page"), \
+        patch("shopee_core.radar_collector.collect_mercadolivre_product", return_value=fast_data), \
+        patch("shopee_core.radar_collector._needs_interactive_retry", side_effect=AssertionError("interactive retry should be skipped")):
+        data = collect_product_page(
+            fast_data["url"],
+            marketplace="mercadolivre",
+            browser_mode="cdp",
+            collect_image_urls=False,
+        )
+
+    assert data["title"] == "Mochila Infantil"
+    assert data["raw"]["optional_details_status"] == "skipped_fast_primary_collection"
+    assert fake_page.close_called is False
+    return True
+
+
+def test_fast_primary_title_only_is_not_treated_as_empty_collection():
+    data = {
+        "marketplace": "mercadolivre",
+        "title": "Mochila Infantil Escolar",
+        "price": None,
+        "description": None,
+        "image_urls": [],
+        "raw": {"optional_details_status": "skipped_fast_primary_collection"},
+    }
+
+    assert is_collection_blocked_or_empty(data) is False
+    return True
+
+
 if __name__ == "__main__":
     print("\nTESTE R2 - Coletor Assistido por URL\n")
 
@@ -188,8 +289,11 @@ if __name__ == "__main__":
         ("detect_marketplace Mercado Livre", test_detect_marketplace_mercadolivre),
         ("collect_product_page unknown amigavel", test_unknown_marketplace_returns_friendly_error),
         ("integracao fake salva produto/assets", test_fake_collected_data_saved),
+        ("mark_product_collected limpa erro antigo", test_mark_product_collected_clears_previous_rejection_reason),
         ("pending job vira done com coleta mockada", test_pending_job_done_after_mock_collection),
         ("mercadolivre coleta rapida pula descricao", test_mercadolivre_fast_collection_skips_description_details),
+        ("coleta rapida pula retry interativo", test_collect_product_page_fast_mode_skips_interactive_retry),
+        ("coleta rapida com titulo nao e vazia", test_fast_primary_title_only_is_not_treated_as_empty_collection),
     ]
 
     passed = 0

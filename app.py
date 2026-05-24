@@ -3410,6 +3410,8 @@ def render_radar_workflow():
                             "ASSETS_SKIPPED": "Download de imagens desativado",
                             "ASSETS_WARNING": "Aviso nos assets",
                             "SKIPPING_OPTIONAL_DETAILS": "Pulando detalhes opcionais",
+                            "FAST_PRIMARY_READY": "Dados principais coletados",
+                            "CDP_PAGE_RELEASED": "Navegador liberado",
                             "FINALIZING_URL": "Finalizando URL",
                             "DONE": "Coleta concluída",
                             "FAILED": "Falha na coleta"

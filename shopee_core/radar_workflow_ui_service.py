@@ -902,6 +902,16 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                     state["stage"] = "SKIPPING_OPTIONAL_DETAILS"
                     state["message"] = "Coleta rapida: pulando descricao e detalhes opcionais"
 
+                # FAST_PRIMARY_READY
+                elif clean_line.startswith("FAST_PRIMARY_READY"):
+                    state["stage"] = "FAST_PRIMARY_READY"
+                    state["message"] = "Dados principais coletados; preparando salvamento"
+
+                # CDP_PAGE_RELEASED
+                elif clean_line.startswith("CDP_PAGE_RELEASED"):
+                    state["stage"] = "CDP_PAGE_RELEASED"
+                    state["message"] = "Navegador liberado; preparando salvamento"
+
                 # FINALIZING_URL
                 elif clean_line.startswith("FINALIZING_URL"):
                     state["stage"] = "FINALIZING_URL"

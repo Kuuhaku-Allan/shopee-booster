@@ -356,7 +356,8 @@ def mark_product_collected(product_uid: str, data: dict) -> dict:
             """
             UPDATE radar_products
             SET title = ?, price = ?, shop_name = ?, raw_json = ?,
-                status = 'collected', updated_at = ?, collected_at = ?
+                status = 'collected', rejection_reason = NULL,
+                updated_at = ?, collected_at = ?
             WHERE product_uid = ?
             """,
             (
