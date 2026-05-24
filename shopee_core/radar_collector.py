@@ -457,7 +457,7 @@ def collect_shopee_product(
 
         current_stage = "Extraindo descrição"
         print("[R7.2D] EXTRACTING_DESC", flush=True)
-        shop_name = _first_text(
+        shop_name = _first_text_quick(
             page,
             [
                 "[data-testid='shop-name']",
@@ -466,13 +466,11 @@ def collect_shopee_product(
                 "div[class*='shop'] a",
             ],
         )
-        description = _first_text(
+        description = _first_text_quick(
             page,
             [
                 "[data-testid='product-description']",
                 "div[class*='product-detail']",
-                "section:has-text('Descricao')",
-                "section:has-text('Descri')",
             ],
         )
 
@@ -609,24 +607,22 @@ def collect_mercadolivre_product(
 
         current_stage = "Extraindo descrição"
         print("[R7.2D] EXTRACTING_DESC", flush=True)
-        original_price_text = _first_text(
+        original_price_text = _first_text_quick(
             page,
             [
                 ".ui-pdp-price__original-value",
                 ".andes-money-amount--previous",
                 "s.andes-money-amount",
-                "span:has-text('Antes')",
             ],
         )
-        discount_text = _first_text(
+        discount_text = _first_text_quick(
             page,
             [
                 ".andes-money-amount__discount",
                 ".ui-pdp-price__second-line__label",
-                "span:has-text('% OFF')",
             ],
         )
-        shop_name = _first_text(
+        shop_name = _first_text_quick(
             page,
             [
                 ".ui-pdp-seller__header__title",
@@ -636,14 +632,12 @@ def collect_mercadolivre_product(
             ],
         )
         seller_reputation = _extract_seller_reputation(page, body_text)
-        description = _first_text(
+        description = _first_text_quick(
             page,
             [
                 "#description",
                 ".ui-pdp-description",
                 "[data-testid='content']",
-                "section:has-text('Descricao')",
-                "section:has-text('Descri')",
             ],
         )
 
@@ -1311,6 +1305,31 @@ def _first_text(page, selectors: list[str]) -> str | None:
     return None
 
 
+def _first_text_quick(page, selectors: list[str]) -> str | None:
+    try:
+        data = page.evaluate(
+            """
+            (selectors) => {
+                const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+                for (const selector of selectors) {
+                    try {
+                        const node = document.querySelector(selector);
+                        if (!node) continue;
+                        const text = clean(node.innerText || node.textContent || '');
+                        if (text) return text;
+                    } catch (_) {}
+                }
+                return null;
+            }
+            """,
+            selectors,
+        )
+    except Exception:
+        return None
+
+    return _clean_text(data)
+
+
 def _first_meta(page, selectors: list[str]) -> str | None:
     for selector in selectors:
         try:
@@ -1611,13 +1630,12 @@ def _extract_variation_labels(page) -> list[str]:
 
 
 def _extract_seller_reputation(page, body_text: str) -> str | None:
-    reputation = _first_text(
+    reputation = _first_text_quick(
         page,
         [
             ".ui-pdp-seller__reputation-info",
             ".ui-pdp-seller__status-title",
             ".ui-pdp-seller__reputation",
-            "section:has-text('Reputacao')",
         ],
     )
     if reputation:
