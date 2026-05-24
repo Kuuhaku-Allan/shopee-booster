@@ -43,6 +43,7 @@ pyinstaller ^
     --add-data "updater.py;." ^
     --add-data "release_meta.py;." ^
     --add-data "version.txt;." ^
+    --add-data "shopee_core;shopee_core" ^
     --add-data "assets;assets" ^
     --add-data "models;models" ^
     --add-data "%LOCALAPPDATA%\ms-playwright;pw-browsers" ^

@@ -51,7 +51,14 @@ from sentinela_db import RUNTIME_DIR, SENTINELA_LOG_PATH
 
 # Browsers do Playwright — pasta persistente ao lado do .exe
 if getattr(sys, "frozen", False):
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(RUNTIME_DIR, "pw-browsers")
+    runtime_browsers_path = os.path.join(RUNTIME_DIR, "pw-browsers")
+    bundled_browsers_path = os.path.join(BASE_DIR, "pw-browsers")
+    if os.path.exists(runtime_browsers_path):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = runtime_browsers_path
+    elif os.path.exists(bundled_browsers_path):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = bundled_browsers_path
+    else:
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = runtime_browsers_path
 
 
 # ── Estado global ─────────────────────────────────────────────

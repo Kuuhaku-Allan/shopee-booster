@@ -199,6 +199,11 @@ for k, v in _DEFAULTS.items():
         st.session_state[k] = v
 
 
+def _escape_markdown_currency(text):
+    """Avoid Streamlit Markdown treating BRL dollar signs as math delimiters."""
+    return str(text).replace("$", r"\$")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════
@@ -505,7 +510,7 @@ def render_auditoria():
                                 col_p1, col_p2 = st.columns(2)
                                 with col_p1:
                                     st.markdown(f"**Faixa de preço:**")
-                                    st.caption(f"{_fmt_brl(preview['price_min'])} - {_fmt_brl(preview['price_max'])} (média: {_fmt_brl(preview['price_avg'])})")  # noqa
+                                    st.caption(_escape_markdown_currency(f"{_fmt_brl(preview['price_min'])} - {_fmt_brl(preview['price_max'])} (média: {_fmt_brl(preview['price_avg'])})"))  # noqa
                                     
                                     if preview["strong_terms"]:
                                         st.markdown(f"**Termos fortes:**")
@@ -557,7 +562,7 @@ def render_auditoria():
                                     col_p1, col_p2 = st.columns(2)
                                     with col_p1:
                                         st.markdown(f"**Faixa de preço:**")
-                                        st.caption(f"{_fmt_brl2(preview['price_min'])} - {_fmt_brl2(preview['price_max'])} (média: {_fmt_brl2(preview['price_avg'])})")  # noqa
+                                        st.caption(_escape_markdown_currency(f"{_fmt_brl2(preview['price_min'])} - {_fmt_brl2(preview['price_max'])} (média: {_fmt_brl2(preview['price_avg'])})"))  # noqa
                                         
                                         if preview["strong_terms"]:
                                             st.markdown(f"**Termos fortes:**")
@@ -604,7 +609,7 @@ def render_auditoria():
                                 col_p1, col_p2 = st.columns(2)
                                 with col_p1:
                                     st.markdown(f"**Faixa de preço:**")
-                                    st.caption(f"{_fmt_brl3(preview['price_min'])} - {_fmt_brl3(preview['price_max'])} (média: {_fmt_brl3(preview['price_avg'])})")  # noqa
+                                    st.caption(_escape_markdown_currency(f"{_fmt_brl3(preview['price_min'])} - {_fmt_brl3(preview['price_max'])} (média: {_fmt_brl3(preview['price_avg'])})"))  # noqa
                                     
                                     if preview["strong_terms"]:
                                         st.markdown(f"**Termos fortes:**")
@@ -677,14 +682,15 @@ def render_auditoria():
                         title_strat = context.get("title_strategy", {})
                         feature_strat = context.get("feature_strategy", {})
                         warnings = context.get("warnings", [])
+                        from shopee_core.audit_output_formatter import format_brl as _fmt_debug_brl
                         
                         st.markdown("**📊 Resumo do Mercado:**")
                         st.json({
                             "confidence": market.get("confidence"),
                             "competitor_count": market.get("competitor_count"),
-                            "price_min": market.get("price_min"),
-                            "price_avg": market.get("price_avg"),
-                            "price_max": market.get("price_max"),
+                            "price_min": _fmt_debug_brl(market.get("price_min")),
+                            "price_avg": _fmt_debug_brl(market.get("price_avg")),
+                            "price_max": _fmt_debug_brl(market.get("price_max")),
                         })
                         
                         st.markdown("**🏷️ Estratégia de Título:**")
@@ -866,11 +872,11 @@ WARNINGS:
                             # R6.3D: Usar format_brl para garantir R$ XX,XX
                             from shopee_core.audit_output_formatter import format_brl
                             # Linha de resumo
-                            st.caption(
+                            st.caption(_escape_markdown_currency(
                                 f"Confiança: **{preview['confidence']}** | "
                                 f"{preview['direct_count']} concorrentes diretos | "
                                 f"Preço médio: {format_brl(preview['price_avg'])}"
-                            )
+                            ))
                             
                             # Detalhes em expander
                             with st.expander("📊 Ver detalhes do Radar usado"):
@@ -878,7 +884,7 @@ WARNINGS:
                                 
                                 with col_r1:
                                     st.markdown("**Faixa de preço:**")
-                                    st.caption(f"{format_brl(preview['price_min'])} - {format_brl(preview['price_max'])}")
+                                    st.caption(_escape_markdown_currency(f"{format_brl(preview['price_min'])} - {format_brl(preview['price_max'])}"))
                                     
                                     if preview["strong_terms"]:
                                         st.markdown("**Termos fortes:**")
