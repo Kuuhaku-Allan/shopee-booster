@@ -353,10 +353,10 @@ def ensure_collection_jobs_for_linked_candidates(own_product_uid: str) -> dict:
                 if existing_job and existing_job["status"] in ["pending", "running"]:
                     summary["jobs_existing"] += 1
                 else:
-                    # Se o candidato estava failed, reseta o status para pending no banco e limpa last_error
+                    # Se o candidato estava failed, reseta o status para pending no banco
                     if cand["status"] == "failed":
                         conn.execute(
-                            "UPDATE radar_products SET status = 'pending', last_error = NULL, updated_at = ? WHERE product_uid = ?",
+                            "UPDATE radar_products SET status = 'pending', updated_at = ? WHERE product_uid = ?",
                             (now, cand["product_uid"])
                         )
                     

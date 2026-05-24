@@ -255,6 +255,27 @@ def test_ensure_collection_jobs_skips_completed_products():
     assert summary["jobs_created"] == 0
     assert summary["skipped_done"] == 1
 
+def test_ensure_collection_jobs_resets_failed_products():
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    
+    # Simula falha anterior: atualiza produto para status='failed'
+    with get_connection() as conn:
+        conn.execute("UPDATE radar_products SET status = 'failed' WHERE source_type = 'competitor_candidate'")
+        conn.execute("UPDATE radar_collection_jobs SET status = 'failed'")
+        
+    summary = ensure_collection_jobs_for_linked_candidates("own-1")
+    assert summary["jobs_created"] == 1
+    
+    with get_connection() as conn:
+        prod = conn.execute("SELECT status FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
+        assert prod["status"] == "pending"
+        
+        # O último job inserido deve ser pending
+        job = conn.execute("SELECT status FROM radar_collection_jobs ORDER BY created_at DESC LIMIT 1").fetchone()
+        assert job["status"] == "pending"
+
 # 5. Testa o fluxo completo de coleta com sucesso, usando mock de rc.collect_product_page
 @patch("shopee_core.radar_collector.collect_product_page")
 def test_run_linked_collection_with_successful_mock(mock_collect):
