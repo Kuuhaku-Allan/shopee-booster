@@ -204,6 +204,44 @@ def _escape_markdown_currency(text):
     return str(text).replace("$", r"\$")
 
 
+def _save_audit_store_mirror(username, shop_data, products, source_url):
+    if not products:
+        return
+    try:
+        from shopee_core.radar_store_service import save_store_snapshot
+
+        shopid = (shop_data or {}).get("shopid") or (shop_data or {}).get("shop_id")
+        summary = save_store_snapshot(
+            {
+                "shop_uid": str(shopid) if shopid else None,
+                "shop_slug": username,
+                "shop_name": (shop_data or {}).get("name") or username,
+                "marketplace": "shopee",
+                "source_url": source_url,
+            },
+            products,
+            source="auditoria_pro",
+        )
+        print(f"[R7.0] Espelho da loja atualizado: {summary.get('total_received')} produtos")
+        st.caption(f"[R7.0] Espelho da loja atualizado: {summary.get('total_received')} produtos")
+    except Exception as exc:
+        print(f"[R7.0] Falha ao atualizar espelho da loja: {exc}")
+
+
+def _load_audit_store_mirror(username, shop_data=None):
+    try:
+        from shopee_core.radar_store_service import get_cached_store_products
+
+        shopid = (shop_data or {}).get("shopid") or (shop_data or {}).get("shop_id")
+        return get_cached_store_products(
+            shop_uid=str(shopid) if shopid else None,
+            shop_slug=username,
+        )
+    except Exception as exc:
+        print(f"[R7.0] Falha ao ler espelho local do Radar: {exc}")
+        return []
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════
@@ -330,10 +368,28 @@ def render_auditoria():
                 st.session_state.shop_data = d
                 shopid = d.get("shopid") or d.get("shop_id")
                 with st.spinner("Carregando catálogo de produtos..."):
-                    st.session_state.shop_produtos = fetch_shop_products_intercept(username, shopid)
+                    produtos_loja = fetch_shop_products_intercept(username, shopid)
+                if produtos_loja:
+                    _save_audit_store_mirror(username, d, produtos_loja, url_loja)
+                else:
+                    produtos_loja = _load_audit_store_mirror(username, d)
+                    if produtos_loja:
+                        st.info("Usando espelho local do Radar como fonte do catálogo da loja.")
+                st.session_state.shop_produtos = produtos_loja
                 st.rerun()
             else:
-                st.error("Não foi possível carregar os dados da loja.")
+                cached_products = _load_audit_store_mirror(username)
+                if cached_products:
+                    st.session_state.shop_data = {
+                        "name": username,
+                        "username": username,
+                        "source": "radar_store_mirror",
+                    }
+                    st.session_state.shop_produtos = cached_products
+                    st.info("Shopee indisponível agora. Usando espelho local do Radar.")
+                    st.rerun()
+                else:
+                    st.error("Não foi possível carregar os dados da loja.")
 
     # ── Métricas da loja (se carregada) ────────────────────────
     if st.session_state.shop_data:

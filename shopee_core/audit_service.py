@@ -13,9 +13,61 @@ contexto do Streamlit. Essa camada isola esse risco.
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
+log = logging.getLogger("audit_service")
+
 # ── Funções de Auditoria ──────────────────────────────────────────
+
+
+def _load_products_from_store_mirror(
+    username: str,
+    shopid: str | None = None,
+) -> list[dict]:
+    try:
+        from shopee_core.radar_store_service import get_cached_store_products
+
+        return get_cached_store_products(
+            shop_uid=str(shopid) if shopid else None,
+            shop_slug=username,
+        )
+    except Exception as exc:
+        log.warning("[R7.0] Falha ao ler espelho local do Radar: %s", exc)
+        return []
+
+
+def _save_store_mirror(
+    username: str,
+    shop_data: dict,
+    products: list[dict],
+    source_url: str,
+    source: str,
+) -> None:
+    if not products:
+        return
+    try:
+        from shopee_core.radar_store_service import save_store_snapshot
+
+        shopid = shop_data.get("shopid") or shop_data.get("shop_id")
+        summary = save_store_snapshot(
+            {
+                "shop_uid": str(shopid) if shopid else None,
+                "shop_slug": username,
+                "shop_name": shop_data.get("name") or username,
+                "marketplace": "shopee",
+                "source_url": source_url,
+            },
+            products,
+            source=source,
+        )
+        log.info(
+            "[R7.0] Espelho da loja atualizado: %s produtos",
+            summary.get("total_received"),
+        )
+    except Exception as exc:
+        log.warning("[R7.0] Falha ao atualizar espelho da loja: %s", exc)
 
 
 def load_shop_from_url(shop_url: str) -> dict:
@@ -49,6 +101,25 @@ def load_shop_from_url(shop_url: str) -> dict:
     shop_data = shop_raw.get("data", shop_raw) if isinstance(shop_raw, dict) else {}
 
     if not shop_data:
+        cached_products = _load_products_from_store_mirror(username)
+        if cached_products:
+            return {
+                "ok": True,
+                "message": (
+                    f"Loja '{username}' carregada com {len(cached_products)} "
+                    "produto(s) pelo espelho local do Radar."
+                ),
+                "data": {
+                    "username": username,
+                    "shop": {
+                        "name": username,
+                        "username": username,
+                        "source": "radar_store_mirror",
+                    },
+                    "products": cached_products,
+                    "method_used": "radar_store_mirror",
+                },
+            }
         return {
             "ok": False,
             "message": "Não consegui carregar os dados da loja. Verifique a URL.",
@@ -61,6 +132,31 @@ def load_shop_from_url(shop_url: str) -> dict:
     from backend_core import fetch_shop_products_intercept
     products = fetch_shop_products_intercept(username, shopid)
 
+    if products:
+        _save_store_mirror(
+            username=username,
+            shop_data=shop_data,
+            products=products,
+            source_url=shop_url,
+            source="audit_service",
+        )
+    else:
+        cached_products = _load_products_from_store_mirror(username, shopid)
+        if cached_products:
+            return {
+                "ok": True,
+                "message": (
+                    f"Loja '{username}' carregada com {len(cached_products)} "
+                    "produto(s) pelo espelho local do Radar."
+                ),
+                "data": {
+                    "username": username,
+                    "shop": shop_data,
+                    "products": cached_products,
+                    "method_used": "radar_store_mirror",
+                },
+            }
+
     return {
         "ok": True,
         "message": f"Loja '{username}' carregada com {len(products)} produto(s).",
@@ -68,6 +164,7 @@ def load_shop_from_url(shop_url: str) -> dict:
             "username": username,
             "shop": shop_data,
             "products": products,
+            "method_used": "intercept",
         },
     }
 
@@ -93,9 +190,6 @@ def generate_product_optimization(
 
     Retorna AuditResponse-compatível.
     """
-    import logging
-    log = logging.getLogger("audit_service")
-    
     if not product:
         return {
             "ok": False,

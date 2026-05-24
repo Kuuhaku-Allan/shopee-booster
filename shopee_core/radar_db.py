@@ -152,6 +152,49 @@ def init_db() -> None:
         )
 
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS radar_stores (
+                store_uid TEXT PRIMARY KEY,
+                shop_uid TEXT,
+                shop_slug TEXT,
+                shop_name TEXT,
+                marketplace TEXT,
+                source_url TEXT,
+                last_snapshot_at TEXT,
+                last_successful_load_at TEXT,
+                product_count INTEGER DEFAULT 0,
+                raw_json TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS radar_store_products (
+                store_product_uid TEXT PRIMARY KEY,
+                store_uid TEXT NOT NULL,
+                radar_product_uid TEXT,
+                marketplace_product_id TEXT,
+                canonical_url TEXT,
+                title TEXT NOT NULL,
+                price REAL,
+                image_url TEXT,
+                status TEXT,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                last_changed_at TEXT,
+                raw_json TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (store_uid) REFERENCES radar_stores(store_uid),
+                FOREIGN KEY (radar_product_uid) REFERENCES radar_products(product_uid)
+            )
+            """
+        )
+
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_radar_products_source_type "
             "ON radar_products(source_type)"
         )
@@ -202,4 +245,43 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_radar_pattern_reports_created_at "
             "ON radar_pattern_reports(created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_stores_shop_uid "
+            "ON radar_stores(shop_uid)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_stores_shop_slug "
+            "ON radar_stores(shop_slug)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_stores_marketplace "
+            "ON radar_stores(marketplace)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_store_products_store_uid "
+            "ON radar_store_products(store_uid)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_store_products_radar_product_uid "
+            "ON radar_store_products(radar_product_uid)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_store_products_marketplace_product_id "
+            "ON radar_store_products(marketplace_product_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_store_products_canonical_url "
+            "ON radar_store_products(canonical_url)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_store_products_status "
+            "ON radar_store_products(status)"
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_radar_store_products_store_marketplace_id
+            ON radar_store_products(store_uid, marketplace_product_id)
+            WHERE marketplace_product_id IS NOT NULL AND marketplace_product_id != ''
+            """
         )
