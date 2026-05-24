@@ -30,6 +30,7 @@ def teardown_module(module):
 
 def _clear_tables():
     with get_connection() as conn:
+        conn.execute("DELETE FROM radar_assets")
         conn.execute("DELETE FROM radar_candidate_links")
         conn.execute("DELETE FROM radar_collection_jobs")
         conn.execute("DELETE FROM radar_competitor_matches")
@@ -140,6 +141,12 @@ def test_get_radar_queue_summary():
     assert summary2["jobs_pending"] == 0
     assert summary2["candidates"] == 0
 
+from unittest.mock import patch, MagicMock
+from shopee_core.radar_workflow_ui_service import (
+    ensure_collection_jobs_for_linked_candidates,
+    run_linked_collection_for_product
+)
+
 def test_get_competitor_table_for_product_isolates():
     _clear_tables()
     _insert_own_product("own-1")
@@ -148,10 +155,283 @@ def test_get_competitor_table_for_product_isolates():
     
     table = get_competitor_table_for_product("own-1")
     assert len(table) == 1
-    assert table[0]["status"] == "coleta_pendente"
+    assert table[0]["status"] == "pending"
     
     table2 = get_competitor_table_for_product("own-2")
     assert len(table2) == 0
+
+# 1. Valida que diferentes estados de jobs e produtos resultam nos status ingleses corretos
+def test_get_competitor_table_status_mappings():
+    _clear_tables()
+    _insert_own_product("own-1")
+    
+    # Adiciona 4 concorrentes
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/2/2")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/3/3")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/4/4")
+    
+    table = get_competitor_table_for_product("own-1")
+    assert len(table) == 4
+    
+    cand_uids = [r["product_uid"] for r in table]
+    
+    with get_connection() as conn:
+        # cand 0: mantido como pending
+        # cand 1: falha na coleta
+        conn.execute("UPDATE radar_collection_jobs SET status = 'failed', last_error = 'Timeout' WHERE product_uid = ?", (cand_uids[1],))
+        # cand 2: coletado
+        conn.execute("UPDATE radar_products SET status = 'collected', title = 'Coletado' WHERE product_uid = ?", (cand_uids[2],))
+        conn.execute("UPDATE radar_collection_jobs SET status = 'done' WHERE product_uid = ?", (cand_uids[2],))
+        # cand 3: match direto
+        conn.execute("UPDATE radar_products SET status = 'collected', title = 'Match' WHERE product_uid = ?", (cand_uids[3],))
+        conn.execute("UPDATE radar_collection_jobs SET status = 'done' WHERE product_uid = ?", (cand_uids[3],))
+        conn.execute(
+            "INSERT INTO radar_competitor_matches (match_uid, own_product_uid, candidate_product_uid, verdict, relevance_score, created_at, updated_at) VALUES (?, 'own-1', ?, 'competitor_direct', 0.95, '2023-01-01', '2023-01-01')",
+            (uuid.uuid4().hex, cand_uids[3])
+        )
+        
+    table = get_competitor_table_for_product("own-1")
+    statuses = {r["product_uid"]: r["status"] for r in table}
+    
+    assert statuses[cand_uids[0]] == "pending"
+    assert statuses[cand_uids[1]] == "failed"
+    assert statuses[cand_uids[2]] == "collected"
+    assert statuses[cand_uids[3]] == "competitor_direct"
+
+# 2. Testa que a reconciliação cria jobs ausentes para candidatos que precisam de coleta
+def test_ensure_collection_jobs_creates_missing_jobs():
+    _clear_tables()
+    _insert_own_product("own-1")
+    
+    # Cria candidato diretamente sem job de coleta
+    cand_uid = uuid.uuid4().hex
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO radar_products (product_uid, source_type, marketplace, url, status, created_at, updated_at) VALUES (?, 'competitor_candidate', 'shopee', 'https://shopee.com.br/product/1/1', 'pending', '2023', '2023')",
+            (cand_uid,)
+        )
+        conn.execute(
+            "INSERT INTO radar_candidate_links (link_uid, own_product_uid, candidate_product_uid, source, created_at, updated_at) VALUES (?, 'own-1', ?, 'manual_url', '2023', '2023')",
+            (uuid.uuid4().hex, cand_uid)
+        )
+        
+    # Garante que não tem jobs
+    with get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) as c FROM radar_collection_jobs WHERE product_uid = ?", (cand_uid,)).fetchone()["c"] == 0
+        
+    # Reconcilia
+    summary = ensure_collection_jobs_for_linked_candidates("own-1")
+    assert summary["jobs_created"] == 1
+    
+    # Agora deve ter 1 job
+    with get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) as c FROM radar_collection_jobs WHERE product_uid = ?", (cand_uid,)).fetchone()["c"] == 1
+
+# 3. Testa que jobs que já estão pending ou running são ignorados na reconciliação para evitar duplicação
+def test_ensure_collection_jobs_skips_existing_active_jobs():
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    
+    # Roda uma vez e deve ignorar porque ja existe job pending
+    summary = ensure_collection_jobs_for_linked_candidates("own-1")
+    assert summary["jobs_created"] == 0
+    assert summary["jobs_existing"] == 1
+
+# 4. Testa que produtos já coletados com sucesso (status "collected" ou que já têm título) não ganham novos jobs
+def test_ensure_collection_jobs_skips_completed_products():
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    
+    # Atualiza produto para status="collected" e title="Algum produto"
+    with get_connection() as conn:
+        conn.execute("UPDATE radar_products SET status = 'collected', title = 'Concorrente Legal' WHERE source_type = 'competitor_candidate'")
+        # Marca job antigo como done
+        conn.execute("UPDATE radar_collection_jobs SET status = 'done'")
+        
+    summary = ensure_collection_jobs_for_linked_candidates("own-1")
+    assert summary["jobs_created"] == 0
+    assert summary["skipped_done"] == 1
+
+# 5. Testa o fluxo completo de coleta com sucesso, usando mock de rc.collect_product_page
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_run_linked_collection_with_successful_mock(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    
+    # Configura retorno simulado do scraper
+    mock_collect.return_value = {
+        "url": "https://shopee.com.br/product/1/1",
+        "marketplace": "shopee",
+        "title": "Mochila Top",
+        "price": 120.0,
+        "shop_name": "Loja Top",
+        "rating": 4.8,
+        "review_count": 10,
+        "sold_count": 50,
+        "description": "Uma mochila de qualidade",
+        "image_urls": ["http://img1.jpg"],
+        "video_urls": [],
+        "quality": {"ok": True, "quality_score": 1.0, "errors": [], "warnings": []}
+    }
+    
+    res = run_linked_collection_for_product("own-1", limit=5)
+    
+    assert res["processed"] == 1
+    assert res["succeeded"] == 1
+    assert res["failed"] == 0
+    assert len(res["errors"]) == 0
+    
+    # Verifica que o banco de dados foi atualizado
+    with get_connection() as conn:
+        prod = conn.execute("SELECT status, title, price FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
+        assert prod["status"] == "collected"
+        assert prod["title"] == "Mochila Top"
+        assert prod["price"] == 120.0
+        
+        job = conn.execute("SELECT status FROM radar_collection_jobs").fetchone()
+        assert job["status"] == "done"
+
+# 6. Testa que se a coleta retornar bloqueada/vazia, o job e o produto são marcados como falhos
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_run_linked_collection_with_blocked_mock(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    
+    # Simula captcha/bloqueio
+    mock_collect.return_value = {
+        "url": "https://shopee.com.br/product/1/1",
+        "marketplace": "shopee",
+        "title": "Acesse sua conta",
+        "price": None,
+        "quality": {"ok": False, "errors": ["Bloqueio detectado"]}
+    }
+    
+    res = run_linked_collection_for_product("own-1", limit=5)
+    
+    assert res["processed"] == 1
+    assert res["failed"] == 1
+    assert res["succeeded"] == 0
+    assert len(res["errors"]) == 1
+    assert "bloqueada ou incompleta" in res["errors"][0]["error"].lower()
+    
+    with get_connection() as conn:
+        prod = conn.execute("SELECT status FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
+        assert prod["status"] == "failed"
+        
+        job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
+        assert job["status"] == "failed"
+        assert "bloqueada ou incompleta" in job["last_error"].lower()
+
+# 7. Testa que se a qualidade for ruim, o job falha
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_run_linked_collection_with_low_quality_mock(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    
+    # Qualidade ruim sem título ou com erro de qualidade
+    mock_collect.return_value = {
+        "url": "https://shopee.com.br/product/1/1",
+        "marketplace": "shopee",
+        "title": "",
+        "price": None,
+        "quality": {
+            "ok": False,
+            "errors": ["Titulo vazio.", "Preco suspeito."]
+        }
+    }
+    
+    res = run_linked_collection_for_product("own-1", limit=5)
+    
+    assert res["processed"] == 1
+    assert res["failed"] == 1
+    assert "baixa qualidade" in res["errors"][0]["error"].lower()
+    
+    with get_connection() as conn:
+        job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
+        assert job["status"] == "failed"
+        assert "baixa qualidade" in job["last_error"].lower()
+
+# 8. Testa o comportamento com marketplace não suportado
+def test_run_linked_collection_with_unsupported_marketplace():
+    _clear_tables()
+    _insert_own_product("own-1")
+    
+    cand_uid = uuid.uuid4().hex
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO radar_products (product_uid, source_type, marketplace, url, status, created_at, updated_at) VALUES (?, 'competitor_candidate', 'unknown', 'https://unknown.com/1', 'pending', '2023', '2023')",
+            (cand_uid,)
+        )
+        conn.execute(
+            "INSERT INTO radar_candidate_links (link_uid, own_product_uid, candidate_product_uid, source, created_at, updated_at) VALUES (?, 'own-1', ?, 'manual_url', '2023', '2023')",
+            (uuid.uuid4().hex, cand_uid)
+        )
+        conn.execute(
+            "INSERT INTO radar_collection_jobs (job_uid, product_uid, url, job_type, status, created_at, updated_at) VALUES (?, ?, 'https://unknown.com/1', 'product_data', 'pending', '2023', '2023')",
+            (uuid.uuid4().hex, cand_uid)
+        )
+        
+    res = run_linked_collection_for_product("own-1", limit=5)
+    assert res["processed"] == 1
+    assert res["failed"] == 1
+    assert "não suportado" in res["errors"][0]["error"].lower() or "nao tem coletor" in res["errors"][0]["error"].lower() or "unknown" in res["errors"][0]["error"].lower()
+    
+    with get_connection() as conn:
+        job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
+        assert job["status"] == "failed"
+        assert "suportado" in job["last_error"].lower() or "nao tem coletor" in job["last_error"].lower() or "unknown" in job["last_error"].lower()
+
+# 9. Testa o tratamento de exceções durante o download/coleta de página
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_run_linked_collection_exception_handling(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    
+    mock_collect.side_effect = RuntimeError("Playwright connection refused")
+    
+    res = run_linked_collection_for_product("own-1", limit=5)
+    
+    assert res["processed"] == 1
+    assert res["failed"] == 1
+    assert "connection refused" in res["errors"][0]["error"].lower()
+    
+    with get_connection() as conn:
+        job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
+        assert job["status"] == "failed"
+        assert "connection refused" in job["last_error"].lower()
+
+# 10. Valida que o limite de coleta é estritamente respeitado
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_run_linked_collection_limits_concurrency(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1\nhttps://shopee.com.br/product/2/2")
+    
+    mock_collect.return_value = {
+        "url": "https://shopee.com.br/product/1/1",
+        "marketplace": "shopee",
+        "title": "Mochila",
+        "price": 100.0,
+        "quality": {"ok": True}
+    }
+    
+    res = run_linked_collection_for_product("own-1", limit=1)
+    
+    assert res["processed"] == 1
+    assert res["succeeded"] == 1
+    
+    with get_connection() as conn:
+        jobs = conn.execute("SELECT status FROM radar_collection_jobs ORDER BY created_at ASC").fetchall()
+        assert len(jobs) == 2
+        assert jobs[0]["status"] == "done"
+        assert jobs[1]["status"] == "pending"
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

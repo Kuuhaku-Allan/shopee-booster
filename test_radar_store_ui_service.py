@@ -23,6 +23,7 @@ def _setup_db():
         conn.execute("DELETE FROM radar_stores")
         conn.execute("DELETE FROM radar_assets")
         conn.execute("DELETE FROM radar_reviews")
+        conn.execute("DELETE FROM radar_candidate_links")
         conn.execute("DELETE FROM radar_collection_jobs")
         conn.execute("DELETE FROM radar_competitor_matches")
         conn.execute("DELETE FROM radar_pattern_reports")

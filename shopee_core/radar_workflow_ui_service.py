@@ -235,11 +235,11 @@ def get_competitor_table_for_product(own_product_uid: str) -> list[dict]:
         # Consolida verdict
         if not d["verdict"]:
             if d["job_status"] == "pending" or d["job_status"] == "running":
-                d["status"] = "coleta_pendente"
+                d["status"] = "pending"
             elif d["job_status"] == "failed":
-                d["status"] = "falha_coleta"
+                d["status"] = "failed"
             elif d["product_status"] == "collected":
-                d["status"] = "aguardando_classificacao"
+                d["status"] = "collected"
             else:
                 d["status"] = d["product_status"]
         else:
@@ -313,3 +313,163 @@ def run_pattern_analysis_for_product(own_product_uid: str) -> dict:
         return {"ok": True, "report": report}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+def ensure_collection_jobs_for_linked_candidates(own_product_uid: str) -> dict:
+    """
+    Garante que todo candidato vinculado que ainda precisa de dados tenha um job pending.
+    """
+    init_db()
+    
+    summary = {
+        "linked_candidates": 0,
+        "jobs_created": 0,
+        "jobs_existing": 0,
+        "skipped_done": 0
+    }
+    
+    with get_connection() as conn:
+        candidates = conn.execute(
+            """
+            SELECT p.product_uid, p.status, p.url, p.title
+            FROM radar_candidate_links l
+            JOIN radar_products p ON p.product_uid = l.candidate_product_uid
+            WHERE l.own_product_uid = ?
+            """, (own_product_uid,)
+        ).fetchall()
+        
+        summary["linked_candidates"] = len(candidates)
+        now = _now()
+        
+        for cand in candidates:
+            # Se ja tem titulo, pode ser que ja tenha sido coletado e perdeu status?
+            # Mas vamos nos basear no status: pending, failed, ou se title is null
+            if cand["status"] in ["pending", "failed"] or not cand["title"]:
+                # Verifica se ja existe job que não seja failed/done
+                existing_job = conn.execute(
+                    "SELECT status FROM radar_collection_jobs WHERE product_uid = ? ORDER BY created_at DESC LIMIT 1",
+                    (cand["product_uid"],)
+                ).fetchone()
+                
+                if existing_job and existing_job["status"] in ["pending", "running"]:
+                    summary["jobs_existing"] += 1
+                else:
+                    # Cria novo job pending
+                    job_uid = uuid.uuid4().hex
+                    conn.execute(
+                        """
+                        INSERT INTO radar_collection_jobs (job_uid, product_uid, url, job_type, status, created_at, updated_at)
+                        VALUES (?, ?, ?, 'product_data', 'pending', ?, ?)
+                        """,
+                        (job_uid, cand["product_uid"], cand["url"], now, now)
+                    )
+                    summary["jobs_created"] += 1
+            else:
+                summary["skipped_done"] += 1
+                
+    return summary
+
+def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save_assets: bool = True, browser_mode: str = "cdp", cdp_url: str | None = None) -> dict:
+    """
+    Coleta estritamente os candidatos vinculados ao own_product_uid que possuem jobs pending.
+    """
+    import shopee_core.radar_collector as rc
+    from shopee_core.radar_service import (
+        mark_job_running,
+        mark_job_done,
+        mark_job_failed,
+        mark_product_collected,
+        mark_product_failed,
+    )
+    init_db()
+    
+    ensure_collection_jobs_for_linked_candidates(own_product_uid)
+    
+    res = {
+        "processed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "skipped": 0,
+        "errors": []
+    }
+    
+    with get_connection() as conn:
+        # Pega APENAS jobs pendentes dos candidatos vinculados
+        pending_jobs = conn.execute(
+            """
+            SELECT j.*, p.marketplace 
+            FROM radar_collection_jobs j
+            JOIN radar_candidate_links l ON l.candidate_product_uid = j.product_uid
+            JOIN radar_products p ON p.product_uid = j.product_uid
+            WHERE l.own_product_uid = ? AND j.status = 'pending'
+            ORDER BY j.created_at ASC
+            LIMIT ?
+            """, (own_product_uid, limit)
+        ).fetchall()
+    
+    pending_jobs = [dict(j) for j in pending_jobs]
+    
+    for job in pending_jobs:
+        res["processed"] += 1
+        job_uid = job["job_uid"]
+        product_uid = job["product_uid"]
+        url = job["url"]
+        
+        try:
+            # 1. Marca job como running no banco
+            running_job = mark_job_running(job_uid)
+            
+            # 2. Coleta os dados da página abrindo o browser
+            opts = {}
+            if cdp_url:
+                opts["cdp_url"] = cdp_url
+            
+            data = rc.collect_product_page(
+                url=running_job["url"],
+                marketplace=job["marketplace"],
+                browser_mode=browser_mode,
+                **opts
+            )
+            
+            # 3. Validar se a página veio bloqueada ou vazia
+            if rc.is_collection_blocked_or_empty(data):
+                raise RuntimeError(
+                    "Coleta bloqueada ou incompleta. Resolva login/verificacao "
+                    "manualmente e tente novamente."
+                )
+            
+            quality = data.get("quality")
+            if isinstance(quality, dict) and not quality.get("ok"):
+                errors_list = quality.get("errors") or []
+                err_msg = "Coleta de baixa qualidade: " + "; ".join(str(e) for e in errors_list[:4])
+                raise RuntimeError(err_msg)
+            
+            # 4. Salva produto no banco
+            mark_product_collected(product_uid, data)
+            
+            # 5. Salva assets/imagens
+            if save_assets:
+                rc._persist_collected_assets(product_uid, data, save_assets_to_disk=False)
+                
+            # 6. Marca job como done
+            mark_job_done(job_uid)
+            res["succeeded"] += 1
+            
+        except Exception as e:
+            err_msg = str(e)
+            try:
+                mark_product_failed(product_uid, err_msg)
+            except Exception:
+                pass
+            try:
+                mark_job_failed(job_uid, err_msg)
+            except Exception:
+                pass
+                
+            res["failed"] += 1
+            res["errors"].append({
+                "candidate_product_uid": product_uid,
+                "error": err_msg,
+                "url": url
+            })
+            
+    return res

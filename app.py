@@ -3219,7 +3219,7 @@ def render_radar_workflow():
         list_own_products_for_radar, format_own_product_label,
         add_competitor_urls_for_product, get_radar_queue_summary,
         get_competitor_table_for_product, classify_linked_candidates_for_product,
-        run_pattern_analysis_for_product
+        run_pattern_analysis_for_product, run_linked_collection_for_product
     )
     import shopee_core.radar_collector as rc
     import time
@@ -3235,6 +3235,10 @@ def render_radar_workflow():
         format_func=lambda uid: format_own_product_label(next(p for p in products if p["product_uid"] == uid))
     )
     
+    if "last_selected_uid" not in st.session_state or st.session_state["last_selected_uid"] != selected_uid:
+        st.session_state["last_selected_uid"] = selected_uid
+        st.session_state.pop("radar_collection_result", None)
+        
     prod = next(p for p in products if p["product_uid"] == selected_uid)
     
     st.divider()
@@ -3269,6 +3273,20 @@ def render_radar_workflow():
     st.write("##### Fila de Coleta")
     summary = get_radar_queue_summary(selected_uid)
     
+    if "radar_collection_result" in st.session_state:
+        res_coleta = st.session_state["radar_collection_result"]
+        st.info(
+            f"Última Coleta Realizada: Processados: {res_coleta['processed']} | "
+            f"Sucesso: {res_coleta['succeeded']} | "
+            f"Falhas: {res_coleta['failed']} | "
+            f"Ignorados: {res_coleta['skipped']}"
+        )
+        if res_coleta.get("failed", 0) > 0:
+            with st.expander("⚠️ Detalhes das Falhas na Coleta", expanded=True):
+                import pandas as pd
+                df_err = pd.DataFrame(res_coleta["errors"])
+                st.dataframe(df_err[["url", "error"]], use_container_width=True, hide_index=True)
+    
     col1, col2, col3 = st.columns(3)
     col1.metric("Jobs Pendentes", summary["jobs_pending"])
     col2.metric("Candidatos Vinculados", summary["candidates"])
@@ -3287,29 +3305,20 @@ def render_radar_workflow():
                 st.info("Nenhum job pendente para este produto.")
             else:
                 st.warning("A coleta pode abrir o navegador e demorar alguns minutos. Aguarde...")
-                # Chama coleta (loop manual)
-                try:
-                    jobs = rc.get_pending_jobs(limit=limit)
-                    count = 0
-                    for job in jobs:
-                        # Filtrar apenas os que pertencem a esse produto próprio? O script pega todos globais pending.
-                        # Para manter a simplificação e atender R7.2, vamos rodar a coleta genérica de N itens
-                        try:
-                            if job["marketplace"] == "mercadolivre":
-                                rc.collect_mercadolivre_product(job, browser_mode=browser_mode, save_assets=False)
-                                count += 1
-                            elif job["marketplace"] == "shopee":
-                                rc.collect_shopee_product(job, browser_mode=browser_mode, save_assets=False)
-                                count += 1
-                        except Exception as e:
-                            pass
-                    st.success(f"Foram processados {count} jobs com sucesso.")
-                    time.sleep(2)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro na coleta: {e}")
-                    if "cdp" in str(e).lower() or browser_mode == "cdp":
-                        st.info("💡 Chrome CDP não conectado? Rode:\\n`powershell -ExecutionPolicy Bypass -File .\\\\deploy\\\\local\\\\start-radar-chrome.ps1`")
+                with st.spinner("Coletando concorrentes vinculados..."):
+                    try:
+                        res_coleta = run_linked_collection_for_product(
+                            own_product_uid=selected_uid,
+                            limit=limit,
+                            save_assets=True,
+                            browser_mode=browser_mode
+                        )
+                        st.session_state["radar_collection_result"] = res_coleta
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro na coleta: {e}")
+                        if "cdp" in str(e).lower() or browser_mode == "cdp":
+                            st.info("💡 Chrome CDP não conectado? Rode:\n`powershell -ExecutionPolicy Bypass -File .\\deploy\\local\\start-radar-chrome.ps1`")
 
     st.divider()
     c_class, c_rep = st.columns(2)
@@ -3341,6 +3350,18 @@ def render_radar_workflow():
     if not table_data:
         st.info("Nenhum concorrente vinculado a este produto ainda.")
     else:
+        # Traduz os status de inglês (do backend) para português (da UI) de forma transparente
+        STATUS_TRANSLATIONS = {
+            "pending": "coleta_pendente",
+            "failed": "falha_coleta",
+            "collected": "aguardando_classificacao",
+            "competitor_direct": "competitor_direct",
+            "competitor_partial": "competitor_partial",
+            "rejected": "rejected"
+        }
+        for r in table_data:
+            r["status"] = STATUS_TRANSLATIONS.get(r["status"], r["status"])
+
         filter_status = st.selectbox("Filtrar status:", ["Todos", "coleta_pendente", "aguardando_classificacao", "competitor_direct", "competitor_partial", "rejected", "falha_coleta"])
         
         filtered = table_data
