@@ -220,6 +220,8 @@ def collect_product_page(
     browser_channel: str | None = None,
     browser_mode: str = "persistent",
     cdp_url: str = DEFAULT_CDP_URL,
+    candidate_uid: str | None = None,
+    job_uid: str | None = None,
 ) -> dict:
     """Open a visible browser, collect one product page and return normalized data."""
     canonical_url = normalize_product_url(url)
@@ -257,58 +259,93 @@ def collect_product_page(
             )
             page = context.pages[0] if context.pages else context.new_page()
 
+        # Set default Playwright timeouts
+        page.set_default_timeout(10000)
+        page.set_default_navigation_timeout(30000)
+
         try:
             try:
-                page.goto(canonical_url, wait_until="domcontentloaded", timeout=60000)
+                print(f"[R7.2C] OPENING url={canonical_url}", flush=True)
+                page.goto(canonical_url, wait_until="domcontentloaded", timeout=30000)
             except PlaywrightTimeoutError:
-                page.goto(canonical_url, wait_until="load", timeout=60000)
+                page.goto(canonical_url, wait_until="load", timeout=30000)
+
+            print("[R7.2C] LOADED", flush=True)
+
+            # Check 1: immediately after load
+            if _needs_manual_intervention(page):
+                raise RuntimeError("blocked_or_login_required")
 
             if manual_wait_ms > 0:
                 page.wait_for_timeout(manual_wait_ms)
 
+            # Check 2: before scroll
             if _needs_manual_intervention(page):
-                if interactive or browser_mode == "cdp":
-                    _wait_for_manual_confirmation(
-                        page,
-                        _manual_intervention_message(browser_mode),
-                        timeout_seconds=interactive_wait_seconds,
-                    )
-                    _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
-                else:
-                    page.wait_for_timeout(_manual_intervention_seconds() * 1000)
+                raise RuntimeError("blocked_or_login_required")
 
+            print("[R7.2C] SCROLLING", flush=True)
             scroll_product_page(page)
 
+            # Check 3: after scroll
+            if _needs_manual_intervention(page):
+                raise RuntimeError("blocked_or_login_required")
+
+            print("[R7.2C] EXTRACTING", flush=True)
             if detected_marketplace == "shopee":
                 data = collect_shopee_product(page, canonical_url)
             else:
                 data = collect_mercadolivre_product(page, canonical_url)
             data = _finalize_collected_data(data, detected_marketplace)
 
-            if (interactive or browser_mode == "cdp") and _needs_interactive_retry(data):
-                _wait_for_manual_confirmation(
-                    page,
-                    _empty_data_retry_message(browser_mode),
-                    timeout_seconds=interactive_wait_seconds,
-                )
-                _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
-                scroll_product_page(page)
+            # Check 4: after extraction / empty data retry
+            if _needs_manual_intervention(page) or _needs_interactive_retry(data):
+                if _needs_manual_intervention(page):
+                    raise RuntimeError("blocked_or_login_required")
 
-                if detected_marketplace == "shopee":
-                    data = collect_shopee_product(page, canonical_url)
-                else:
-                    data = collect_mercadolivre_product(page, canonical_url)
-                data = _finalize_collected_data(data, detected_marketplace)
+                if interactive or browser_mode == "cdp":
+                    _wait_for_manual_confirmation(
+                        page,
+                        _empty_data_retry_message(browser_mode),
+                        timeout_seconds=interactive_wait_seconds,
+                    )
+                    _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
+                    scroll_product_page(page)
+
+                    if detected_marketplace == "shopee":
+                        data = collect_shopee_product(page, canonical_url)
+                    else:
+                        data = collect_mercadolivre_product(page, canonical_url)
+                    data = _finalize_collected_data(data, detected_marketplace)
 
             return data
+        except Exception as e:
+            # Capture best-effort debug screenshot on failure
+            try:
+                import datetime
+                from pathlib import Path
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                cand_name = candidate_uid if candidate_uid else "unknown"
+                job_name = job_uid if job_uid else "nojob"
+                screenshot_dir = Path("data") / "radar_debug" / "screenshots"
+                screenshot_dir.mkdir(parents=True, exist_ok=True)
+                
+                screenshot_path = screenshot_dir / f"{cand_name}_{job_name}_{ts}.png"
+                page.screenshot(path=str(screenshot_path), timeout=5000)
+                print(f"[R7.2C] SCREENSHOT_SAVED path={screenshot_path}", flush=True)
+                
+                try:
+                    e.screenshot_path = str(screenshot_path)
+                except Exception:
+                    pass
+            except Exception as ss_err:
+                print(f"[R7.2C] SCREENSHOT_ERROR error={ss_err}", flush=True)
+            raise e
         finally:
             if browser_mode == "cdp":
                 try:
                     page.close()
                 except Exception:
                     pass
-                # Do not close the user's Chrome. Leaving the CDP connection to
-                # end with sync_playwright keeps the dedicated profile alive.
                 browser = None
             else:
                 context.close()

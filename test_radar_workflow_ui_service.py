@@ -144,7 +144,8 @@ def test_get_radar_queue_summary():
 from unittest.mock import patch, MagicMock
 from shopee_core.radar_workflow_ui_service import (
     ensure_collection_jobs_for_linked_candidates,
-    run_linked_collection_for_product
+    run_linked_collection_for_product,
+    mark_stale_running_jobs_as_pending_or_failed
 )
 
 def test_get_competitor_table_for_product_isolates():
@@ -453,6 +454,109 @@ def test_run_linked_collection_limits_concurrency(mock_collect):
         assert len(jobs) == 2
         assert jobs[0]["status"] == "done"
         assert jobs[1]["status"] == "pending"
+
+# 11. Testes da Fase R7.2C: Timeouts, recuperação de jobs, cancelamento e bloqueios
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_run_linked_collection_timeout_marks_failed(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1\nhttps://shopee.com.br/product/2/2")
+    
+    # Primeiro mock falha por timeout, segundo Mock tem sucesso
+    mock_collect.side_effect = [
+        TimeoutError("timeout_after_30s"),
+        {
+            "url": "https://shopee.com.br/product/2/2",
+            "marketplace": "shopee",
+            "title": "Produto 2",
+            "price": 120.0,
+            "quality": {"ok": True}
+        }
+    ]
+    
+    res = run_linked_collection_for_product("own-1", limit=2)
+    assert res["processed"] == 2
+    assert res["failed"] == 1
+    assert res["succeeded"] == 1
+    
+    with get_connection() as conn:
+        jobs = conn.execute("SELECT status, last_error FROM radar_collection_jobs ORDER BY url ASC").fetchall()
+        assert jobs[0]["status"] == "failed"
+        assert "timeout_after_30s" in jobs[0]["last_error"]
+        assert jobs[1]["status"] == "done"
+
+def test_stale_running_jobs_resets_candidates():
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1\nhttps://shopee.com.br/product/2/2")
+    
+    from datetime import datetime, timedelta
+    old_time = (datetime.utcnow() - timedelta(minutes=15)).isoformat()
+    now_time = datetime.utcnow().isoformat()
+    
+    with get_connection() as conn:
+        conn.execute("UPDATE radar_collection_jobs SET status = 'running', updated_at = ? WHERE url = 'https://shopee.com.br/product/1/1'", (old_time,))
+        conn.execute("UPDATE radar_collection_jobs SET status = 'running', updated_at = ? WHERE url = 'https://shopee.com.br/product/2/2'", (now_time,))
+        
+    recovered = mark_stale_running_jobs_as_pending_or_failed(max_age_minutes=10)
+    assert recovered == 1
+    
+    with get_connection() as conn:
+        job1 = conn.execute("SELECT status, last_error FROM radar_collection_jobs WHERE url = 'https://shopee.com.br/product/1/1'").fetchone()
+        assert job1["status"] == "failed"
+        assert job1["last_error"] == "stale_running_job_recovered"
+        
+        prod1 = conn.execute("SELECT status FROM radar_products WHERE url = 'https://shopee.com.br/product/1/1'").fetchone()
+        assert prod1["status"] == "pending"
+        
+        job2 = conn.execute("SELECT status FROM radar_collection_jobs WHERE url = 'https://shopee.com.br/product/2/2'").fetchone()
+        assert job2["status"] == "running"
+
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_run_linked_collection_cancellation_marks_skipped(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1\nhttps://shopee.com.br/product/2/2")
+    
+    from pathlib import Path
+    flag_file = Path("data/radar_stop_collection.flag")
+    
+    def simulate_cancel(*args, **kwargs):
+        flag_file.parent.mkdir(parents=True, exist_ok=True)
+        flag_file.write_text("stop")
+        return {
+            "url": "https://shopee.com.br/product/1/1",
+            "marketplace": "shopee",
+            "title": "Produto 1",
+            "price": 50.0,
+            "quality": {"ok": True}
+        }
+    
+    mock_collect.side_effect = simulate_cancel
+    
+    res = run_linked_collection_for_product("own-1", limit=2)
+    assert res["processed"] == 1
+    assert res["succeeded"] == 1
+    assert res["skipped"] == 1
+    assert not flag_file.exists()
+
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_run_linked_collection_blocked_login_required(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    
+    mock_collect.side_effect = RuntimeError("blocked_or_login_required")
+    
+    res = run_linked_collection_for_product("own-1", limit=1)
+    assert res["processed"] == 1
+    assert res["failed"] == 1
+    assert res["errors"][0]["error"] == "blocked_or_login_required"
+    
+    with get_connection() as conn:
+        job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
+        assert job["status"] == "failed"
+        assert job["last_error"] == "blocked_or_login_required"
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

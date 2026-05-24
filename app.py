@@ -3296,11 +3296,21 @@ def render_radar_workflow():
                 f"Falhas: {res_coleta['failed']} | "
                 f"Ignorados: {res_coleta['skipped']}"
             )
-            if res_coleta.get("failed", 0) > 0:
+            if res_coleta.get("errors"):
                 with st.expander("⚠️ Detalhes das Falhas na Coleta", expanded=True):
-                    import pandas as pd
-                    df_err = pd.DataFrame(res_coleta["errors"])
-                    st.dataframe(df_err[["url", "error"]], use_container_width=True, hide_index=True)
+                    for err in res_coleta["errors"]:
+                        st.markdown(f"**URL:** {err['url']}")
+                        st.markdown(f"**Erro:** `{err['error']}`")
+                        ss_path = err.get("screenshot_path")
+                        if ss_path:
+                            from pathlib import Path
+                            if Path(ss_path).exists():
+                                st.markdown(f"**Screenshot de Depuração:**")
+                                try:
+                                    st.image(str(Path(ss_path).resolve()))
+                                except Exception:
+                                    pass
+                        st.divider()
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Jobs Pendentes", summary["jobs_pending"])
@@ -3347,18 +3357,54 @@ def render_radar_workflow():
                         time.sleep(1.0)
                         
                     st.warning("A coleta pode abrir o navegador e demorar alguns minutos. Aguarde...")
-                    with st.spinner("Coletando concorrentes vinculados..."):
+                    
+                    # Placeholders para progresso
+                    p_info = st.empty()
+                    p_log = st.empty()
+                    p_bar = st.progress(0.0)
+                    
+                    # Limpa flag de cancelamento anterior
+                    from pathlib import Path
+                    flag_file = Path("data/radar_stop_collection.flag")
+                    if flag_file.exists():
                         try:
-                            res_coleta = run_linked_collection_for_product(
-                                own_product_uid=selected_uid,
-                                limit=limit,
-                                save_assets=True,
-                                browser_mode=browser_mode
-                            )
-                            st.session_state["radar_collection_result"] = res_coleta
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro na coleta: {e}")
+                            flag_file.unlink()
+                        except Exception:
+                            pass
+                            
+                    total_jobs = min(limit, summary["jobs_pending"])
+                    
+                    def progress_cb(state_dict):
+                        idx = state_dict.get("index", 0)
+                        tot = state_dict.get("total", total_jobs)
+                        url = state_dict.get("url", "")
+                        msg = state_dict.get("message", "")
+                        
+                        if tot > 0:
+                            p_bar.progress(min(1.0, idx / tot))
+                        p_info.markdown(f"**Coletando {idx}/{tot}**\n\n**URL:** `{url}`")
+                        p_log.text(f"Etapa: {msg}")
+                        
+                    # Botão de cancelamento
+                    if st.button("Cancelar após URL atual", key="cancel_collection_btn", use_container_width=True):
+                        try:
+                            Path("data/radar_stop_collection.flag").write_text("stop")
+                        except Exception:
+                            pass
+                        st.info("Cancelamento solicitado. A coleta parará após concluir a URL atual.")
+                        
+                    try:
+                        res_coleta = run_linked_collection_for_product(
+                            own_product_uid=selected_uid,
+                            limit=limit,
+                            save_assets=True,
+                            browser_mode=browser_mode,
+                            progress_callback=progress_cb
+                        )
+                        st.session_state["radar_collection_result"] = res_coleta
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro na coleta: {e}")
 
     st.divider()
     c_class, c_rep = st.columns(2)
