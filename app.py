@@ -204,7 +204,18 @@ def _escape_markdown_currency(text):
     return str(text).replace("$", r"\$")
 
 
+def _is_force_fallback_app() -> bool:
+    """R7.0A: Verifica se SHOPEE_FORCE_RADAR_STORE_FALLBACK esta ativo.
+
+    Aceita (case insensitive): true, 1, yes, sim
+    Por padrao e False. Apenas para teste/debug.
+    """
+    raw = os.environ.get("SHOPEE_FORCE_RADAR_STORE_FALLBACK", "").strip().lower()
+    return raw in {"true", "1", "yes", "sim"}
+
+
 def _save_audit_store_mirror(username, shop_data, products, source_url):
+    """Salva snapshot no espelho local. Nunca chamado em modo force-fallback."""
     if not products:
         return
     try:
@@ -222,21 +233,27 @@ def _save_audit_store_mirror(username, shop_data, products, source_url):
             products,
             source="auditoria_pro",
         )
-        print(f"[R7.0] Espelho da loja atualizado: {summary.get('total_received')} produtos")
-        st.caption(f"[R7.0] Espelho da loja atualizado: {summary.get('total_received')} produtos")
+        store_uid = summary.get("store_uid", "?")
+        total = summary.get("total_received", 0)
+        print(f"[R7.0] Espelho da loja atualizado: store_uid={store_uid} produtos={total}")
+        st.caption(f"[R7.0] Espelho da loja atualizado: store_uid={store_uid} produtos={total}")
     except Exception as exc:
         print(f"[R7.0] Falha ao atualizar espelho da loja: {exc}")
 
 
 def _load_audit_store_mirror(username, shop_data=None):
+    """Carrega produtos do espelho local (leitura apenas)."""
     try:
         from shopee_core.radar_store_service import get_cached_store_products
 
         shopid = (shop_data or {}).get("shopid") or (shop_data or {}).get("shop_id")
-        return get_cached_store_products(
+        cached = get_cached_store_products(
             shop_uid=str(shopid) if shopid else None,
             shop_slug=username,
         )
+        if not cached:
+            print(f"[R7.0] Nenhum espelho local encontrado para shop_slug={username} shop_uid={shopid or '?'}")
+        return cached
     except Exception as exc:
         print(f"[R7.0] Falha ao ler espelho local do Radar: {exc}")
         return []
@@ -360,36 +377,60 @@ def render_auditoria():
             st.error("URL inválida. Use o formato: shopee.com.br/nome_da_loja")
         else:
             username = resolved["username"]
-            with st.spinner("Abrindo Shopee e interceptando dados... (30-60s)"):
-                shop_raw = fetch_shop_info(username)
 
-            d = shop_raw.get("data", shop_raw)
-            if d:
-                st.session_state.shop_data = d
-                shopid = d.get("shopid") or d.get("shop_id")
-                with st.spinner("Carregando catálogo de produtos..."):
-                    produtos_loja = fetch_shop_products_intercept(username, shopid)
-                if produtos_loja:
-                    _save_audit_store_mirror(username, d, produtos_loja, url_loja)
-                else:
-                    produtos_loja = _load_audit_store_mirror(username, d)
-                    if produtos_loja:
-                        st.info("Usando espelho local do Radar como fonte do catálogo da loja.")
-                st.session_state.shop_produtos = produtos_loja
-                st.rerun()
-            else:
+            # -- R7.0A: modo de teste — força espelho local, sem chamar Shopee --
+            if _is_force_fallback_app():
+                print(f"[R7.0] SHOPEE_FORCE_RADAR_STORE_FALLBACK ativo — pulando Shopee (shop_slug={username})")
+                st.warning("⚠️ **Modo debug:** SHOPEE_FORCE_RADAR_STORE_FALLBACK ativo — usando espelho local.")
                 cached_products = _load_audit_store_mirror(username)
                 if cached_products:
+                    print(f"[R7.0] Usando espelho local do Radar como fallback: shop_slug={username} produtos={len(cached_products)}")
                     st.session_state.shop_data = {
                         "name": username,
                         "username": username,
-                        "source": "radar_store_mirror",
+                        "source": "espelho local do Radar",
                     }
                     st.session_state.shop_produtos = cached_products
-                    st.info("Shopee indisponível agora. Usando espelho local do Radar.")
+                    st.info(f"✅ Espelho local do Radar: {len(cached_products)} produto(s) carregados para '{username}'.")
                     st.rerun()
                 else:
-                    st.error("Não foi possível carregar os dados da loja.")
+                    print(f"[R7.0] Nenhum espelho local encontrado para shop_slug={username} (fallback forçado ativo)")
+                    st.error(
+                        f"Nenhum espelho local encontrado para '{username}'. "
+                        "Execute uma auditoria normal primeiro para criar o espelho."
+                    )
+            else:
+                # -- Fluxo normal: carrega dados da loja via Shopee/Playwright --
+                with st.spinner("Abrindo Shopee e interceptando dados... (30-60s)"):
+                    shop_raw = fetch_shop_info(username)
+
+                d = shop_raw.get("data", shop_raw)
+                if d:
+                    st.session_state.shop_data = d
+                    shopid = d.get("shopid") or d.get("shop_id")
+                    with st.spinner("Carregando catálogo de produtos..."):
+                        produtos_loja = fetch_shop_products_intercept(username, shopid)
+                    if produtos_loja:
+                        _save_audit_store_mirror(username, d, produtos_loja, url_loja)
+                    else:
+                        produtos_loja = _load_audit_store_mirror(username, d)
+                        if produtos_loja:
+                            st.info("Usando espelho local do Radar como fonte do catálogo da loja.")
+                    st.session_state.shop_produtos = produtos_loja
+                    st.rerun()
+                else:
+                    cached_products = _load_audit_store_mirror(username)
+                    if cached_products:
+                        st.session_state.shop_data = {
+                            "name": username,
+                            "username": username,
+                            "source": "espelho local do Radar",
+                        }
+                        st.session_state.shop_produtos = cached_products
+                        st.info("Shopee indisponível agora. Usando espelho local do Radar.")
+                        st.rerun()
+                    else:
+                        st.error("Não foi possível carregar os dados da loja.")
 
     # ── Métricas da loja (se carregada) ────────────────────────
     if st.session_state.shop_data:

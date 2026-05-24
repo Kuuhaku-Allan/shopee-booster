@@ -261,8 +261,118 @@ def test_find_radar_product_for_store_product():
     return True
 
 
+# ── R7.0A: Testes de fallback forçado (SHOPEE_FORCE_RADAR_STORE_FALLBACK) ─
+
+
+def _with_force_fallback(value: str = "true"):
+    """Context manager que ativa/desativa a env var de force fallback."""
+    import contextlib
+    import os
+
+    @contextlib.contextmanager
+    def _ctx():
+        old = os.environ.get("SHOPEE_FORCE_RADAR_STORE_FALLBACK")
+        try:
+            os.environ["SHOPEE_FORCE_RADAR_STORE_FALLBACK"] = value
+            yield
+        finally:
+            if old is None:
+                os.environ.pop("SHOPEE_FORCE_RADAR_STORE_FALLBACK", None)
+            else:
+                os.environ["SHOPEE_FORCE_RADAR_STORE_FALLBACK"] = old
+
+    return _ctx()
+
+
+def test_force_fallback_returns_cache_when_exists():
+    """R7.0A: env var ativa + cache preenchido → retorna produtos do espelho."""
+    import os
+    from shopee_core.audit_service import _is_force_fallback
+
+    # Confirma que o helper lê a env var corretamente
+    for val in ("true", "1", "yes", "sim", "TRUE", "SIM", "Yes"):
+        with _with_force_fallback(val):
+            assert _is_force_fallback(), f"_is_force_fallback() deveria ser True para '{val}'"
+
+    # Salvar espelho antes
+    store = _store("ff-cache")
+    save_store_snapshot(store, [_product("FF01", "Mochila FF", 77)], source="test")
+
+    # Carregar com env var ativa
+    with _with_force_fallback("true"):
+        assert _is_force_fallback()
+        cached = get_cached_store_products(shop_slug=store["shop_slug"])
+
+    assert len(cached) == 1
+    assert cached[0]["title"] == "Mochila FF"
+    assert cached[0]["source"] == "radar_store_mirror"
+    return True
+
+
+def test_force_fallback_returns_empty_friendly_when_no_cache():
+    """R7.0A: env var ativa + sem cache → lista vazia, sem excecao."""
+    import os
+    from shopee_core.audit_service import _is_force_fallback
+
+    with _with_force_fallback("true"):
+        assert _is_force_fallback()
+        cached = get_cached_store_products(shop_slug=f"loja-inexistente-{RUN_ID}")
+
+    # Nao deve lancar excecao e deve retornar lista vazia
+    assert cached == []
+    return True
+
+
+def test_force_fallback_env_false_by_default():
+    """R7.0A: sem a env var, _is_force_fallback() retorna False."""
+    from shopee_core.audit_service import _is_force_fallback
+    import os
+
+    os.environ.pop("SHOPEE_FORCE_RADAR_STORE_FALLBACK", None)
+    assert not _is_force_fallback(), "_is_force_fallback() deve ser False por padrao"
+    return True
+
+
+def test_force_fallback_save_snapshot_not_called_when_forced():
+    """R7.0A: em modo force-fallback, nao deve salvar snapshot (so leitura)."""
+    # Este teste valida que get_cached_store_products nao altera o banco
+    store = _store("ff-nosave")
+    # Nao salvar nada antes
+    with _with_force_fallback("true"):
+        cached_before = get_cached_store_products(shop_slug=store["shop_slug"])
+    # Deve estar vazio — force fallback nao criou nada
+    assert cached_before == []
+
+    # Agora salvar manualmente (fora do fallback)
+    save_store_snapshot(store, [_product("FS01", "Produto Salvo Normal", 55)], source="test")
+    with _with_force_fallback("true"):
+        cached_after = get_cached_store_products(shop_slug=store["shop_slug"])
+    # Agora deve retornar o produto salvo
+    assert len(cached_after) == 1
+    return True
+
+
+def test_force_fallback_accepts_multiple_truthy_values():
+    """R7.0A: env var aceita true, 1, yes, sim (e variantes de case)."""
+    from shopee_core.audit_service import _is_force_fallback
+    import os
+
+    truthy = ["true", "1", "yes", "sim", "TRUE", "YES", "SIM", "True", "Yes"]
+    falsy = ["false", "0", "no", "nao", "", "off"]
+
+    for val in truthy:
+        with _with_force_fallback(val):
+            assert _is_force_fallback(), f"Esperado True para '{val}'"
+
+    for val in falsy:
+        with _with_force_fallback(val):
+            assert not _is_force_fallback(), f"Esperado False para '{val}'"
+
+    return True
+
+
 if __name__ == "__main__":
-    print("\nTESTE R7.0 - Espelho da Loja no Radar\n")
+    print("\nTESTE R7.0 + R7.0A - Espelho da Loja no Radar\n")
 
     tests = [
         ("upsert_store cria loja", test_upsert_store_creates_store),
@@ -276,6 +386,12 @@ if __name__ == "__main__":
         ("diff detecta alteracao de preco", test_diff_store_snapshot_detects_price_change),
         ("cache vazio nao quebra", test_empty_cache_does_not_break),
         ("find_radar_product_for_store_product vincula Radar", test_find_radar_product_for_store_product),
+        # R7.0A: Testes de fallback forçado
+        ("[R7.0A] force_fallback retorna cache quando existe", test_force_fallback_returns_cache_when_exists),
+        ("[R7.0A] force_fallback retorna vazio amigavel sem cache", test_force_fallback_returns_empty_friendly_when_no_cache),
+        ("[R7.0A] force_fallback False por padrao", test_force_fallback_env_false_by_default),
+        ("[R7.0A] force_fallback nao salva snapshot (so leitura)", test_force_fallback_save_snapshot_not_called_when_forced),
+        ("[R7.0A] force_fallback aceita true/1/yes/sim", test_force_fallback_accepts_multiple_truthy_values),
     ]
 
     passed = 0
@@ -286,6 +402,8 @@ if __name__ == "__main__":
             print(f"PASS - {name}")
         except Exception as exc:
             print(f"FAIL - {name}: {exc}")
+            import traceback
+            traceback.print_exc()
             raise
 
     print(f"\nTotal: {passed}/{len(tests)} testes passaram")

@@ -4,6 +4,8 @@ Inspect a store mirror saved in radar.db.
 
 Usage:
     python scripts/radar_inspect_store.py --shop-uid totalmenteseu
+    python scripts/radar_inspect_store.py --shop-uid totalmenteseu --show-raw
+    python scripts/radar_inspect_store.py --shop-uid totalmenteseu --limit 20
 """
 
 from __future__ import annotations
@@ -46,12 +48,54 @@ def _find_store(identifier: str, marketplace: str = "shopee") -> dict | None:
         return dict(row) if row else None
 
 
+def _get_product_details(store_uid: str, limit: int, include_removed: bool = True) -> list[dict]:
+    """Retorna detalhes completos de produtos do espelho, incluindo source_type do radar."""
+    init_db()
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT sp.store_product_uid,
+                   sp.marketplace_product_id,
+                   sp.title,
+                   sp.price,
+                   sp.image_url,
+                   sp.status AS cache_status,
+                   sp.first_seen_at,
+                   sp.last_seen_at,
+                   sp.last_changed_at,
+                   sp.updated_at,
+                   sp.radar_product_uid,
+                   sp.canonical_url,
+                   sp.raw_json,
+                   p.source_type AS radar_source_type,
+                   p.status AS radar_status,
+                   p.collected_at
+            FROM radar_store_products sp
+            LEFT JOIN radar_products p ON p.product_uid = sp.radar_product_uid
+            WHERE sp.store_uid = ?
+            ORDER BY COALESCE(sp.last_seen_at, sp.updated_at, sp.created_at) DESC
+            LIMIT ?
+            """,
+            (store_uid, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _last_source(store: dict) -> str | None:
+    try:
+        raw = json.loads(store.get("raw_json") or "{}")
+        return raw.get("last_source") or raw.get("last_summary", {}).get("source")
+    except Exception:
+        return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Inspeciona espelho de loja salvo no Radar.")
     parser.add_argument("--shop-uid", default=None, help="store_uid, shop_uid ou slug da loja.")
     parser.add_argument("--store-uid", default=None)
     parser.add_argument("--marketplace", default="shopee")
-    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--limit", type=int, default=10, help="Número máximo de produtos a exibir.")
+    parser.add_argument("--show-raw", action="store_true", help="Incluir raw_json de cada produto.")
     args = parser.parse_args()
 
     identifier = args.store_uid or args.shop_uid
@@ -76,9 +120,10 @@ def main() -> int:
         return 1
 
     status = get_store_snapshot_status(store["store_uid"])
-    products = get_cached_store_products(store_uid=store["store_uid"], include_removed=True)
-    latest_products = products[: max(1, args.limit)]
+    products = _get_product_details(store["store_uid"], limit=args.limit)
+    last_src = _last_source(store)
 
+    # Monta saída detalhada
     output = {
         "ok": True,
         "db_path": str(DB_PATH),
@@ -89,18 +134,38 @@ def main() -> int:
             "shop_name": store.get("shop_name"),
             "marketplace": store.get("marketplace"),
             "source_url": store.get("source_url"),
+            "last_snapshot_at": store.get("last_snapshot_at"),
+            "last_successful_load_at": store.get("last_successful_load_at"),
+            "created_at": store.get("created_at"),
+            "updated_at": store.get("updated_at"),
         },
-        "status": status,
+        "status": {
+            "total_products": status.get("total_products"),
+            "active": status.get("active"),
+            "changed": status.get("changed"),
+            "missing": status.get("missing"),
+            "removed": status.get("removed"),
+            "cache_available": status.get("cache_available"),
+            "counts_by_status": status.get("counts_by_status"),
+        },
+        "last_source": last_src,
         "latest_products": [
             {
-                "title": item.get("title") or item.get("name"),
+                "title": item.get("title"),
                 "price": item.get("price"),
-                "status": item.get("cache_status"),
+                "cache_status": item.get("cache_status"),
                 "marketplace_product_id": item.get("marketplace_product_id"),
-                "radar_product_uid": item.get("radar_product_uid"),
                 "canonical_url": item.get("canonical_url"),
+                "radar_product_uid": item.get("radar_product_uid"),
+                "radar_source_type": item.get("radar_source_type"),
+                "radar_status": item.get("radar_status"),
+                "first_seen_at": item.get("first_seen_at"),
+                "last_seen_at": item.get("last_seen_at"),
+                "last_changed_at": item.get("last_changed_at"),
+                "updated_at": item.get("updated_at"),
+                **({"raw_json": json.loads(item.get("raw_json") or "{}")} if args.show_raw else {}),
             }
-            for item in latest_products
+            for item in products
         ],
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
