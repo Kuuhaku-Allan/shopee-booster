@@ -153,6 +153,22 @@ def init_db() -> None:
 
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS radar_candidate_links (
+                link_uid TEXT PRIMARY KEY,
+                own_product_uid TEXT NOT NULL,
+                candidate_product_uid TEXT NOT NULL,
+                source TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(own_product_uid, candidate_product_uid),
+                FOREIGN KEY (own_product_uid) REFERENCES radar_products(product_uid),
+                FOREIGN KEY (candidate_product_uid) REFERENCES radar_products(product_uid)
+            )
+            """
+        )
+
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS radar_stores (
                 store_uid TEXT PRIMARY KEY,
                 shop_uid TEXT,
@@ -241,6 +257,14 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_radar_pattern_reports_own_product_uid "
             "ON radar_pattern_reports(own_product_uid)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_candidate_links_own_product_uid "
+            "ON radar_candidate_links(own_product_uid)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_radar_candidate_links_candidate_product_uid "
+            "ON radar_candidate_links(candidate_product_uid)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_radar_pattern_reports_created_at "
