@@ -3275,17 +3275,30 @@ def render_radar_workflow():
     
     if "radar_collection_result" in st.session_state:
         res_coleta = st.session_state["radar_collection_result"]
-        st.info(
-            f"Última Coleta Realizada: Processados: {res_coleta['processed']} | "
-            f"Sucesso: {res_coleta['succeeded']} | "
-            f"Falhas: {res_coleta['failed']} | "
-            f"Ignorados: {res_coleta['skipped']}"
-        )
-        if res_coleta.get("failed", 0) > 0:
-            with st.expander("⚠️ Detalhes das Falhas na Coleta", expanded=True):
-                import pandas as pd
-                df_err = pd.DataFrame(res_coleta["errors"])
-                st.dataframe(df_err[["url", "error"]], use_container_width=True, hide_index=True)
+        if res_coleta.get("environment_error"):
+            st.warning(f"⚠️ {res_coleta['message']}")
+            with st.expander("💡 Como abrir o Chrome do Radar manualmente (Fallback)", expanded=True):
+                st.markdown(
+                    "Se o navegador não abrir automaticamente, você pode iniciar o Chrome DevTools Protocol manualmente:\n\n"
+                    "**No Terminal / PowerShell:**\n"
+                    "```powershell\n"
+                    "cd \"C:\\Users\\Defal\\Documents\\Faculdade\\Projeto Shopee\"\n"
+                    "powershell -ExecutionPolicy Bypass -File .\\deploy\\local\\start-radar-chrome.ps1\n"
+                    "```\n\n"
+                    "*Certifique-se de que não haja outras janelas do Chrome bloqueando a porta 9222 e tente coletar novamente.*"
+                )
+        else:
+            st.info(
+                f"Última Coleta Realizada: Processados: {res_coleta['processed']} | "
+                f"Sucesso: {res_coleta['succeeded']} | "
+                f"Falhas: {res_coleta['failed']} | "
+                f"Ignorados: {res_coleta['skipped']}"
+            )
+            if res_coleta.get("failed", 0) > 0:
+                with st.expander("⚠️ Detalhes das Falhas na Coleta", expanded=True):
+                    import pandas as pd
+                    df_err = pd.DataFrame(res_coleta["errors"])
+                    st.dataframe(df_err[["url", "error"]], use_container_width=True, hide_index=True)
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Jobs Pendentes", summary["jobs_pending"])
@@ -3304,21 +3317,46 @@ def render_radar_workflow():
             if summary["jobs_pending"] == 0:
                 st.info("Nenhum job pendente para este produto.")
             else:
-                st.warning("A coleta pode abrir o navegador e demorar alguns minutos. Aguarde...")
-                with st.spinner("Coletando concorrentes vinculados..."):
-                    try:
-                        res_coleta = run_linked_collection_for_product(
-                            own_product_uid=selected_uid,
-                            limit=limit,
-                            save_assets=True,
-                            browser_mode=browser_mode
-                        )
-                        st.session_state["radar_collection_result"] = res_coleta
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro na coleta: {e}")
-                        if "cdp" in str(e).lower() or browser_mode == "cdp":
-                            st.info("💡 Chrome CDP não conectado? Rode:\n`powershell -ExecutionPolicy Bypass -File .\\deploy\\local\\start-radar-chrome.ps1`")
+                chrome_ok = True
+                ready_res = {}
+                
+                if browser_mode == "cdp":
+                    with st.spinner("Abrindo Chrome do Radar..."):
+                        from shopee_core.radar_cdp_service import ensure_radar_chrome_ready
+                        ready_res = ensure_radar_chrome_ready("http://127.0.0.1:9222")
+                        chrome_ok = ready_res["ok"]
+                        
+                if not chrome_ok:
+                    st.session_state["radar_collection_result"] = {
+                        "processed": 0,
+                        "succeeded": 0,
+                        "failed": 0,
+                        "skipped": 0,
+                        "environment_error": True,
+                        "message": ready_res.get("message", "Não foi possível abrir o Chrome do Radar automaticamente.")
+                    }
+                    st.rerun()
+                else:
+                    if browser_mode == "cdp":
+                        if ready_res.get("started"):
+                            st.success("Chrome do Radar foi aberto automaticamente. Iniciando a coleta...")
+                        else:
+                            st.success("Chrome do Radar já estava aberto. Iniciando a coleta...")
+                        time.sleep(1.0)
+                        
+                    st.warning("A coleta pode abrir o navegador e demorar alguns minutos. Aguarde...")
+                    with st.spinner("Coletando concorrentes vinculados..."):
+                        try:
+                            res_coleta = run_linked_collection_for_product(
+                                own_product_uid=selected_uid,
+                                limit=limit,
+                                save_assets=True,
+                                browser_mode=browser_mode
+                            )
+                            st.session_state["radar_collection_result"] = res_coleta
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro na coleta: {e}")
 
     st.divider()
     c_class, c_rep = st.columns(2)

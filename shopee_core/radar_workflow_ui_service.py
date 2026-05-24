@@ -353,6 +353,13 @@ def ensure_collection_jobs_for_linked_candidates(own_product_uid: str) -> dict:
                 if existing_job and existing_job["status"] in ["pending", "running"]:
                     summary["jobs_existing"] += 1
                 else:
+                    # Se o candidato estava failed, reseta o status para pending no banco e limpa last_error
+                    if cand["status"] == "failed":
+                        conn.execute(
+                            "UPDATE radar_products SET status = 'pending', last_error = NULL, updated_at = ? WHERE product_uid = ?",
+                            (now, cand["product_uid"])
+                        )
+                    
                     # Cria novo job pending
                     job_uid = uuid.uuid4().hex
                     conn.execute(
@@ -382,6 +389,20 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
     )
     init_db()
     
+    if browser_mode == "cdp":
+        from shopee_core.radar_cdp_service import ensure_radar_chrome_ready
+        url_cdp = cdp_url or "http://127.0.0.1:9222"
+        ready_res = ensure_radar_chrome_ready(url_cdp)
+        if not ready_res["ok"]:
+            return {
+                "processed": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "skipped": 0,
+                "environment_error": True,
+                "message": ready_res["message"]
+            }
+            
     ensure_collection_jobs_for_linked_candidates(own_product_uid)
     
     res = {
@@ -482,8 +503,22 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
     """
     import sys
     
-    # Se estiver rodando em ambiente de testes, executa diretamente no mesmo processo
-    # para permitir que os mocks do pytest funcionem perfeitamente.
+    # Se browser_mode for cdp, verifica ou tenta abrir o Chrome do Radar no processo principal
+    # para retornar erro imediatamente sem precisar disparar o subprocesso.
+    if browser_mode == "cdp":
+        from shopee_core.radar_cdp_service import ensure_radar_chrome_ready
+        url_cdp = cdp_url or "http://127.0.0.1:9222"
+        ready_res = ensure_radar_chrome_ready(url_cdp)
+        if not ready_res["ok"]:
+            return {
+                "processed": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "skipped": 0,
+                "environment_error": True,
+                "message": ready_res["message"]
+            }
+            
     is_testing = "pytest" in sys.modules or "unittest" in sys.modules
     if is_testing:
         return _run_linked_collection_for_product_direct(
