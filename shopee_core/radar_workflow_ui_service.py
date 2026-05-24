@@ -1,5 +1,6 @@
 import uuid
 import time
+import re
 from datetime import datetime
 from shopee_core.radar_db import get_connection, init_db
 from shopee_core.radar_collector import detect_marketplace, normalize_product_url
@@ -325,13 +326,14 @@ def ensure_collection_jobs_for_linked_candidates(own_product_uid: str) -> dict:
         "linked_candidates": 0,
         "jobs_created": 0,
         "jobs_existing": 0,
-        "skipped_done": 0
+        "skipped_done": 0,
+        "skipped_invalid": 0
     }
     
     with get_connection() as conn:
         candidates = conn.execute(
             """
-            SELECT p.product_uid, p.status, p.url, p.title
+            SELECT p.product_uid, p.status, p.url, p.title, p.price, p.rejection_reason
             FROM radar_candidate_links l
             JOIN radar_products p ON p.product_uid = l.candidate_product_uid
             WHERE l.own_product_uid = ?
@@ -342,6 +344,27 @@ def ensure_collection_jobs_for_linked_candidates(own_product_uid: str) -> dict:
         now = _now()
         
         for cand in candidates:
+            if _is_invalid_empty_placeholder_candidate(cand):
+                error = _invalid_placeholder_error(cand["url"])
+                conn.execute(
+                    """
+                    UPDATE radar_products
+                    SET status = 'failed', rejection_reason = ?, updated_at = ?
+                    WHERE product_uid = ?
+                    """,
+                    (error, now, cand["product_uid"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE radar_collection_jobs
+                    SET status = 'failed', last_error = ?, updated_at = ?, finished_at = COALESCE(finished_at, ?)
+                    WHERE product_uid = ? AND status IN ('pending', 'running')
+                    """,
+                    (error, now, now, cand["product_uid"]),
+                )
+                summary["skipped_invalid"] += 1
+                continue
+
             # Se ja tem titulo, pode ser que ja tenha sido coletado e perdeu status?
             # Mas vamos nos basear no status: pending, failed, ou se title is null
             if cand["status"] in ["pending", "failed"] or not cand["title"]:
@@ -375,6 +398,17 @@ def ensure_collection_jobs_for_linked_candidates(own_product_uid: str) -> dict:
                 summary["skipped_done"] += 1
                 
     return summary
+
+
+def _is_invalid_empty_placeholder_candidate(candidate: dict) -> bool:
+    candidate = dict(candidate)
+    reason = str(candidate.get("rejection_reason") or "")
+    return reason.startswith("invalid_empty_shopee_placeholder_url")
+
+
+def _invalid_placeholder_error(url: str | None) -> str:
+    clean = re.sub(r"[^a-zA-Z0-9]+", "_", str(url or "empty")).strip("_").lower()
+    return f"invalid_empty_shopee_placeholder_url_{clean[:80]}"
 
 def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int = 5, save_assets: bool = False, browser_mode: str = "cdp", cdp_url: str | None = None) -> dict:
     """

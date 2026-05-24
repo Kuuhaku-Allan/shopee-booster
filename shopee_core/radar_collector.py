@@ -488,7 +488,6 @@ def collect_shopee_product(
             print("[R7.2E] EXTRACTING_IMAGE_URLS", flush=True)
             image_urls, video_urls = _collect_media_urls(page)
         else:
-            print("[R7.2E] SKIPPING_ASSETS reason=save_assets_false", flush=True)
             meta_image = _first_meta(page, ["meta[property='og:image']", "meta[name='twitter:image']"])
             image_urls = normalize_image_urls([meta_image] if meta_image else [])
         rating_text = _first_text(
@@ -671,12 +670,26 @@ def collect_mercadolivre_product(
                 image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(image_urls))
             description_image_urls = filter_product_image_urls(_collect_description_image_urls(page))
         else:
-            print("[R7.2E] SKIPPING_ASSETS reason=save_assets_false", flush=True)
             image_urls = filter_product_image_urls(
                 _normalize_mercadolivre_image_urls(json_ld_product.get("image_urls") or [])
             )
+        if time.monotonic() - extract_start > 25:
+            raise TimeoutError("extract_timeout_after_25s")
+        if time.monotonic() - url_start_time > 90:
+            raise TimeoutError("total_per_url_timeout_after_90s")
+
         attributes = _extract_mercadolivre_attributes(page)
+        if time.monotonic() - extract_start > 25:
+            raise TimeoutError("extract_timeout_after_25s")
+        if time.monotonic() - url_start_time > 90:
+            raise TimeoutError("total_per_url_timeout_after_90s")
+
         category_path = _extract_category_path(page)
+        if time.monotonic() - extract_start > 25:
+            raise TimeoutError("extract_timeout_after_25s")
+        if time.monotonic() - url_start_time > 90:
+            raise TimeoutError("total_per_url_timeout_after_90s")
+
         variation_labels = _extract_variation_labels(page)
         rating = _parse_rating(body_text)
         review_count = _parse_count_near_keywords(body_text, ["avaliacoes", "avaliacao", "opinioes"])

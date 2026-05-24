@@ -68,7 +68,7 @@ def test_list_own_products_finds_own_product():
 def test_format_own_product_label():
     label = format_own_product_label({"title": "Mochila", "price": 50.0, "direct_count": 2})
     assert label == "Mochila — R$ 50.00 — 2 concorrentes diretos"
-    
+
     label2 = format_own_product_label({"price": None, "direct_count": 0})
     assert "Produto sem título" in label2
     assert "Sem preço" in label2
@@ -76,15 +76,15 @@ def test_format_own_product_label():
 def test_add_competitor_urls_for_product_valid():
     _clear_tables()
     _insert_own_product("own-1")
-    
+
     urls = "https://shopee.com.br/product/123/456\n   \nhttps://produto.mercadolivre.com.br/MLB-123-teste-_JM"
     res = add_competitor_urls_for_product("own-1", urls)
-    
+
     assert res["total_received"] == 2
     assert res["created"] == 2
     assert res["duplicates"] == 0
     assert res["invalid"] == 0
-    
+
     # Verifica candidate links
     with get_connection() as conn:
         links = conn.execute("SELECT * FROM radar_candidate_links").fetchall()
@@ -102,26 +102,26 @@ def test_add_competitor_urls_deduplicates_and_reuses():
     _clear_tables()
     _insert_own_product("own-1")
     _insert_own_product("own-2")
-    
+
     url = "https://shopee.com.br/product/1/1"
-    
+
     # own-1 cadastra 2 vezes na mesma string
     res1 = add_competitor_urls_for_product("own-1", f"{url}\n{url}")
     assert res1["created"] == 1
     assert res1["duplicates"] == 1
-    
+
     # own-2 cadastra a mesma URL (reusa radar_product mas cria novo link)
     res2 = add_competitor_urls_for_product("own-2", url)
     assert res2["created"] == 1
     assert res2["duplicates"] == 0
-    
+
     with get_connection() as conn:
         links = conn.execute("SELECT own_product_uid FROM radar_candidate_links").fetchall()
         assert len(links) == 2
         owns = [L["own_product_uid"] for L in links]
         assert "own-1" in owns
         assert "own-2" in owns
-        
+
         # Mas apenas 1 produto candidato foi criado
         prods = conn.execute("SELECT product_uid FROM radar_products WHERE source_type='competitor_candidate'").fetchall()
         assert len(prods) == 1
@@ -131,11 +131,11 @@ def test_get_radar_queue_summary():
     _insert_own_product("own-1")
     url = "https://shopee.com.br/product/1/1"
     add_competitor_urls_for_product("own-1", url)
-    
+
     summary = get_radar_queue_summary("own-1")
     assert summary["jobs_pending"] == 1
     assert summary["candidates"] == 1
-    
+
     # Outro produto nao ve a queue do own-1
     _insert_own_product("own-2")
     summary2 = get_radar_queue_summary("own-2")
@@ -154,11 +154,11 @@ def test_get_competitor_table_for_product_isolates():
     _insert_own_product("own-1")
     url = "https://shopee.com.br/product/1/1"
     add_competitor_urls_for_product("own-1", url)
-    
+
     table = get_competitor_table_for_product("own-1")
     assert len(table) == 1
     assert table[0]["status"] == "pending"
-    
+
     table2 = get_competitor_table_for_product("own-2")
     assert len(table2) == 0
 
@@ -166,18 +166,18 @@ def test_get_competitor_table_for_product_isolates():
 def test_get_competitor_table_status_mappings():
     _clear_tables()
     _insert_own_product("own-1")
-    
+
     # Adiciona 4 concorrentes
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/2/2")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/3/3")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/4/4")
-    
+
     table = get_competitor_table_for_product("own-1")
     assert len(table) == 4
-    
+
     cand_uids = [r["product_uid"] for r in table]
-    
+
     with get_connection() as conn:
         # cand 0: mantido como pending
         # cand 1: falha na coleta
@@ -192,10 +192,10 @@ def test_get_competitor_table_status_mappings():
             "INSERT INTO radar_competitor_matches (match_uid, own_product_uid, candidate_product_uid, verdict, relevance_score, created_at, updated_at) VALUES (?, 'own-1', ?, 'competitor_direct', 0.95, '2023-01-01', '2023-01-01')",
             (uuid.uuid4().hex, cand_uids[3])
         )
-        
+
     table = get_competitor_table_for_product("own-1")
     statuses = {r["product_uid"]: r["status"] for r in table}
-    
+
     assert statuses[cand_uids[0]] == "pending"
     assert statuses[cand_uids[1]] == "failed"
     assert statuses[cand_uids[2]] == "collected"
@@ -205,7 +205,7 @@ def test_get_competitor_table_status_mappings():
 def test_ensure_collection_jobs_creates_missing_jobs():
     _clear_tables()
     _insert_own_product("own-1")
-    
+
     # Cria candidato diretamente sem job de coleta
     cand_uid = uuid.uuid4().hex
     with get_connection() as conn:
@@ -217,15 +217,15 @@ def test_ensure_collection_jobs_creates_missing_jobs():
             "INSERT INTO radar_candidate_links (link_uid, own_product_uid, candidate_product_uid, source, created_at, updated_at) VALUES (?, 'own-1', ?, 'manual_url', '2023', '2023')",
             (uuid.uuid4().hex, cand_uid)
         )
-        
+
     # Garante que não tem jobs
     with get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) as c FROM radar_collection_jobs WHERE product_uid = ?", (cand_uid,)).fetchone()["c"] == 0
-        
+
     # Reconcilia
     summary = ensure_collection_jobs_for_linked_candidates("own-1")
     assert summary["jobs_created"] == 1
-    
+
     # Agora deve ter 1 job
     with get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) as c FROM radar_collection_jobs WHERE product_uid = ?", (cand_uid,)).fetchone()["c"] == 1
@@ -235,7 +235,7 @@ def test_ensure_collection_jobs_skips_existing_active_jobs():
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
-    
+
     # Roda uma vez e deve ignorar porque ja existe job pending
     summary = ensure_collection_jobs_for_linked_candidates("own-1")
     assert summary["jobs_created"] == 0
@@ -246,13 +246,13 @@ def test_ensure_collection_jobs_skips_completed_products():
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
-    
+
     # Atualiza produto para status="collected" e title="Algum produto"
     with get_connection() as conn:
         conn.execute("UPDATE radar_products SET status = 'collected', title = 'Concorrente Legal' WHERE source_type = 'competitor_candidate'")
         # Marca job antigo como done
         conn.execute("UPDATE radar_collection_jobs SET status = 'done'")
-        
+
     summary = ensure_collection_jobs_for_linked_candidates("own-1")
     assert summary["jobs_created"] == 0
     assert summary["skipped_done"] == 1
@@ -261,22 +261,50 @@ def test_ensure_collection_jobs_resets_failed_products():
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
-    
+
     # Simula falha anterior: atualiza produto para status='failed'
     with get_connection() as conn:
         conn.execute("UPDATE radar_products SET status = 'failed' WHERE source_type = 'competitor_candidate'")
         conn.execute("UPDATE radar_collection_jobs SET status = 'failed'")
-        
+
     summary = ensure_collection_jobs_for_linked_candidates("own-1")
     assert summary["jobs_created"] == 1
-    
+
     with get_connection() as conn:
         prod = conn.execute("SELECT status FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
         assert prod["status"] == "pending"
-        
+
         # O último job inserido deve ser pending
         job = conn.execute("SELECT status FROM radar_collection_jobs ORDER BY created_at DESC LIMIT 1").fetchone()
         assert job["status"] == "pending"
+
+def test_ensure_collection_jobs_does_not_requeue_invalid_placeholder():
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/2/2")
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE radar_products
+            SET status = 'failed', rejection_reason = 'invalid_empty_shopee_placeholder_url_product_2_2'
+            WHERE source_type = 'competitor_candidate'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE radar_collection_jobs
+            SET status = 'failed', last_error = 'invalid_empty_shopee_placeholder_url_product_2_2'
+            """
+        )
+
+    summary = ensure_collection_jobs_for_linked_candidates("own-1")
+    assert summary["jobs_created"] == 0
+    assert summary["skipped_invalid"] == 1
+
+    with get_connection() as conn:
+        jobs = conn.execute("SELECT status FROM radar_collection_jobs").fetchall()
+        assert [job["status"] for job in jobs] == ["failed"]
 
 # 5. Testa o fluxo completo de coleta com sucesso, usando mock de rc.collect_product_page
 @patch("shopee_core.radar_collector.collect_product_page")
@@ -284,7 +312,7 @@ def test_run_linked_collection_with_successful_mock(mock_collect):
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
-    
+
     # Configura retorno simulado do scraper
     mock_collect.return_value = {
         "url": "https://shopee.com.br/product/1/1",
@@ -300,21 +328,21 @@ def test_run_linked_collection_with_successful_mock(mock_collect):
         "video_urls": [],
         "quality": {"ok": True, "quality_score": 1.0, "errors": [], "warnings": []}
     }
-    
+
     res = run_linked_collection_for_product("own-1", limit=5)
-    
+
     assert res["processed"] == 1
     assert res["succeeded"] == 1
     assert res["failed"] == 0
     assert len(res["errors"]) == 0
-    
+
     # Verifica que o banco de dados foi atualizado
     with get_connection() as conn:
         prod = conn.execute("SELECT status, title, price FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
         assert prod["status"] == "collected"
         assert prod["title"] == "Mochila Top"
         assert prod["price"] == 120.0
-        
+
         job = conn.execute("SELECT status FROM radar_collection_jobs").fetchone()
         assert job["status"] == "done"
 
@@ -324,7 +352,7 @@ def test_run_linked_collection_with_blocked_mock(mock_collect):
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
-    
+
     # Simula captcha/bloqueio
     mock_collect.return_value = {
         "url": "https://shopee.com.br/product/1/1",
@@ -333,19 +361,19 @@ def test_run_linked_collection_with_blocked_mock(mock_collect):
         "price": None,
         "quality": {"ok": False, "errors": ["Bloqueio detectado"]}
     }
-    
+
     res = run_linked_collection_for_product("own-1", limit=5)
-    
+
     assert res["processed"] == 1
     assert res["failed"] == 1
     assert res["succeeded"] == 0
     assert len(res["errors"]) == 1
     assert "blocked_or_login_required" in res["errors"][0]["error"].lower()
-    
+
     with get_connection() as conn:
         prod = conn.execute("SELECT status FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
         assert prod["status"] == "failed"
-        
+
         job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
         assert job["status"] == "failed"
         assert "blocked_or_login_required" in job["last_error"].lower()
@@ -356,7 +384,7 @@ def test_run_linked_collection_with_low_quality_mock(mock_collect):
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
-    
+
     # Qualidade ruim sem título ou com erro de qualidade
     mock_collect.return_value = {
         "url": "https://shopee.com.br/product/1/1",
@@ -368,13 +396,13 @@ def test_run_linked_collection_with_low_quality_mock(mock_collect):
             "errors": ["Titulo vazio.", "Preco suspeito."]
         }
     }
-    
+
     res = run_linked_collection_for_product("own-1", limit=5)
-    
+
     assert res["processed"] == 1
     assert res["failed"] == 1
     assert "missing_title_and_price_after_extraction" in res["errors"][0]["error"].lower()
-    
+
     with get_connection() as conn:
         job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
         assert job["status"] == "failed"
@@ -384,7 +412,7 @@ def test_run_linked_collection_with_low_quality_mock(mock_collect):
 def test_run_linked_collection_with_unsupported_marketplace():
     _clear_tables()
     _insert_own_product("own-1")
-    
+
     cand_uid = uuid.uuid4().hex
     with get_connection() as conn:
         conn.execute(
@@ -399,12 +427,12 @@ def test_run_linked_collection_with_unsupported_marketplace():
             "INSERT INTO radar_collection_jobs (job_uid, product_uid, url, job_type, status, created_at, updated_at) VALUES (?, ?, 'https://unknown.com/1', 'product_data', 'pending', '2023', '2023')",
             (uuid.uuid4().hex, cand_uid)
         )
-        
+
     res = run_linked_collection_for_product("own-1", limit=5)
     assert res["processed"] == 1
     assert res["failed"] == 1
     assert "não suportado" in res["errors"][0]["error"].lower() or "nao tem coletor" in res["errors"][0]["error"].lower() or "unknown" in res["errors"][0]["error"].lower()
-    
+
     with get_connection() as conn:
         job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
         assert job["status"] == "failed"
@@ -416,15 +444,15 @@ def test_run_linked_collection_exception_handling(mock_collect):
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
-    
+
     mock_collect.side_effect = RuntimeError("Playwright connection refused")
-    
+
     res = run_linked_collection_for_product("own-1", limit=5)
-    
+
     assert res["processed"] == 1
     assert res["failed"] == 1
     assert "connection refused" in res["errors"][0]["error"].lower()
-    
+
     with get_connection() as conn:
         job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
         assert job["status"] == "failed"
@@ -436,7 +464,7 @@ def test_run_linked_collection_limits_concurrency(mock_collect):
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1\nhttps://shopee.com.br/product/2/2")
-    
+
     mock_collect.return_value = {
         "url": "https://shopee.com.br/product/1/1",
         "marketplace": "shopee",
@@ -444,12 +472,12 @@ def test_run_linked_collection_limits_concurrency(mock_collect):
         "price": 100.0,
         "quality": {"ok": True}
     }
-    
+
     res = run_linked_collection_for_product("own-1", limit=1)
-    
+
     assert res["processed"] == 1
     assert res["succeeded"] == 1
-    
+
     with get_connection() as conn:
         jobs = conn.execute("SELECT status FROM radar_collection_jobs ORDER BY created_at ASC").fetchall()
         assert len(jobs) == 2
@@ -462,7 +490,7 @@ def test_run_linked_collection_timeout_marks_failed(mock_collect):
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1\nhttps://shopee.com.br/product/2/2")
-    
+
     # Primeiro mock falha por timeout, segundo Mock tem sucesso
     mock_collect.side_effect = [
         TimeoutError("timeout_after_30s"),
@@ -474,12 +502,12 @@ def test_run_linked_collection_timeout_marks_failed(mock_collect):
             "quality": {"ok": True}
         }
     ]
-    
+
     res = run_linked_collection_for_product("own-1", limit=2)
     assert res["processed"] == 2
     assert res["failed"] == 1
     assert res["succeeded"] == 1
-    
+
     with get_connection() as conn:
         jobs = conn.execute("SELECT status, last_error FROM radar_collection_jobs ORDER BY url ASC").fetchall()
         assert jobs[0]["status"] == "failed"
@@ -490,26 +518,26 @@ def test_stale_running_jobs_resets_candidates():
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1\nhttps://shopee.com.br/product/2/2")
-    
+
     from datetime import datetime, timedelta
     old_time = (datetime.utcnow() - timedelta(minutes=15)).isoformat()
     now_time = datetime.utcnow().isoformat()
-    
+
     with get_connection() as conn:
         conn.execute("UPDATE radar_collection_jobs SET status = 'running', updated_at = ? WHERE url = 'https://shopee.com.br/product/1/1'", (old_time,))
         conn.execute("UPDATE radar_collection_jobs SET status = 'running', updated_at = ? WHERE url = 'https://shopee.com.br/product/2/2'", (now_time,))
-        
+
     recovered = mark_stale_running_jobs_as_pending_or_failed(max_age_minutes=10)
     assert recovered == 1
-    
+
     with get_connection() as conn:
         job1 = conn.execute("SELECT status, last_error FROM radar_collection_jobs WHERE url = 'https://shopee.com.br/product/1/1'").fetchone()
         assert job1["status"] == "failed"
         assert job1["last_error"] == "stale_running_job_recovered"
-        
+
         prod1 = conn.execute("SELECT status FROM radar_products WHERE url = 'https://shopee.com.br/product/1/1'").fetchone()
         assert prod1["status"] == "pending"
-        
+
         job2 = conn.execute("SELECT status FROM radar_collection_jobs WHERE url = 'https://shopee.com.br/product/2/2'").fetchone()
         assert job2["status"] == "running"
 
@@ -518,10 +546,10 @@ def test_run_linked_collection_cancellation_marks_skipped(mock_collect):
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1\nhttps://shopee.com.br/product/2/2")
-    
+
     from pathlib import Path
     flag_file = Path("data/radar_stop_collection.flag")
-    
+
     def simulate_cancel(*args, **kwargs):
         flag_file.parent.mkdir(parents=True, exist_ok=True)
         flag_file.write_text("stop")
@@ -532,9 +560,9 @@ def test_run_linked_collection_cancellation_marks_skipped(mock_collect):
             "price": 50.0,
             "quality": {"ok": True}
         }
-    
+
     mock_collect.side_effect = simulate_cancel
-    
+
     res = run_linked_collection_for_product("own-1", limit=2)
     assert res["processed"] == 1
     assert res["succeeded"] == 1
@@ -546,14 +574,14 @@ def test_run_linked_collection_blocked_login_required(mock_collect):
     _clear_tables()
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
-    
+
     mock_collect.side_effect = RuntimeError("blocked_or_login_required")
-    
+
     res = run_linked_collection_for_product("own-1", limit=1)
     assert res["processed"] == 1
     assert res["failed"] == 1
     assert res["errors"][0]["error"] == "blocked_or_login_required"
-    
+
     with get_connection() as conn:
         job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
         assert job["status"] == "failed"
@@ -565,7 +593,7 @@ def test_extraction_timeout_raises_extract_timeout_after_25s(mock_collect):
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
     mock_collect.side_effect = TimeoutError("extract_timeout_after_25s")
-    
+
     res = run_linked_collection_for_product("own-1", limit=1)
     assert res["failed"] == 1
     assert "extract_timeout_after_25s" in res["errors"][0]["error"]
@@ -609,7 +637,7 @@ def test_partial_collection_saves_collected(mock_collect):
         "price": None,
         "quality": {"ok": False, "errors": ["Preco vazio"]}
     }
-    
+
     res = run_linked_collection_for_product("own-1", limit=1)
     assert res["succeeded"] == 1
     with get_connection() as conn:
@@ -766,7 +794,7 @@ def test_screenshot_failure_preserves_original_error(mock_collect):
     _insert_own_product("own-1")
     add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
     mock_collect.side_effect = RuntimeError("Original error")
-    
+
     res = run_linked_collection_for_product("own-1", limit=1)
     assert res["failed"] == 1
     assert res["errors"][0]["error"] == "Original error"
@@ -776,7 +804,7 @@ def test_fallback_title_from_url_slug():
     from shopee_core.radar_collector import _extract_title_from_url
     title1 = _extract_title_from_url("https://mercadolivre.com.br/mochila-escolar-infantil-linda/p/MLB12345")
     assert "Mochila Escolar Infantil Linda" in title1
-    
+
     title2 = _extract_title_from_url("https://shopee.com.br/Mochila-Feminina-Premium-i.123.456")
     assert "Mochila Feminina Premium" in title2
 
