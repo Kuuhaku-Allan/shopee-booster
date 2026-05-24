@@ -808,6 +808,13 @@ Seja específico, use as fraquezas dos concorrentes como diferenciais.
 
 {"IMPORTANTE: Use o contexto do Radar como evidência de mercado. Não invente dados que não estejam no Radar. Não recomende features marcadas como off-niche ou avoid. Se houver conflito entre Radar e dados do produto, explique com cuidado." if radar_context_block else ""}
 
+REGRAS OBRIGATÓRIAS DE FORMATAÇÃO E APRESENTAÇÃO:
+- Não inclua notas de conformidade, validação interna ou comentários sobre diretrizes no listing final.
+- Não mencione que uma feature foi "omitida por ser off-niche" — apenas não a use.
+- Não escreva frases como "Nota de conformidade:", "Conforme as diretrizes:", "Validação interna:" ou similares.
+- SEMPRE use o formato de moeda R$ XX,XX (ex: R$ 139,90). NUNCA use R XX,XX ou R$ XX.XX.
+- Se uma feature for off-niche, simplesmente não a mencione no listing.
+
 Responda EXATAMENTE neste formato:
 
 ## 🏷️ TÍTULO OTIMIZADO

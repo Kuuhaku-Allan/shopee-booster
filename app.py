@@ -498,12 +498,14 @@ def render_auditoria():
                             preview = get_radar_preview_for_ui(manual_uid.strip())
                             
                             if preview["ok"]:
+                                # R6.3D: usar format_brl para garantir R$ XX,XX
+                                from shopee_core.audit_output_formatter import format_brl as _fmt_brl
                                 st.success(f"✅ Radar disponível — Confiança: **{preview['confidence']}** — {preview['direct_count']} concorrentes diretos")
                                 
                                 col_p1, col_p2 = st.columns(2)
                                 with col_p1:
                                     st.markdown(f"**Faixa de preço:**")
-                                    st.caption(f"R$ {preview['price_min']:.2f} - R$ {preview['price_max']:.2f} (média: R$ {preview['price_avg']:.2f})")
+                                    st.caption(f"{_fmt_brl(preview['price_min'])} - {_fmt_brl(preview['price_max'])} (média: {_fmt_brl(preview['price_avg'])})")  # noqa
                                     
                                     if preview["strong_terms"]:
                                         st.markdown(f"**Termos fortes:**")
@@ -548,12 +550,14 @@ def render_auditoria():
                                 preview = get_radar_preview_for_ui(manual_uid.strip())
                                 
                                 if preview["ok"]:
+                                    # R6.3D: usar format_brl para garantir R$ XX,XX
+                                    from shopee_core.audit_output_formatter import format_brl as _fmt_brl2
                                     st.success(f"✅ Radar disponível — Confiança: **{preview['confidence']}** — {preview['direct_count']} concorrentes diretos")
                                     
                                     col_p1, col_p2 = st.columns(2)
                                     with col_p1:
                                         st.markdown(f"**Faixa de preço:**")
-                                        st.caption(f"R$ {preview['price_min']:.2f} - R$ {preview['price_max']:.2f} (média: R$ {preview['price_avg']:.2f})")
+                                        st.caption(f"{_fmt_brl2(preview['price_min'])} - {_fmt_brl2(preview['price_max'])} (média: {_fmt_brl2(preview['price_avg'])})")  # noqa
                                         
                                         if preview["strong_terms"]:
                                             st.markdown(f"**Termos fortes:**")
@@ -592,13 +596,15 @@ def render_auditoria():
                             preview = get_radar_preview_for_ui(selected_uid)
                             
                             if preview["ok"]:
+                                # R6.3D: usar format_brl para garantir R$ XX,XX
+                                from shopee_core.audit_output_formatter import format_brl as _fmt_brl3
                                 st.success(f"✅ Radar disponível — Confiança: **{preview['confidence']}** — {preview['direct_count']} concorrentes diretos")
                                 
                                 # Preview compacto
                                 col_p1, col_p2 = st.columns(2)
                                 with col_p1:
                                     st.markdown(f"**Faixa de preço:**")
-                                    st.caption(f"R$ {preview['price_min']:.2f} - R$ {preview['price_max']:.2f} (média: R$ {preview['price_avg']:.2f})")
+                                    st.caption(f"{_fmt_brl3(preview['price_min'])} - {_fmt_brl3(preview['price_max'])} (média: {_fmt_brl3(preview['price_avg'])})")  # noqa
                                     
                                     if preview["strong_terms"]:
                                         st.markdown(f"**Termos fortes:**")
@@ -857,11 +863,13 @@ WARNINGS:
                         preview = get_radar_preview_for_ui(radar_uid)
                         
                         if preview["ok"]:
+                            # R6.3D: Usar format_brl para garantir R$ XX,XX
+                            from shopee_core.audit_output_formatter import format_brl
                             # Linha de resumo
                             st.caption(
                                 f"Confiança: **{preview['confidence']}** | "
                                 f"{preview['direct_count']} concorrentes diretos | "
-                                f"Preço médio: R$ {preview['price_avg']:.2f}"
+                                f"Preço médio: {format_brl(preview['price_avg'])}"
                             )
                             
                             # Detalhes em expander
@@ -870,7 +878,7 @@ WARNINGS:
                                 
                                 with col_r1:
                                     st.markdown("**Faixa de preço:**")
-                                    st.caption(f"R$ {preview['price_min']:.2f} - R$ {preview['price_max']:.2f}")
+                                    st.caption(f"{format_brl(preview['price_min'])} - {format_brl(preview['price_max'])}")
                                     
                                     if preview["strong_terms"]:
                                         st.markdown("**Termos fortes:**")
@@ -892,10 +900,13 @@ WARNINGS:
                     st.info("ℹ️ Radar não foi usado nesta auditoria (pode ter ocorrido erro ou contexto insuficiente)")
             
             st.markdown("### 📈 Listing Otimizado pela IA")
-            st.markdown(st.session_state.optimization_result)
+            # R6.3D: Limpar output antes de exibir (moeda + notas internas)
+            from shopee_core.audit_output_formatter import clean_audit_output
+            _clean_result = clean_audit_output(st.session_state.optimization_result)
+            st.markdown(_clean_result)
             salvar_ou_baixar(
                 "Baixar otimização (.txt)",
-                data=st.session_state.optimization_result,
+                data=_clean_result,
                 file_name=f"otimizacao_{prod['itemid']}.txt",
                 mime="text/plain",
                 key=f"dl_full_opt_{prod['itemid']}"
