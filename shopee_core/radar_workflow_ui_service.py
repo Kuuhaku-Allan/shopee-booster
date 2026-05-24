@@ -368,9 +368,9 @@ def ensure_collection_jobs_for_linked_candidates(own_product_uid: str) -> dict:
                 
     return summary
 
-def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save_assets: bool = True, browser_mode: str = "cdp", cdp_url: str | None = None) -> dict:
+def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int = 5, save_assets: bool = True, browser_mode: str = "cdp", cdp_url: str | None = None) -> dict:
     """
-    Coleta estritamente os candidatos vinculados ao own_product_uid que possuem jobs pending.
+    Executa a coleta de candidatos vinculados de forma direta.
     """
     import shopee_core.radar_collector as rc
     from shopee_core.radar_service import (
@@ -473,3 +473,76 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
             })
             
     return res
+
+def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save_assets: bool = True, browser_mode: str = "cdp", cdp_url: str | None = None) -> dict:
+    """
+    Coleta estritamente os candidatos vinculados ao own_product_uid que possuem jobs pending.
+    Caso esteja rodando fora de testes (em produção/Streamlit), executa a coleta em um subprocesso
+    separado para evitar conflitos de event loop (NotImplementedError) no Windows.
+    """
+    import sys
+    
+    # Se estiver rodando em ambiente de testes, executa diretamente no mesmo processo
+    # para permitir que os mocks do pytest funcionem perfeitamente.
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    if is_testing:
+        return _run_linked_collection_for_product_direct(
+            own_product_uid=own_product_uid,
+            limit=limit,
+            save_assets=save_assets,
+            browser_mode=browser_mode,
+            cdp_url=cdp_url
+        )
+        
+    # Em produção/Streamlit, chama via subprocesso
+    import subprocess
+    import json
+    from pathlib import Path
+    
+    worker_path = Path(__file__).resolve().parent.parent / "scripts" / "radar_collect_linked_worker.py"
+    
+    cmd = [
+        sys.executable,
+        str(worker_path),
+        own_product_uid,
+        str(limit),
+        str(save_assets).lower(),
+        browser_mode,
+        str(cdp_url) if cdp_url is not None else "None"
+    ]
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False
+        )
+        if result.returncode == 0:
+            try:
+                return json.loads(result.stdout.strip())
+            except Exception as e:
+                return {
+                    "processed": 0,
+                    "succeeded": 0,
+                    "failed": 1,
+                    "skipped": 0,
+                    "errors": [{"candidate_product_uid": "all", "error": f"Erro decodificando retorno JSON do subprocesso: {e}. Output bruto: {result.stdout}", "url": "none"}]
+                }
+        else:
+            return {
+                "processed": 0,
+                "succeeded": 0,
+                "failed": 1,
+                "skipped": 0,
+                "errors": [{"candidate_product_uid": "all", "error": f"Erro executando subprocesso (code {result.returncode}): {result.stderr}", "url": "none"}]
+            }
+    except Exception as e:
+        return {
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 1,
+            "skipped": 0,
+            "errors": [{"candidate_product_uid": "all", "error": f"Erro disparando subprocesso: {e}", "url": "none"}]
+        }
