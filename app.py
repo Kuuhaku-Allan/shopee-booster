@@ -406,6 +406,54 @@ def render_auditoria():
         with st.expander("📡 Radar Assistido de Concorrentes", expanded=False):
             st.caption("Use o Radar Assistido para enriquecer a auditoria com análise profunda de concorrentes diretos.")
             
+            # R6.3A: Botão de diagnóstico
+            if st.button("🔍 Diagnosticar Radar", key="diagnose_radar_btn"):
+                try:
+                    from shopee_core.radar_db import DB_PATH, get_connection
+                    from shopee_core.radar_ui_service import list_radar_products_for_audit
+                    
+                    st.info(f"**Caminho do radar.db:** `{DB_PATH}`")
+                    
+                    if DB_PATH.exists():
+                        st.success(f"✅ Banco existe ({DB_PATH.stat().st_size / (1024*1024):.2f} MB)")
+                        
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        
+                        cursor.execute("SELECT COUNT(*) FROM radar_products")
+                        total_products = cursor.fetchone()[0]
+                        
+                        cursor.execute("SELECT COUNT(*) FROM radar_pattern_reports")
+                        total_reports = cursor.fetchone()[0]
+                        
+                        cursor.execute("SELECT COUNT(*) FROM radar_products WHERE source_type = 'own_product'")
+                        own_products = cursor.fetchone()[0]
+                        
+                        conn.close()
+                        
+                        st.info(f"**Total de produtos:** {total_products}")
+                        st.info(f"**Total de relatórios:** {total_reports}")
+                        st.info(f"**Produtos próprios:** {own_products}")
+                        
+                        products = list_radar_products_for_audit(limit=100)
+                        usable = [p for p in products if p["can_use"]]
+                        
+                        st.info(f"**Produtos listáveis:** {len(products)}")
+                        st.info(f"**Produtos usáveis (can_use=True):** {len(usable)}")
+                        
+                        # Verificar UID específico
+                        test_uid = "2777bd10-5e4f-40ff-b302-81d23f8834d9"
+                        found = any(p["product_uid"] == test_uid for p in products)
+                        if found:
+                            st.success(f"✅ UID {test_uid[:8]}... encontrado")
+                        else:
+                            st.warning(f"⚠️ UID {test_uid[:8]}... NÃO encontrado")
+                    else:
+                        st.error(f"❌ Banco não existe em: {DB_PATH}")
+                
+                except Exception as e:
+                    st.error(f"❌ Erro no diagnóstico: {str(e)}")
+            
             # Checkbox para ativar Radar
             use_radar = st.checkbox(
                 "Usar Radar Assistido nesta auditoria",
@@ -432,7 +480,48 @@ def render_auditoria():
                             "⚠️ Nenhum relatório do Radar disponível ainda. "
                             "Execute o Radar Assistido antes ou continue a auditoria sem Radar."
                         )
-                        st.session_state.selected_radar_product_uid = None
+                        
+                        # R6.3A: Fallback manual - permitir informar UID diretamente
+                        st.markdown("---")
+                        st.caption("**Alternativa:** Informar UID do produto Radar manualmente")
+                        manual_uid = st.text_input(
+                            "UID do produto Radar:",
+                            placeholder="2777bd10-5e4f-40ff-b302-81d23f8834d9",
+                            key="manual_radar_uid",
+                            help="Cole o UID de um produto do Radar para testar o preview"
+                        )
+                        
+                        if manual_uid and len(manual_uid) > 10:
+                            st.session_state.selected_radar_product_uid = manual_uid.strip()
+                            
+                            # Tentar mostrar preview
+                            preview = get_radar_preview_for_ui(manual_uid.strip())
+                            
+                            if preview["ok"]:
+                                st.success(f"✅ Radar disponível — Confiança: **{preview['confidence']}** — {preview['direct_count']} concorrentes diretos")
+                                
+                                col_p1, col_p2 = st.columns(2)
+                                with col_p1:
+                                    st.markdown(f"**Faixa de preço:**")
+                                    st.caption(f"R$ {preview['price_min']:.2f} - R$ {preview['price_max']:.2f} (média: R$ {preview['price_avg']:.2f})")
+                                    
+                                    if preview["strong_terms"]:
+                                        st.markdown(f"**Termos fortes:**")
+                                        st.caption(", ".join(preview["strong_terms"][:5]))
+                                
+                                with col_p2:
+                                    if preview["recommended_features"]:
+                                        st.markdown(f"**Features recomendadas:**")
+                                        st.caption(", ".join(preview["recommended_features"][:5]))
+                                    
+                                    if preview["off_niche_features"]:
+                                        st.markdown(f"**⚠️ Features a evitar (off-niche):**")
+                                        st.caption(", ".join(preview["off_niche_features"]))
+                            else:
+                                st.error(f"❌ Erro: {preview.get('error', 'UID inválido')}")
+                                st.session_state.selected_radar_product_uid = None
+                        else:
+                            st.session_state.selected_radar_product_uid = None
                     else:
                         # Filtrar apenas produtos que podem ser usados
                         usable_products = [p for p in radar_products if p["can_use"]]
@@ -442,7 +531,47 @@ def render_auditoria():
                                 "⚠️ Nenhum produto do Radar tem base suficiente de concorrentes (mínimo: 3). "
                                 "Continue a auditoria sem Radar ou execute mais coletas no Radar Assistido."
                             )
-                            st.session_state.selected_radar_product_uid = None
+                            
+                            # R6.3A: Fallback manual mesmo quando há produtos mas nenhum usável
+                            st.markdown("---")
+                            st.caption("**Alternativa:** Informar UID do produto Radar manualmente")
+                            manual_uid = st.text_input(
+                                "UID do produto Radar:",
+                                placeholder="2777bd10-5e4f-40ff-b302-81d23f8834d9",
+                                key="manual_radar_uid_2",
+                                help="Cole o UID de um produto do Radar para testar o preview"
+                            )
+                            
+                            if manual_uid and len(manual_uid) > 10:
+                                st.session_state.selected_radar_product_uid = manual_uid.strip()
+                                
+                                preview = get_radar_preview_for_ui(manual_uid.strip())
+                                
+                                if preview["ok"]:
+                                    st.success(f"✅ Radar disponível — Confiança: **{preview['confidence']}** — {preview['direct_count']} concorrentes diretos")
+                                    
+                                    col_p1, col_p2 = st.columns(2)
+                                    with col_p1:
+                                        st.markdown(f"**Faixa de preço:**")
+                                        st.caption(f"R$ {preview['price_min']:.2f} - R$ {preview['price_max']:.2f} (média: R$ {preview['price_avg']:.2f})")
+                                        
+                                        if preview["strong_terms"]:
+                                            st.markdown(f"**Termos fortes:**")
+                                            st.caption(", ".join(preview["strong_terms"][:5]))
+                                    
+                                    with col_p2:
+                                        if preview["recommended_features"]:
+                                            st.markdown(f"**Features recomendadas:**")
+                                            st.caption(", ".join(preview["recommended_features"][:5]))
+                                        
+                                        if preview["off_niche_features"]:
+                                            st.markdown(f"**⚠️ Features a evitar (off-niche):**")
+                                            st.caption(", ".join(preview["off_niche_features"]))
+                                else:
+                                    st.error(f"❌ Erro: {preview.get('error', 'UID inválido')}")
+                                    st.session_state.selected_radar_product_uid = None
+                            else:
+                                st.session_state.selected_radar_product_uid = None
                         else:
                             # Selectbox com produtos disponíveis
                             product_options = {
