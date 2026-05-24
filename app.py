@@ -626,45 +626,235 @@ def render_auditoria():
                     st.session_state.selected_radar_product_uid = None
             else:
                 st.session_state.selected_radar_product_uid = None
+        
+        # R6.3B: Modo debug para testar sem gastar quota Gemini
+        debug_radar_mode = st.checkbox(
+            "🐛 Debug: mostrar contexto do Radar sem chamar IA",
+            value=False,
+            key="debug_radar_mode",
+            help="Mostra o contexto que seria enviado ao Gemini sem fazer a chamada real"
+        )
 
         if st.button("🤖 Gerar Otimização Completa", type="primary"):
-            # R6.3: Passar radar_own_product_uid se disponível
-            radar_uid = st.session_state.get("selected_radar_product_uid") if st.session_state.get("use_radar_in_audit") else None
+            # R6.3B: Logs claros do fluxo
+            use_radar = st.session_state.get("use_radar_in_audit", False)
+            radar_uid = st.session_state.get("selected_radar_product_uid") if use_radar else None
             
-            with st.spinner("IA analisando concorrentes + avaliações e gerando listing..."):
-                st.session_state.optimization_result = generate_full_optimization(
-                    prod, df_comp, reviews_opt or [], segmento,
-                    radar_context_block=None  # R6.3: backend_core já suporta, mas vamos usar via audit_service
-                )
+            print(f"[R6.3B] Radar checkbox = {use_radar}")
+            print(f"[R6.3B] selected_radar_product_uid = {radar_uid}")
+            
+            if radar_uid:
+                try:
+                    from shopee_core.radar_audit_context_service import get_radar_audit_context_status
+                    status = get_radar_audit_context_status(radar_uid)
+                    print(f"[R6.3B] radar can_use = {status.get('can_use')}")
+                    print(f"[R6.3B] radar confidence = {status.get('confidence')}")
+                    print(f"[R6.3B] radar direct_count = {status.get('direct_count')}")
+                except Exception as e:
+                    print(f"[R6.3B] Erro ao verificar status do Radar: {e}")
+            
+            # R6.3B: Modo debug - mostrar contexto sem chamar IA
+            if debug_radar_mode and radar_uid:
+                st.info("🐛 **Modo Debug Ativado** - Mostrando contexto do Radar sem chamar IA")
                 
-                # R6.3: Se Radar foi usado, armazenar informação
+                try:
+                    from shopee_core.radar_audit_context_service import build_radar_audit_context
+                    
+                    print(f"[R6.3B] Construindo contexto do Radar para UID: {radar_uid}")
+                    context = build_radar_audit_context(radar_uid)
+                    
+                    if context.get("ok"):
+                        st.success("✅ Contexto do Radar construído com sucesso")
+                        
+                        # Mostrar resumo do contexto
+                        market = context.get("market_summary", {})
+                        title_strat = context.get("title_strategy", {})
+                        feature_strat = context.get("feature_strategy", {})
+                        warnings = context.get("warnings", [])
+                        
+                        st.markdown("**📊 Resumo do Mercado:**")
+                        st.json({
+                            "confidence": market.get("confidence"),
+                            "competitor_count": market.get("competitor_count"),
+                            "price_min": market.get("price_min"),
+                            "price_avg": market.get("price_avg"),
+                            "price_max": market.get("price_max"),
+                        })
+                        
+                        st.markdown("**🏷️ Estratégia de Título:**")
+                        st.json({
+                            "strong_terms": title_strat.get("strong_terms", [])[:5],
+                            "weak_terms": title_strat.get("weak_terms", [])[:3],
+                        })
+                        
+                        st.markdown("**✨ Estratégia de Features:**")
+                        st.json({
+                            "recommended_features": feature_strat.get("recommended_features", [])[:5],
+                            "off_niche_features": feature_strat.get("off_niche_features", []),
+                        })
+                        
+                        if warnings:
+                            st.markdown("**⚠️ Warnings:**")
+                            for w in warnings:
+                                st.warning(w)
+                        
+                        # Mostrar contexto completo em expander
+                        with st.expander("📄 Ver contexto completo (JSON)"):
+                            st.json(context)
+                        
+                        # Verificar se "notebook" está em off_niche
+                        off_niche = feature_strat.get("off_niche_features", [])
+                        if "notebook" in off_niche:
+                            st.success("✅ 'notebook' está corretamente marcado como off-niche/evitar")
+                        else:
+                            st.warning("⚠️ 'notebook' NÃO está em off-niche (verificar)")
+                        
+                        print(f"[R6.3B] Contexto do Radar construído: {len(str(context))} caracteres")
+                        print(f"[R6.3B] Off-niche features: {off_niche}")
+                    else:
+                        st.error(f"❌ Erro ao construir contexto: {context.get('error')}")
+                        print(f"[R6.3B] Erro ao construir contexto: {context.get('error')}")
+                
+                except Exception as e:
+                    st.error(f"❌ Erro no modo debug: {str(e)}")
+                    print(f"[R6.3B] Exceção no modo debug: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                # Não chamar IA no modo debug
+                st.info("ℹ️ Modo debug ativo - IA não foi chamada. Desmarque o debug para gerar otimização real.")
+            
+            else:
+                # Fluxo normal - chamar IA
+                print(f"[R6.3B] Enviando radar_own_product_uid para auditoria: {radar_uid}")
+                
+                # R6.3B: Construir contexto do Radar se disponível
+                radar_context_block = None
                 if radar_uid:
-                    st.session_state.optimization_used_radar = True
-                    st.session_state.optimization_radar_uid = radar_uid
-                else:
-                    st.session_state.optimization_used_radar = False
+                    try:
+                        from shopee_core.radar_audit_context_service import build_radar_audit_context
+                        
+                        print(f"[R6.3B] Construindo contexto do Radar...")
+                        context = build_radar_audit_context(radar_uid)
+                        
+                        if context.get("ok"):
+                            # Formatar contexto para o prompt
+                            market = context.get("market_summary", {})
+                            title_strat = context.get("title_strategy", {})
+                            feature_strat = context.get("feature_strategy", {})
+                            desc_strat = context.get("description_strategy", {})
+                            warnings = context.get("warnings", [])
+                            
+                            radar_context_block = f"""
+═══════════════════════════════════════════════════════════════════
+📡 CONTEXTO DO RADAR ASSISTIDO DE CONCORRENTES
+═══════════════════════════════════════════════════════════════════
+
+RESUMO DO MERCADO:
+- Confiança da análise: {market.get('confidence', 'N/A')}
+- Concorrentes diretos analisados: {market.get('competitor_count', 0)}
+- Faixa de preço: R$ {market.get('price_min', 0):.2f} - R$ {market.get('price_max', 0):.2f}
+- Preço médio: R$ {market.get('price_avg', 0):.2f}
+- Preço mediano: R$ {market.get('price_median', 0):.2f}
+
+ESTRATÉGIA DE TÍTULO:
+- Termos fortes (usar): {', '.join(title_strat.get('strong_terms', [])[:10])}
+- Termos fracos (evitar): {', '.join(title_strat.get('weak_terms', [])[:5])}
+
+ESTRATÉGIA DE FEATURES:
+- Features recomendadas: {', '.join(feature_strat.get('recommended_features', [])[:10])}
+- Features off-niche (EVITAR): {', '.join(feature_strat.get('off_niche_features', []))}
+
+ESTRATÉGIA DE DESCRIÇÃO:
+- Argumentos comerciais: {', '.join(desc_strat.get('commercial_arguments', [])[:5])}
+
+WARNINGS:
+{chr(10).join(f'⚠️ {w}' for w in warnings) if warnings else '(nenhum)'}
+
+INSTRUÇÕES IMPORTANTES:
+1. Use os termos fortes identificados no título e descrição
+2. Destaque as features recomendadas como diferenciais
+3. NÃO mencione ou destaque as features off-niche como vantagens
+4. Se mencionar features off-niche, seja apenas para esclarecer que o produto não é para esse uso
+5. Considere a faixa de preço do mercado para posicionamento
+
+═══════════════════════════════════════════════════════════════════
+"""
+                            print(f"[R6.3B] Contexto do Radar construído: {len(radar_context_block)} caracteres")
+                            print(f"[R6.3B] Off-niche features: {feature_strat.get('off_niche_features', [])}")
+                        else:
+                            print(f"[R6.3B] Erro ao construir contexto: {context.get('error')}")
+                    
+                    except Exception as e:
+                        print(f"[R6.3B] Exceção ao construir contexto do Radar: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                with st.spinner("IA analisando concorrentes + avaliações e gerando listing..."):
+                    st.session_state.optimization_result = generate_full_optimization(
+                        prod, df_comp, reviews_opt or [], segmento,
+                        radar_context_block=radar_context_block  # R6.3B: Passar contexto do Radar
+                    )
+                    
+                    print(f"[R6.3B] Otimização gerada: {len(st.session_state.optimization_result)} caracteres")
+                    
+                    # R6.3: Se Radar foi usado, armazenar informação
+                    if radar_uid and radar_context_block:
+                        st.session_state.optimization_used_radar = True
+                        st.session_state.optimization_radar_uid = radar_uid
+                        print(f"[R6.3B] Radar marcado como usado no resultado")
+                    else:
+                        st.session_state.optimization_used_radar = False
+                        print(f"[R6.3B] Radar NÃO usado no resultado")
 
         if st.session_state.optimization_result:
             st.markdown("---")
             
-            # R6.3: Mostrar badge se Radar foi usado
+            # R6.3B: Mostrar badge se Radar foi usado
             if st.session_state.get("optimization_used_radar"):
                 st.success("📡 **Radar Assistido usado nesta auditoria**")
                 
-                # Mostrar resumo do Radar usado
+                # Mostrar resumo detalhado do Radar usado
                 radar_uid = st.session_state.get("optimization_radar_uid")
                 if radar_uid:
                     try:
                         from shopee_core.radar_ui_service import get_radar_preview_for_ui
                         preview = get_radar_preview_for_ui(radar_uid)
+                        
                         if preview["ok"]:
+                            # Linha de resumo
                             st.caption(
-                                f"Confiança: {preview['confidence']} | "
+                                f"Confiança: **{preview['confidence']}** | "
                                 f"{preview['direct_count']} concorrentes diretos | "
                                 f"Preço médio: R$ {preview['price_avg']:.2f}"
                             )
-                    except Exception:
-                        pass
+                            
+                            # Detalhes em expander
+                            with st.expander("📊 Ver detalhes do Radar usado"):
+                                col_r1, col_r2 = st.columns(2)
+                                
+                                with col_r1:
+                                    st.markdown("**Faixa de preço:**")
+                                    st.caption(f"R$ {preview['price_min']:.2f} - R$ {preview['price_max']:.2f}")
+                                    
+                                    if preview["strong_terms"]:
+                                        st.markdown("**Termos fortes:**")
+                                        st.caption(", ".join(preview["strong_terms"][:5]))
+                                
+                                with col_r2:
+                                    if preview["recommended_features"]:
+                                        st.markdown("**Features recomendadas:**")
+                                        st.caption(", ".join(preview["recommended_features"][:5]))
+                                    
+                                    if preview["off_niche_features"]:
+                                        st.markdown("**⚠️ Features evitadas (off-niche):**")
+                                        st.caption(", ".join(preview["off_niche_features"]))
+                    except Exception as e:
+                        print(f"[R6.3B] Erro ao mostrar resumo do Radar: {e}")
+            else:
+                # R6.3B: Indicar discretamente que Radar não foi usado
+                if st.session_state.get("use_radar_in_audit"):
+                    st.info("ℹ️ Radar não foi usado nesta auditoria (pode ter ocorrido erro ou contexto insuficiente)")
             
             st.markdown("### 📈 Listing Otimizado pela IA")
             st.markdown(st.session_state.optimization_result)
