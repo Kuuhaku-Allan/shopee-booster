@@ -804,9 +804,10 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                 continue
             stdout_lines.append(line_str)
             
-            if "[R7.2E]" in line_str or "[R7.2D]" in line_str or "[R7.2C]" in line_str:
+            if "[R7.2F]" in line_str or "[R7.2E]" in line_str or "[R7.2D]" in line_str or "[R7.2C]" in line_str:
                 clean_line = (
                     line_str
+                    .replace("[R7.2F]", "")
                     .replace("[R7.2E]", "")
                     .replace("[R7.2D]", "")
                     .replace("[R7.2C]", "")
@@ -895,6 +896,11 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                 elif clean_line.startswith("ASSETS_WARNING"):
                     state["stage"] = "ASSETS_WARNING"
                     state["message"] = "Assets tiveram aviso; continuando coleta"
+
+                # SKIPPING_OPTIONAL_DETAILS
+                elif clean_line.startswith("SKIPPING_OPTIONAL_DETAILS"):
+                    state["stage"] = "SKIPPING_OPTIONAL_DETAILS"
+                    state["message"] = "Coleta rapida: pulando descricao e detalhes opcionais"
 
                 # FINALIZING_URL
                 elif clean_line.startswith("FINALIZING_URL"):

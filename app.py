@@ -3409,6 +3409,7 @@ def render_radar_workflow():
                             "DOWNLOADING_ASSETS": "Baixando imagens opcionais",
                             "ASSETS_SKIPPED": "Download de imagens desativado",
                             "ASSETS_WARNING": "Aviso nos assets",
+                            "SKIPPING_OPTIONAL_DETAILS": "Pulando detalhes opcionais",
                             "FINALIZING_URL": "Finalizando URL",
                             "DONE": "Coleta concluída",
                             "FAILED": "Falha na coleta"

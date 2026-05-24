@@ -456,6 +456,30 @@ def collect_shopee_product(
             )
 
         current_stage = "Extraindo descrição"
+        if not collect_image_urls:
+            print("[R7.2F] SKIPPING_OPTIONAL_DETAILS reason=fast_primary_collection", flush=True)
+            meta_image = _first_meta(page, ["meta[property='og:image']", "meta[name='twitter:image']"])
+            image_urls = normalize_image_urls([meta_image] if meta_image else [])
+            return _result(
+                url=url,
+                marketplace="shopee",
+                title=title,
+                price=parsed_price,
+                shop_name=None,
+                rating=_parse_rating(body_text),
+                review_count=_parse_count_near_keywords(body_text, ["avaliacoes", "avaliacao", "reviews"]),
+                sold_count=_parse_count_near_keywords(body_text, ["vendidos", "vendido"]),
+                description=None,
+                image_urls=image_urls,
+                video_urls=[],
+                raw={
+                    "page_title": _page_title(page),
+                    "price_text": price_text,
+                    "body_excerpt": body_text[:3000],
+                    "optional_details_status": "skipped_fast_primary_collection",
+                },
+            )
+
         print("[R7.2D] EXTRACTING_DESC", flush=True)
         shop_name = _first_text_quick(
             page,
@@ -606,6 +630,51 @@ def collect_mercadolivre_product(
             )
 
         current_stage = "Extraindo descrição"
+        if not collect_image_urls:
+            print("[R7.2F] SKIPPING_OPTIONAL_DETAILS reason=fast_primary_collection", flush=True)
+            image_urls = filter_product_image_urls(
+                _normalize_mercadolivre_image_urls(json_ld_product.get("image_urls") or [])
+            )
+            rating = _parse_rating(body_text)
+            review_count = _parse_count_near_keywords(body_text, ["avaliacoes", "avaliacao", "opinioes"])
+            sold_count = _parse_count_near_keywords(body_text, ["vendidos", "vendido"])
+            raw = {
+                "page_title": page_title,
+                "price_text": price_text,
+                "title": _clean_text(title),
+                "price": parsed_price,
+                "rating": rating,
+                "review_count": review_count,
+                "sold_count": sold_count,
+                "image_urls": filter_product_image_urls(image_urls),
+                "json_ld_product": json_ld_product,
+                "body_excerpt": body_text[:5000],
+                "optional_details_status": "skipped_fast_primary_collection",
+            }
+            data = _result(
+                url=url,
+                marketplace="mercadolivre",
+                title=title,
+                price=parsed_price,
+                shop_name=None,
+                rating=rating,
+                review_count=review_count,
+                sold_count=sold_count,
+                description=None,
+                image_urls=image_urls,
+                video_urls=[],
+                raw=raw,
+            )
+            data.update(
+                {
+                    "description_image_urls": [],
+                    "attributes": {},
+                    "category_path": [],
+                    "variation_labels": [],
+                }
+            )
+            return data
+
         print("[R7.2D] EXTRACTING_DESC", flush=True)
         original_price_text = _first_text_quick(
             page,

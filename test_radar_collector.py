@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 
 RUN_ID = uuid.uuid4().hex
@@ -21,6 +22,7 @@ os.environ["SHOPEE_RADAR_DB_PATH"] = str(
 )
 
 from shopee_core.radar_collector import (
+    collect_mercadolivre_product,
     collect_pending_jobs,
     collect_product_page,
     normalize_image_urls,
@@ -150,6 +152,30 @@ def test_pending_job_done_after_mock_collection():
     return True
 
 
+def test_mercadolivre_fast_collection_skips_description_details():
+    with patch("shopee_core.radar_collector._needs_manual_intervention", return_value=False), \
+        patch("shopee_core.radar_collector._body_text", return_value="Mochila Infantil R$ 99,90 10 vendidos"), \
+        patch("shopee_core.radar_collector._page_title", return_value="Mochila Infantil | Mercado Livre"), \
+        patch(
+            "shopee_core.radar_collector._extract_json_ld_product",
+            return_value={"name": "Mochila Infantil", "price": "99.90", "image_urls": ["https://img.example.com/a.jpg"]},
+        ), \
+        patch("shopee_core.radar_collector._first_text", return_value=None), \
+        patch("shopee_core.radar_collector._first_meta", return_value=None), \
+        patch("shopee_core.radar_collector._first_text_quick", side_effect=AssertionError("description should be skipped")):
+        data = collect_mercadolivre_product(
+            object(),
+            "https://produto.mercadolivre.com.br/MLB-123-mochila-infantil-_JM",
+            collect_image_urls=False,
+        )
+
+    assert data["title"] == "Mochila Infantil"
+    assert data["price"] == 99.9
+    assert data["description"] is None
+    assert data["raw"]["optional_details_status"] == "skipped_fast_primary_collection"
+    return True
+
+
 if __name__ == "__main__":
     print("\nTESTE R2 - Coletor Assistido por URL\n")
 
@@ -163,6 +189,7 @@ if __name__ == "__main__":
         ("collect_product_page unknown amigavel", test_unknown_marketplace_returns_friendly_error),
         ("integracao fake salva produto/assets", test_fake_collected_data_saved),
         ("pending job vira done com coleta mockada", test_pending_job_done_after_mock_collection),
+        ("mercadolivre coleta rapida pula descricao", test_mercadolivre_fast_collection_skips_description_details),
     ]
 
     passed = 0
