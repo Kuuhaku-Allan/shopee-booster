@@ -339,7 +339,7 @@ def test_run_linked_collection_with_blocked_mock(mock_collect):
     assert res["failed"] == 1
     assert res["succeeded"] == 0
     assert len(res["errors"]) == 1
-    assert "bloqueada ou incompleta" in res["errors"][0]["error"].lower()
+    assert "blocked_or_login_required" in res["errors"][0]["error"].lower()
     
     with get_connection() as conn:
         prod = conn.execute("SELECT status FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
@@ -347,7 +347,7 @@ def test_run_linked_collection_with_blocked_mock(mock_collect):
         
         job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
         assert job["status"] == "failed"
-        assert "bloqueada ou incompleta" in job["last_error"].lower()
+        assert "blocked_or_login_required" in job["last_error"].lower()
 
 # 7. Testa que se a qualidade for ruim, o job falha
 @patch("shopee_core.radar_collector.collect_product_page")
@@ -372,12 +372,12 @@ def test_run_linked_collection_with_low_quality_mock(mock_collect):
     
     assert res["processed"] == 1
     assert res["failed"] == 1
-    assert "baixa qualidade" in res["errors"][0]["error"].lower()
+    assert "missing_title_and_price_after_extraction" in res["errors"][0]["error"].lower()
     
     with get_connection() as conn:
         job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
         assert job["status"] == "failed"
-        assert "baixa qualidade" in job["last_error"].lower()
+        assert "missing_title_and_price_after_extraction" in job["last_error"].lower()
 
 # 8. Testa o comportamento com marketplace não suportado
 def test_run_linked_collection_with_unsupported_marketplace():
@@ -557,6 +557,98 @@ def test_run_linked_collection_blocked_login_required(mock_collect):
         job = conn.execute("SELECT status, last_error FROM radar_collection_jobs").fetchone()
         assert job["status"] == "failed"
         assert job["last_error"] == "blocked_or_login_required"
+
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_extraction_timeout_raises_extract_timeout_after_25s(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    mock_collect.side_effect = TimeoutError("extract_timeout_after_25s")
+    
+    res = run_linked_collection_for_product("own-1", limit=1)
+    assert res["failed"] == 1
+    assert "extract_timeout_after_25s" in res["errors"][0]["error"]
+
+@patch("shopee_core.radar_collector.collect_product_page")
+@patch("shopee_core.radar_collector._persist_collected_assets")
+def test_assets_timeout_raises_assets_timeout_after_30s(mock_persist, mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    mock_collect.return_value = {
+        "url": "https://shopee.com.br/product/1/1",
+        "marketplace": "shopee",
+        "title": "Mochila",
+        "price": 10.0,
+        "quality": {"ok": True}
+    }
+    mock_persist.side_effect = TimeoutError("assets_timeout_after_30s")
+    
+    res = run_linked_collection_for_product("own-1", limit=1)
+    assert res["failed"] == 1
+    assert "assets_timeout_after_30s" in res["errors"][0]["error"]
+
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_partial_collection_saves_collected(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    mock_collect.return_value = {
+        "url": "https://shopee.com.br/product/1/1",
+        "marketplace": "shopee",
+        "title": "Mochila sem preco",
+        "price": None,
+        "quality": {"ok": False, "errors": ["Preco vazio"]}
+    }
+    
+    res = run_linked_collection_for_product("own-1", limit=1)
+    assert res["succeeded"] == 1
+    with get_connection() as conn:
+        prod = conn.execute("SELECT status, title, price FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
+        assert prod["status"] == "collected"
+        assert prod["title"] == "Mochila sem preco"
+        assert prod["price"] is None
+
+@patch("shopee_core.radar_collector.collect_product_page")
+@patch("shopee_core.radar_collector._persist_collected_assets")
+def test_assets_failure_does_not_fail_product(mock_persist, mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    mock_collect.return_value = {
+        "url": "https://shopee.com.br/product/1/1",
+        "marketplace": "shopee",
+        "title": "Mochila",
+        "price": 10.0,
+        "quality": {"ok": True}
+    }
+    mock_persist.return_value = [{"product_uid": "cand", "asset_type": "image", "source_url": "url", "error": "connection refused"}]
+    
+    res = run_linked_collection_for_product("own-1", limit=1)
+    assert res["succeeded"] == 1
+    with get_connection() as conn:
+        prod = conn.execute("SELECT status FROM radar_products WHERE source_type = 'competitor_candidate'").fetchone()
+        assert prod["status"] == "collected"
+
+@patch("shopee_core.radar_collector.collect_product_page")
+def test_screenshot_failure_preserves_original_error(mock_collect):
+    _clear_tables()
+    _insert_own_product("own-1")
+    add_competitor_urls_for_product("own-1", "https://shopee.com.br/product/1/1")
+    mock_collect.side_effect = RuntimeError("Original error")
+    
+    res = run_linked_collection_for_product("own-1", limit=1)
+    assert res["failed"] == 1
+    assert res["errors"][0]["error"] == "Original error"
+    assert res["errors"][0]["screenshot_path"] is None
+
+def test_fallback_title_from_url_slug():
+    from shopee_core.radar_collector import _extract_title_from_url
+    title1 = _extract_title_from_url("https://mercadolivre.com.br/mochila-escolar-infantil-linda/p/MLB12345")
+    assert "Mochila Escolar Infantil Linda" in title1
+    
+    title2 = _extract_title_from_url("https://shopee.com.br/Mochila-Feminina-Premium-i.123.456")
+    assert "Mochila Feminina Premium" in title2
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

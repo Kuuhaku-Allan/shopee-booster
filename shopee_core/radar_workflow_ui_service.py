@@ -1,4 +1,5 @@
 import uuid
+import time
 from datetime import datetime
 from shopee_core.radar_db import get_connection, init_db
 from shopee_core.radar_collector import detect_marketplace, normalize_product_url
@@ -447,20 +448,21 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
                 pass
             remaining = total - res["processed"]
             res["skipped"] += remaining
-            print(f"[R7.2C] FAILED candidate={job['product_uid']} error=Coleta cancelada pelo usuario", flush=True)
+            print(f"[R7.2D] FAILED candidate={job['product_uid']} error=Coleta cancelada pelo usuario", flush=True)
             break
             
         res["processed"] += 1
         job_uid = job["job_uid"]
         product_uid = job["product_uid"]
         url = job["url"]
+        url_start_time = time.monotonic()
         
         try:
             # 1. Marca job como running no banco
             running_job = mark_job_running(job_uid)
             
             # Print formatado para progresso
-            print(f"[R7.2C] START index={idx} total={total} candidate={product_uid}", flush=True)
+            print(f"[R7.2D] START index={idx} total={total} candidate={product_uid}", flush=True)
             
             # 2. Coleta os dados da página abrindo o browser
             opts = {}
@@ -473,38 +475,59 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
                 browser_mode=browser_mode,
                 candidate_uid=product_uid,
                 job_uid=job_uid,
+                url_start_time=url_start_time,
                 **opts
             )
             
             # 3. Validar se a página veio bloqueada ou vazia
             if rc.is_collection_blocked_or_empty(data):
                 raise RuntimeError(
-                    "Coleta bloqueada ou incompleta. Resolva login/verificacao "
-                    "manualmente e tente novamente."
+                    "blocked_or_login_required"
                 )
             
-            quality = data.get("quality")
-            if isinstance(quality, dict) and not quality.get("ok"):
-                errors_list = quality.get("errors") or []
-                err_msg = "Coleta de baixa qualidade: " + "; ".join(str(e) for e in errors_list[:4])
-                raise RuntimeError(err_msg)
+            # Se ambos title e price faltarem, marcar failed claro
+            has_title = bool(data.get("title"))
+            has_price = data.get("price") is not None
+            
+            if not has_title and not has_price:
+                raise RuntimeError("missing_title_and_price_after_extraction")
+            
+            if time.monotonic() - url_start_time > 90:
+                raise TimeoutError("total_per_url_timeout_after_90s")
             
             # 4. Salva produto no banco
-            print("[R7.2C] SAVING", flush=True)
-            mark_product_collected(product_uid, data)
+            print("[R7.2D] SAVING_DB", flush=True)
+            try:
+                mark_product_collected(product_uid, data)
+            except Exception as db_err:
+                raise RuntimeError(f"db_save_error: {db_err}")
+            
+            if time.monotonic() - url_start_time > 90:
+                raise TimeoutError("total_per_url_timeout_after_90s")
             
             # 5. Salva assets/imagens
             if save_assets:
-                rc._persist_collected_assets(product_uid, data, save_assets_to_disk=False)
+                rc._persist_collected_assets(
+                    product_uid,
+                    data,
+                    save_assets_to_disk=False,
+                    timeout=30.0,
+                    url_start_time=url_start_time
+                )
                 
+            if time.monotonic() - url_start_time > 90:
+                raise TimeoutError("total_per_url_timeout_after_90s")
+            
+            print("[R7.2D] FINALIZING_URL", flush=True)
+
             # 6. Marca job como done
             mark_job_done(job_uid)
-            print(f"[R7.2C] DONE candidate={product_uid}", flush=True)
+            print(f"[R7.2D] DONE candidate={product_uid}", flush=True)
             res["succeeded"] += 1
             
         except Exception as e:
             err_msg = str(e)
-            print(f"[R7.2C] FAILED candidate={product_uid} error={err_msg}", flush=True)
+            print(f"[R7.2D] FAILED candidate={product_uid} error={err_msg}", flush=True)
             
             # Recupera o screenshot_path salvo (se houver) no erro
             screenshot_path = getattr(e, "screenshot_path", None)
@@ -665,8 +688,8 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                 continue
             stdout_lines.append(line_str)
             
-            if "[R7.2C]" in line_str:
-                clean_line = line_str.replace("[R7.2C]", "").strip()
+            if "[R7.2D]" in line_str or "[R7.2C]" in line_str:
+                clean_line = line_str.replace("[R7.2D]", "").replace("[R7.2C]", "").strip()
                 
                 # START index=1 total=5 candidate=...
                 if clean_line.startswith("START"):
@@ -696,15 +719,40 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                     state["stage"] = "SCROLLING"
                     state["message"] = "Fazendo scroll da página"
                     
+                # EXTRACTING_TITLE_PRICE
+                elif clean_line.startswith("EXTRACTING_TITLE_PRICE"):
+                    state["stage"] = "EXTRACTING_TITLE_PRICE"
+                    state["message"] = "Extraindo título e preço"
+
+                # EXTRACTING_DESC
+                elif clean_line.startswith("EXTRACTING_DESC"):
+                    state["stage"] = "EXTRACTING_DESC"
+                    state["message"] = "Extraindo descrição"
+
+                # EXTRACTING_IMAGES
+                elif clean_line.startswith("EXTRACTING_IMAGES"):
+                    state["stage"] = "EXTRACTING_IMAGES"
+                    state["message"] = "Extraindo imagens"
+
                 # EXTRACTING
                 elif clean_line.startswith("EXTRACTING"):
                     state["stage"] = "EXTRACTING"
                     state["message"] = "Extraindo dados do produto concorrente"
                     
+                # SAVING_DB
+                elif clean_line.startswith("SAVING_DB"):
+                    state["stage"] = "SAVING_DB"
+                    state["message"] = "Salvando no banco"
+
                 # SAVING
                 elif clean_line.startswith("SAVING"):
                     state["stage"] = "SAVING"
                     state["message"] = "Persistindo dados no banco de dados"
+
+                # FINALIZING_URL
+                elif clean_line.startswith("FINALIZING_URL"):
+                    state["stage"] = "FINALIZING_URL"
+                    state["message"] = "Finalizando URL"
                     
                 # DONE candidate=...
                 elif clean_line.startswith("DONE"):
@@ -713,11 +761,17 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                     
                 # FAILED candidate=... error=...
                 elif clean_line.startswith("FAILED"):
-                    m = re.search(r"candidate=([^\s]+)\s+error=(.*)", clean_line)
+                    m = re.search(r"candidate=([^\s]+).*?error=(.*)", clean_line)
                     if m:
                         state["candidate_uid"] = m.group(1)
                         state["message"] = f"Falha na coleta: {m.group(2)}"
                     state["stage"] = "FAILED"
+                
+                # SCREENSHOT_SAVED path=...
+                elif clean_line.startswith("SCREENSHOT_SAVED"):
+                    m = re.search(r"path=([^\s]+)", clean_line)
+                    if m:
+                        state["screenshot_path"] = m.group(1)
                 
                 if progress_callback:
                     try:

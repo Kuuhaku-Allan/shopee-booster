@@ -222,8 +222,12 @@ def collect_product_page(
     cdp_url: str = DEFAULT_CDP_URL,
     candidate_uid: str | None = None,
     job_uid: str | None = None,
+    url_start_time: float | None = None,
 ) -> dict:
     """Open a visible browser, collect one product page and return normalized data."""
+    if url_start_time is None:
+        url_start_time = time.monotonic()
+
     canonical_url = normalize_product_url(url)
     detected_marketplace = marketplace or detect_marketplace(canonical_url)
     browser_mode = _normalize_browser_mode(browser_mode)
@@ -260,17 +264,20 @@ def collect_product_page(
             page = context.pages[0] if context.pages else context.new_page()
 
         # Set default Playwright timeouts
-        page.set_default_timeout(10000)
+        page.set_default_timeout(5000)
         page.set_default_navigation_timeout(30000)
 
         try:
             try:
-                print(f"[R7.2C] OPENING url={canonical_url}", flush=True)
+                print(f"[R7.2D] OPENING url={canonical_url}", flush=True)
                 page.goto(canonical_url, wait_until="domcontentloaded", timeout=30000)
             except PlaywrightTimeoutError:
                 page.goto(canonical_url, wait_until="load", timeout=30000)
 
-            print("[R7.2C] LOADED", flush=True)
+            print("[R7.2D] LOADED", flush=True)
+
+            if time.monotonic() - url_start_time > 90:
+                raise TimeoutError("total_per_url_timeout_after_90s")
 
             # Check 1: immediately after load
             if _needs_manual_intervention(page):
@@ -283,19 +290,25 @@ def collect_product_page(
             if _needs_manual_intervention(page):
                 raise RuntimeError("blocked_or_login_required")
 
-            print("[R7.2C] SCROLLING", flush=True)
+            print("[R7.2D] SCROLLING", flush=True)
             scroll_product_page(page)
 
-            # Check 3: after scroll
+            if time.monotonic() - url_start_time > 90:
+                raise TimeoutError("total_per_url_timeout_after_90s")
+
+            # Check 3: after scroll (and BEFORE extraction!)
             if _needs_manual_intervention(page):
                 raise RuntimeError("blocked_or_login_required")
 
-            print("[R7.2C] EXTRACTING", flush=True)
+            print("[R7.2D] EXTRACTING", flush=True)
             if detected_marketplace == "shopee":
-                data = collect_shopee_product(page, canonical_url)
+                data = collect_shopee_product(page, canonical_url, url_start_time=url_start_time)
             else:
-                data = collect_mercadolivre_product(page, canonical_url)
+                data = collect_mercadolivre_product(page, canonical_url, url_start_time=url_start_time)
             data = _finalize_collected_data(data, detected_marketplace)
+
+            if time.monotonic() - url_start_time > 90:
+                raise TimeoutError("total_per_url_timeout_after_90s")
 
             # Check 4: after extraction / empty data retry
             if _needs_manual_intervention(page) or _needs_interactive_retry(data):
@@ -311,10 +324,13 @@ def collect_product_page(
                     _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
                     scroll_product_page(page)
 
+                    if time.monotonic() - url_start_time > 90:
+                        raise TimeoutError("total_per_url_timeout_after_90s")
+
                     if detected_marketplace == "shopee":
-                        data = collect_shopee_product(page, canonical_url)
+                        data = collect_shopee_product(page, canonical_url, url_start_time=url_start_time)
                     else:
-                        data = collect_mercadolivre_product(page, canonical_url)
+                        data = collect_mercadolivre_product(page, canonical_url, url_start_time=url_start_time)
                     data = _finalize_collected_data(data, detected_marketplace)
 
             return data
@@ -331,14 +347,14 @@ def collect_product_page(
                 
                 screenshot_path = screenshot_dir / f"{cand_name}_{job_name}_{ts}.png"
                 page.screenshot(path=str(screenshot_path), timeout=5000)
-                print(f"[R7.2C] SCREENSHOT_SAVED path={screenshot_path}", flush=True)
+                print(f"[R7.2D] SCREENSHOT_SAVED path={screenshot_path}", flush=True)
                 
                 try:
                     e.screenshot_path = str(screenshot_path)
                 except Exception:
                     pass
             except Exception as ss_err:
-                print(f"[R7.2C] SCREENSHOT_ERROR error={ss_err}", flush=True)
+                print(f"[R7.2D] SCREENSHOT_ERROR error={ss_err}", flush=True)
             raise e
         finally:
             if browser_mode == "cdp":
@@ -348,222 +364,347 @@ def collect_product_page(
                     pass
                 browser = None
             else:
-                context.close()
+                try:
+                    context.close()
+                except Exception:
+                    pass
 
 
-def collect_shopee_product(page, url: str) -> dict:
+def collect_shopee_product(page, url: str, url_start_time: float | None = None) -> dict:
     """Collect basic Shopee product data from an already loaded page."""
-    body_text = _body_text(page)
-    title = (
-        _first_text(
+    extract_start = time.monotonic()
+    if url_start_time is None:
+        url_start_time = extract_start
+
+    current_stage = "Extraindo título e preço"
+    try:
+        # Check block before starting extraction
+        if _needs_manual_intervention(page):
+            raise RuntimeError("blocked_or_login_required")
+
+        print("[R7.2D] EXTRACTING_TITLE_PRICE", flush=True)
+        body_text = _body_text(page)
+        visual_title = (
+            _first_text(
+                page,
+                [
+                    "h1",
+                    "[data-sqe='name']",
+                    "section h1",
+                    "div[class*='product-briefing'] h1",
+                ],
+            )
+            or _first_meta(page, ["meta[property='og:title']", "meta[name='title']"])
+        )
+        title = visual_title
+        if not title:
+            title = _extract_title_from_url(url)
+
+        price_text = (
+            _first_meta(page, ["meta[property='product:price:amount']"])
+            or _first_text(
+                page,
+                [
+                    "[data-testid='product-price']",
+                    "div[class*='price']",
+                    "section div:has-text('R$')",
+                ],
+            )
+            or _first_price_text(body_text)
+        )
+        parsed_price = parse_price(price_text or "")
+
+        if time.monotonic() - extract_start > 25:
+            raise TimeoutError("extract_timeout_after_25s")
+        if time.monotonic() - url_start_time > 90:
+            raise TimeoutError("total_per_url_timeout_after_90s")
+
+        # If both title and price are missing, return early
+        if not visual_title and parsed_price is None:
+            return _result(
+                url=url,
+                marketplace="shopee",
+                title=None,
+                price=None,
+                shop_name=None,
+                rating=None,
+                review_count=None,
+                sold_count=None,
+                description=None,
+                image_urls=[],
+                video_urls=[],
+                raw={"error": "Dados mínimos não encontrados (título e preço vazios)"}
+            )
+
+        current_stage = "Extraindo descrição"
+        print("[R7.2D] EXTRACTING_DESC", flush=True)
+        shop_name = _first_text(
             page,
             [
-                "h1",
-                "[data-sqe='name']",
-                "section h1",
-                "div[class*='product-briefing'] h1",
+                "[data-testid='shop-name']",
+                "a[href*='/shop/']",
+                "a[href*='shopee.com.br/'] span",
+                "div[class*='shop'] a",
             ],
         )
-        or _first_meta(page, ["meta[property='og:title']", "meta[name='title']"])
-    )
-    price_text = (
-        _first_meta(page, ["meta[property='product:price:amount']"])
-        or _first_text(
+        description = _first_text(
             page,
             [
-                "[data-testid='product-price']",
-                "div[class*='price']",
-                "section div:has-text('R$')",
+                "[data-testid='product-description']",
+                "div[class*='product-detail']",
+                "section:has-text('Descricao')",
+                "section:has-text('Descri')",
             ],
         )
-        or _first_price_text(body_text)
-    )
-    shop_name = _first_text(
-        page,
-        [
-            "[data-testid='shop-name']",
-            "a[href*='/shop/']",
-            "a[href*='shopee.com.br/'] span",
-            "div[class*='shop'] a",
-        ],
-    )
-    description = _first_text(
-        page,
-        [
-            "[data-testid='product-description']",
-            "div[class*='product-detail']",
-            "section:has-text('Descricao')",
-            "section:has-text('Descri')",
-        ],
-    )
-    image_urls, video_urls = _collect_media_urls(page)
-    rating_text = _first_text(
-        page,
-        [
-            "[data-testid='product-rating']",
-            "div[class*='rating']",
-            "section:has-text('estrelas')",
-        ],
-    )
 
-    return _result(
-        url=url,
-        marketplace="shopee",
-        title=title,
-        price=parse_price(price_text or ""),
-        shop_name=shop_name,
-        rating=_parse_rating(rating_text or body_text),
-        review_count=_parse_count_near_keywords(body_text, ["avaliacoes", "avaliacao", "reviews"]),
-        sold_count=_parse_count_near_keywords(body_text, ["vendidos", "vendido"]),
-        description=description,
-        image_urls=image_urls,
-        video_urls=video_urls,
-        raw={
-            "page_title": _page_title(page),
-            "price_text": price_text,
-            "rating_text": rating_text,
-            "body_excerpt": body_text[:3000],
-        },
-    )
+        if time.monotonic() - extract_start > 25:
+            raise TimeoutError("extract_timeout_after_25s")
+        if time.monotonic() - url_start_time > 90:
+            raise TimeoutError("total_per_url_timeout_after_90s")
+
+        current_stage = "Extraindo imagens"
+        print("[R7.2D] EXTRACTING_IMAGES", flush=True)
+        image_urls, video_urls = _collect_media_urls(page)
+        rating_text = _first_text(
+            page,
+            [
+                "[data-testid='product-rating']",
+                "div[class*='rating']",
+                "section:has-text('estrelas')",
+            ],
+        )
+
+        if time.monotonic() - extract_start > 25:
+            raise TimeoutError("extract_timeout_after_25s")
+        if time.monotonic() - url_start_time > 90:
+            raise TimeoutError("total_per_url_timeout_after_90s")
+
+        return _result(
+            url=url,
+            marketplace="shopee",
+            title=title,
+            price=parsed_price,
+            shop_name=shop_name,
+            rating=_parse_rating(rating_text or body_text),
+            review_count=_parse_count_near_keywords(body_text, ["avaliacoes", "avaliacao", "reviews"]),
+            sold_count=_parse_count_near_keywords(body_text, ["vendidos", "vendido"]),
+            description=description,
+            image_urls=image_urls,
+            video_urls=video_urls,
+            raw={
+                "page_title": _page_title(page),
+                "price_text": price_text,
+                "rating_text": rating_text,
+                "body_excerpt": body_text[:3000],
+            },
+        )
+    except Exception as e:
+        try:
+            e.stage = current_stage
+        except Exception:
+            pass
+        raise e
 
 
-def collect_mercadolivre_product(page, url: str) -> dict:
+def collect_mercadolivre_product(page, url: str, url_start_time: float | None = None) -> dict:
     """Collect deep Mercado Livre product data from an already loaded page."""
-    body_text = _body_text(page)
-    page_title = _page_title(page)
-    json_ld_product = _extract_json_ld_product(page)
-    title = _best_product_title(
-        [
-            _first_text(page, ["h1.ui-pdp-title", "[data-testid='title']"]),
-            json_ld_product.get("name"),
-            _first_meta(page, ["meta[property='og:title']", "meta[name='title']"]),
-            _first_text(page, ["h1"]),
-            page_title.split("|")[0].strip() if page_title else None,
-        ]
-    )
-    if _looks_like_intervention_title(title) and page_title:
-        title = page_title.split("|")[0].strip()
-    json_ld_price = _coerce_float(json_ld_product.get("price"))
-    price_text = (
-        _first_meta(page, ["meta[itemprop='price']", "meta[property='product:price:amount']"])
-        or _first_text(
+    extract_start = time.monotonic()
+    if url_start_time is None:
+        url_start_time = extract_start
+
+    current_stage = "Extraindo título e preço"
+    try:
+        # Check block before starting extraction
+        if _needs_manual_intervention(page):
+            raise RuntimeError("blocked_or_login_required")
+
+        print("[R7.2D] EXTRACTING_TITLE_PRICE", flush=True)
+        body_text = _body_text(page)
+        page_title = _page_title(page)
+        json_ld_product = _extract_json_ld_product(page)
+        visual_title = _best_product_title(
+            [
+                _first_text(page, ["h1.ui-pdp-title", "[data-testid='title']"]),
+                json_ld_product.get("name"),
+                _first_meta(page, ["meta[property='og:title']", "meta[name='title']"]),
+                _first_text(page, ["h1"]),
+                page_title.split("|")[0].strip() if page_title else None,
+            ]
+        )
+        if _looks_like_intervention_title(visual_title) and page_title:
+            visual_title = page_title.split("|")[0].strip()
+        title = visual_title
+        if not title:
+            title = _extract_title_from_url(url)
+        json_ld_price = _coerce_float(json_ld_product.get("price"))
+        price_text = (
+            _first_meta(page, ["meta[itemprop='price']", "meta[property='product:price:amount']"])
+            or _first_text(
+                page,
+                [
+                    ".ui-pdp-price .andes-money-amount",
+                    "[data-testid='price-part']",
+                    "div.ui-pdp-price",
+                    "span.andes-money-amount",
+                    ".ui-search-price__second-line .andes-money-amount__fraction",
+                    ".andes-price__fraction",
+                    ".price-tag-fraction",
+                ],
+            )
+            or _first_price_text(body_text)
+        )
+        parsed_price = json_ld_price if json_ld_price is not None else parse_price(price_text or "")
+
+        if time.monotonic() - extract_start > 25:
+            raise TimeoutError("extract_timeout_after_25s")
+        if time.monotonic() - url_start_time > 90:
+            raise TimeoutError("total_per_url_timeout_after_90s")
+
+        # If both title and price are missing, return early
+        if not visual_title and parsed_price is None:
+            return _result(
+                url=url,
+                marketplace="mercadolivre",
+                title=None,
+                price=None,
+                shop_name=None,
+                rating=None,
+                review_count=None,
+                sold_count=None,
+                description=None,
+                image_urls=[],
+                video_urls=[],
+                raw={"error": "Dados mínimos não encontrados (título e preço vazios)"}
+            )
+
+        current_stage = "Extraindo descrição"
+        print("[R7.2D] EXTRACTING_DESC", flush=True)
+        original_price_text = _first_text(
             page,
             [
-                ".ui-pdp-price .andes-money-amount",
-                "[data-testid='price-part']",
-                "div.ui-pdp-price",
-                "span.andes-money-amount",
+                ".ui-pdp-price__original-value",
+                ".andes-money-amount--previous",
+                "s.andes-money-amount",
+                "span:has-text('Antes')",
             ],
         )
-        or _first_price_text(body_text)
-    )
-    parsed_price = json_ld_price if json_ld_price is not None else parse_price(price_text or "")
-    original_price_text = _first_text(
-        page,
-        [
-            ".ui-pdp-price__original-value",
-            ".andes-money-amount--previous",
-            "s.andes-money-amount",
-            "span:has-text('Antes')",
-        ],
-    )
-    discount_text = _first_text(
-        page,
-        [
-            ".andes-money-amount__discount",
-            ".ui-pdp-price__second-line__label",
-            "span:has-text('% OFF')",
-        ],
-    )
-    shop_name = _first_text(
-        page,
-        [
-            ".ui-pdp-seller__header__title",
-            ".ui-pdp-seller__link-trigger",
-            "a[href*='/perfil/']",
-            "a[href*='/loja/']",
-        ],
-    )
-    seller_reputation = _extract_seller_reputation(page, body_text)
-    description = _first_text(
-        page,
-        [
-            "#description",
-            ".ui-pdp-description",
-            "[data-testid='content']",
-            "section:has-text('Descricao')",
-            "section:has-text('Descri')",
-        ],
-    )
-    image_urls, video_urls = _collect_media_urls(page)
-    gallery_image_urls = (
-        _collect_mercadolivre_gallery_image_urls(page)
-        or json_ld_product.get("image_urls")
-        or []
-    )
-    if gallery_image_urls:
-        image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(gallery_image_urls))
-    else:
-        image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(image_urls))
-    description_image_urls = filter_product_image_urls(_collect_description_image_urls(page))
-    attributes = _extract_mercadolivre_attributes(page)
-    category_path = _extract_category_path(page)
-    variation_labels = _extract_variation_labels(page)
-    rating = _parse_rating(body_text)
-    review_count = _parse_count_near_keywords(body_text, ["avaliacoes", "avaliacao", "opinioes"])
-    sold_count = _parse_count_near_keywords(body_text, ["vendidos", "vendido"])
-    original_price = parse_price(original_price_text or "")
-    discount_percent = _parse_discount_percent(discount_text or body_text)
-    raw = {
-        "page_title": page_title,
-        "price_text": price_text,
-        "original_price_text": original_price_text,
-        "discount_text": discount_text,
-        "title": _clean_text(title),
-        "price": parsed_price,
-        "original_price": original_price,
-        "discount_percent": discount_percent,
-        "shop_name": _clean_text(shop_name),
-        "seller_reputation": seller_reputation,
-        "rating": rating,
-        "review_count": review_count,
-        "sold_count": sold_count,
-        "description": _clean_text(description),
-        "attributes": attributes,
-        "category_path": category_path,
-        "image_urls": filter_product_image_urls(image_urls),
-        "description_image_urls": filter_product_image_urls(description_image_urls),
-        "variation_labels": variation_labels,
-        "json_ld_product": json_ld_product,
-        "body_excerpt": body_text[:5000],
-    }
+        discount_text = _first_text(
+            page,
+            [
+                ".andes-money-amount__discount",
+                ".ui-pdp-price__second-line__label",
+                "span:has-text('% OFF')",
+            ],
+        )
+        shop_name = _first_text(
+            page,
+            [
+                ".ui-pdp-seller__header__title",
+                ".ui-pdp-seller__link-trigger",
+                "a[href*='/perfil/']",
+                "a[href*='/loja/']",
+            ],
+        )
+        seller_reputation = _extract_seller_reputation(page, body_text)
+        description = _first_text(
+            page,
+            [
+                "#description",
+                ".ui-pdp-description",
+                "[data-testid='content']",
+                "section:has-text('Descricao')",
+                "section:has-text('Descri')",
+            ],
+        )
 
-    data = _result(
-        url=url,
-        marketplace="mercadolivre",
-        title=title,
-        price=parsed_price,
-        shop_name=shop_name,
-        rating=rating,
-        review_count=review_count,
-        sold_count=sold_count,
-        description=description,
-        image_urls=image_urls,
-        video_urls=video_urls,
-        raw=raw,
-    )
-    data.update(
-        {
+        if time.monotonic() - extract_start > 25:
+            raise TimeoutError("extract_timeout_after_25s")
+        if time.monotonic() - url_start_time > 90:
+            raise TimeoutError("total_per_url_timeout_after_90s")
+
+        current_stage = "Extraindo imagens"
+        print("[R7.2D] EXTRACTING_IMAGES", flush=True)
+        image_urls, video_urls = _collect_media_urls(page)
+        gallery_image_urls = (
+            _collect_mercadolivre_gallery_image_urls(page)
+            or json_ld_product.get("image_urls")
+            or []
+        )
+        if gallery_image_urls:
+            image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(gallery_image_urls))
+        else:
+            image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(image_urls))
+        description_image_urls = filter_product_image_urls(_collect_description_image_urls(page))
+        attributes = _extract_mercadolivre_attributes(page)
+        category_path = _extract_category_path(page)
+        variation_labels = _extract_variation_labels(page)
+        rating = _parse_rating(body_text)
+        review_count = _parse_count_near_keywords(body_text, ["avaliacoes", "avaliacao", "opinioes"])
+        sold_count = _parse_count_near_keywords(body_text, ["vendidos", "vendido"])
+        original_price = parse_price(original_price_text or "")
+        discount_percent = _parse_discount_percent(discount_text or body_text)
+
+        if time.monotonic() - extract_start > 25:
+            raise TimeoutError("extract_timeout_after_25s")
+        if time.monotonic() - url_start_time > 90:
+            raise TimeoutError("total_per_url_timeout_after_90s")
+
+        raw = {
+            "page_title": page_title,
+            "price_text": price_text,
+            "original_price_text": original_price_text,
+            "discount_text": discount_text,
+            "title": _clean_text(title),
+            "price": parsed_price,
             "original_price": original_price,
             "discount_percent": discount_percent,
+            "shop_name": _clean_text(shop_name),
             "seller_reputation": seller_reputation,
+            "rating": rating,
+            "review_count": review_count,
+            "sold_count": sold_count,
+            "description": _clean_text(description),
             "attributes": attributes,
             "category_path": category_path,
+            "image_urls": filter_product_image_urls(image_urls),
             "description_image_urls": filter_product_image_urls(description_image_urls),
             "variation_labels": variation_labels,
+            "json_ld_product": json_ld_product,
+            "body_excerpt": body_text[:5000],
         }
-    )
-    return data
+
+        data = _result(
+            url=url,
+            marketplace="mercadolivre",
+            title=title,
+            price=parsed_price,
+            shop_name=shop_name,
+            rating=rating,
+            review_count=review_count,
+            sold_count=sold_count,
+            description=description,
+            image_urls=image_urls,
+            video_urls=video_urls,
+            raw=raw,
+        )
+        data.update(
+            {
+                "original_price": original_price,
+                "discount_percent": discount_percent,
+                "seller_reputation": seller_reputation,
+                "attributes": attributes,
+                "category_path": category_path,
+                "description_image_urls": filter_product_image_urls(description_image_urls),
+                "variation_labels": variation_labels,
+            }
+        )
+        return data
+    except Exception as e:
+        try:
+            e.stage = current_stage
+        except Exception:
+            pass
+        raise e
 
 
 def scroll_product_page(page) -> None:
@@ -692,6 +833,10 @@ def is_collection_blocked_or_empty(data: dict) -> bool:
         "negative_traffic",
         "access denied",
         "verify you are human",
+        "robo",
+        "ola! para continuar, acesse sua conta",
+        "erro de carregamento",
+        "problemas ao carregar",
     ]
     if any(pattern in folded for pattern in blocked_patterns):
         return True
@@ -713,21 +858,58 @@ def _persist_collected_assets(
     product_uid: str,
     data: dict,
     save_assets_to_disk: bool = False,
+    timeout: float = 30.0,
+    url_start_time: float | None = None,
 ) -> list[dict]:
-    if save_assets_to_disk and data.get("marketplace") == "mercadolivre":
-        from .radar_assets_service import download_asset, download_product_images
+    start_time = time.monotonic()
 
-        assets = download_product_images(product_uid, data.get("image_urls") or [])
+    if save_assets_to_disk and data.get("marketplace") == "mercadolivre":
+        from .radar_assets_service import download_asset
+
+        assets = []
+        seen = set()
+
+        for image_url in data.get("image_urls") or []:
+            if time.monotonic() - start_time > timeout:
+                raise TimeoutError("assets_timeout_after_30s")
+            if url_start_time and time.monotonic() - url_start_time > 90:
+                raise TimeoutError("total_per_url_timeout_after_90s")
+            clean_url = str(image_url or "").strip()
+            if not clean_url or clean_url in seen:
+                continue
+            seen.add(clean_url)
+            try:
+                assets.append(download_asset(clean_url, product_uid, "image"))
+            except Exception as exc:
+                assets.append(_asset_download_error(product_uid, "image", clean_url, exc))
+
         for image_url in data.get("description_image_urls") or []:
+            if time.monotonic() - start_time > timeout:
+                raise TimeoutError("assets_timeout_after_30s")
+            if url_start_time and time.monotonic() - url_start_time > 90:
+                raise TimeoutError("total_per_url_timeout_after_90s")
+            clean_url = str(image_url or "").strip()
+            if not clean_url or clean_url in seen:
+                continue
+            seen.add(clean_url)
             try:
-                assets.append(download_asset(image_url, product_uid, "description_image"))
+                assets.append(download_asset(clean_url, product_uid, "description_image"))
             except Exception as exc:
-                assets.append(_asset_download_error(product_uid, "description_image", image_url, exc))
+                assets.append(_asset_download_error(product_uid, "description_image", clean_url, exc))
+
         for video_url in data.get("video_urls") or []:
+            if time.monotonic() - start_time > timeout:
+                raise TimeoutError("assets_timeout_after_30s")
+            if url_start_time and time.monotonic() - url_start_time > 90:
+                raise TimeoutError("total_per_url_timeout_after_90s")
+            clean_url = str(video_url or "").strip()
+            if not clean_url or clean_url in seen:
+                continue
+            seen.add(clean_url)
             try:
-                assets.append(download_asset(video_url, product_uid, "video"))
+                assets.append(download_asset(clean_url, product_uid, "video"))
             except Exception as exc:
-                assets.append(_asset_download_error(product_uid, "video", video_url, exc))
+                assets.append(_asset_download_error(product_uid, "video", clean_url, exc))
         return assets
 
     return save_product_assets(
@@ -1016,13 +1198,14 @@ def _extract_json_ld_product(page) -> dict:
 def _first_text(page, selectors: list[str]) -> str | None:
     for selector in selectors:
         try:
-            text = page.locator(selector).first.text_content(timeout=1500)
+            el = page.query_selector(selector)
+            if el:
+                text = el.text_content()
+                clean = _clean_text(text)
+                if clean:
+                    return clean
         except Exception:
             continue
-
-        clean = _clean_text(text)
-        if clean:
-            return clean
 
     return None
 
@@ -1030,20 +1213,22 @@ def _first_text(page, selectors: list[str]) -> str | None:
 def _first_meta(page, selectors: list[str]) -> str | None:
     for selector in selectors:
         try:
-            value = page.locator(selector).first.get_attribute("content", timeout=1000)
+            el = page.query_selector(selector)
+            if el:
+                value = el.get_attribute("content")
+                clean = _clean_text(value)
+                if clean:
+                    return clean
         except Exception:
             continue
-
-        clean = _clean_text(value)
-        if clean:
-            return clean
 
     return None
 
 
 def _body_text(page) -> str:
     try:
-        return _clean_text(page.locator("body").inner_text(timeout=3000)) or ""
+        el = page.query_selector("body")
+        return _clean_text(el.inner_text() if el else "") or ""
     except Exception:
         return ""
 
@@ -1053,6 +1238,22 @@ def _page_title(page) -> str | None:
         return _clean_text(page.title())
     except Exception:
         return None
+
+
+def _extract_title_from_url(url: str) -> str:
+    try:
+        from urllib.parse import urlsplit
+        path = urlsplit(url).path
+        parts = [p for p in path.split("/") if p.strip()]
+        if parts:
+            slug = parts[0]
+            if slug in ("p", "pdp", "produto") and len(parts) > 1:
+                slug = parts[1]
+            title = slug.replace("-", " ").replace("_", " ").strip()
+            return title.title()
+    except Exception:
+        pass
+    return "Concorrente Sem Titulo"
 
 
 def _first_price_text(text: str) -> str | None:

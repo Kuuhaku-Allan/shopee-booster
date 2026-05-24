@@ -3300,6 +3300,8 @@ def render_radar_workflow():
                 with st.expander("⚠️ Detalhes das Falhas na Coleta", expanded=True):
                     for err in res_coleta["errors"]:
                         st.markdown(f"**URL:** {err['url']}")
+                        if err.get("stage"):
+                            st.markdown(f"**Etapa:** {err['stage']}")
                         st.markdown(f"**Erro:** `{err['error']}`")
                         ss_path = err.get("screenshot_path")
                         if ss_path:
@@ -3378,12 +3380,30 @@ def render_radar_workflow():
                         idx = state_dict.get("index", 0)
                         tot = state_dict.get("total", total_jobs)
                         url = state_dict.get("url", "")
+                        stage = state_dict.get("stage", "")
                         msg = state_dict.get("message", "")
+                        
+                        stage_map = {
+                            "START": "Iniciando",
+                            "OPENING": "Abrindo página",
+                            "LOADED": "Página carregada",
+                            "SCROLLING": "Fazendo scroll",
+                            "EXTRACTING_TITLE_PRICE": "Extraindo título e preço",
+                            "EXTRACTING_DESC": "Extraindo descrição",
+                            "EXTRACTING_IMAGES": "Extraindo imagens",
+                            "EXTRACTING": "Extraindo dados",
+                            "SAVING_DB": "Salvando no banco",
+                            "SAVING": "Salvando no banco",
+                            "FINALIZING_URL": "Finalizando URL",
+                            "DONE": "Coleta concluída",
+                            "FAILED": "Falha na coleta"
+                        }
+                        display_stage = stage_map.get(stage, stage)
                         
                         if tot > 0:
                             p_bar.progress(min(1.0, idx / tot))
                         p_info.markdown(f"**Coletando {idx}/{tot}**\n\n**URL:** `{url}`")
-                        p_log.text(f"Etapa: {msg}")
+                        p_log.text(f"Etapa: {display_stage} ({msg})")
                         
                     # Botão de cancelamento
                     if st.button("Cancelar após URL atual", key="cancel_collection_btn", use_container_width=True):
