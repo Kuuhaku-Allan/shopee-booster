@@ -160,6 +160,12 @@ _DEFAULTS = {
     "optimization_reviews":    None,
     "optimization_result":     None,
     "auto_fetch_opt_reviews":  False,
+    # R6.3: Radar Assistido na Auditoria
+    "use_radar_in_audit":      False,
+    "selected_radar_product_uid": None,
+    "optimization_used_radar": False,
+    "optimization_radar_uid":  None,
+    # Chatbot
     "chat_history":            [],
     "chatbot_active":          False,
     "faq_personalizado":       [],
@@ -396,14 +402,141 @@ def render_auditoria():
             else:
                 st.warning("⚠️ Sem avaliações — a IA usará só os dados de concorrentes")
 
+        # ── R6.3: Radar Assistido de Concorrentes (opcional) ──────
+        with st.expander("📡 Radar Assistido de Concorrentes", expanded=False):
+            st.caption("Use o Radar Assistido para enriquecer a auditoria com análise profunda de concorrentes diretos.")
+            
+            # Checkbox para ativar Radar
+            use_radar = st.checkbox(
+                "Usar Radar Assistido nesta auditoria",
+                value=st.session_state.get("use_radar_in_audit", False),
+                key="use_radar_checkbox",
+                help="O Radar analisa concorrentes diretos e fornece insights baseados em padrões de mercado."
+            )
+            st.session_state.use_radar_in_audit = use_radar
+            
+            if use_radar:
+                # Importar helper do Radar
+                try:
+                    from shopee_core.radar_ui_service import (
+                        list_radar_products_for_audit,
+                        format_radar_product_label,
+                        get_radar_preview_for_ui,
+                    )
+                    
+                    # Listar produtos disponíveis
+                    radar_products = list_radar_products_for_audit(limit=100)
+                    
+                    if not radar_products:
+                        st.warning(
+                            "⚠️ Nenhum relatório do Radar disponível ainda. "
+                            "Execute o Radar Assistido antes ou continue a auditoria sem Radar."
+                        )
+                        st.session_state.selected_radar_product_uid = None
+                    else:
+                        # Filtrar apenas produtos que podem ser usados
+                        usable_products = [p for p in radar_products if p["can_use"]]
+                        
+                        if not usable_products:
+                            st.warning(
+                                "⚠️ Nenhum produto do Radar tem base suficiente de concorrentes (mínimo: 3). "
+                                "Continue a auditoria sem Radar ou execute mais coletas no Radar Assistido."
+                            )
+                            st.session_state.selected_radar_product_uid = None
+                        else:
+                            # Selectbox com produtos disponíveis
+                            product_options = {
+                                format_radar_product_label(p): p["product_uid"]
+                                for p in usable_products
+                            }
+                            
+                            selected_label = st.selectbox(
+                                "Selecione o produto do Radar:",
+                                options=list(product_options.keys()),
+                                key="radar_product_select",
+                            )
+                            
+                            selected_uid = product_options[selected_label]
+                            st.session_state.selected_radar_product_uid = selected_uid
+                            
+                            # Mostrar preview do Radar
+                            preview = get_radar_preview_for_ui(selected_uid)
+                            
+                            if preview["ok"]:
+                                st.success(f"✅ Radar disponível — Confiança: **{preview['confidence']}** — {preview['direct_count']} concorrentes diretos")
+                                
+                                # Preview compacto
+                                col_p1, col_p2 = st.columns(2)
+                                with col_p1:
+                                    st.markdown(f"**Faixa de preço:**")
+                                    st.caption(f"R$ {preview['price_min']:.2f} - R$ {preview['price_max']:.2f} (média: R$ {preview['price_avg']:.2f})")
+                                    
+                                    if preview["strong_terms"]:
+                                        st.markdown(f"**Termos fortes:**")
+                                        st.caption(", ".join(preview["strong_terms"][:5]))
+                                
+                                with col_p2:
+                                    if preview["recommended_features"]:
+                                        st.markdown(f"**Features recomendadas:**")
+                                        st.caption(", ".join(preview["recommended_features"][:5]))
+                                    
+                                    if preview["off_niche_features"]:
+                                        st.markdown(f"**⚠️ Features a evitar (off-niche):**")
+                                        st.caption(", ".join(preview["off_niche_features"]))
+                                
+                                if preview["warnings"]:
+                                    for warning in preview["warnings"][:2]:
+                                        st.warning(f"⚠️ {warning}")
+                            else:
+                                st.error(f"❌ Erro ao carregar preview: {preview['error']}")
+                                st.session_state.selected_radar_product_uid = None
+                
+                except Exception as e:
+                    st.error(f"❌ Erro ao carregar Radar: {str(e)}")
+                    st.caption("A auditoria continuará sem o Radar Assistido.")
+                    st.session_state.selected_radar_product_uid = None
+            else:
+                st.session_state.selected_radar_product_uid = None
+
         if st.button("🤖 Gerar Otimização Completa", type="primary"):
+            # R6.3: Passar radar_own_product_uid se disponível
+            radar_uid = st.session_state.get("selected_radar_product_uid") if st.session_state.get("use_radar_in_audit") else None
+            
             with st.spinner("IA analisando concorrentes + avaliações e gerando listing..."):
                 st.session_state.optimization_result = generate_full_optimization(
-                    prod, df_comp, reviews_opt or [], segmento
+                    prod, df_comp, reviews_opt or [], segmento,
+                    radar_context_block=None  # R6.3: backend_core já suporta, mas vamos usar via audit_service
                 )
+                
+                # R6.3: Se Radar foi usado, armazenar informação
+                if radar_uid:
+                    st.session_state.optimization_used_radar = True
+                    st.session_state.optimization_radar_uid = radar_uid
+                else:
+                    st.session_state.optimization_used_radar = False
 
         if st.session_state.optimization_result:
             st.markdown("---")
+            
+            # R6.3: Mostrar badge se Radar foi usado
+            if st.session_state.get("optimization_used_radar"):
+                st.success("📡 **Radar Assistido usado nesta auditoria**")
+                
+                # Mostrar resumo do Radar usado
+                radar_uid = st.session_state.get("optimization_radar_uid")
+                if radar_uid:
+                    try:
+                        from shopee_core.radar_ui_service import get_radar_preview_for_ui
+                        preview = get_radar_preview_for_ui(radar_uid)
+                        if preview["ok"]:
+                            st.caption(
+                                f"Confiança: {preview['confidence']} | "
+                                f"{preview['direct_count']} concorrentes diretos | "
+                                f"Preço médio: R$ {preview['price_avg']:.2f}"
+                            )
+                    except Exception:
+                        pass
+            
             st.markdown("### 📈 Listing Otimizado pela IA")
             st.markdown(st.session_state.optimization_result)
             salvar_ou_baixar(
