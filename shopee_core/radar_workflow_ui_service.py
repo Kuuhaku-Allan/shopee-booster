@@ -323,7 +323,8 @@ def classify_linked_candidates_for_product(own_product_uid: str, force_reclassif
         SELECT c.candidate_product_uid 
         FROM radar_candidate_links c
         JOIN radar_products p ON p.product_uid = c.candidate_product_uid
-        WHERE c.own_product_uid = ? AND p.status = 'collected'
+        WHERE c.own_product_uid = ?
+          AND p.status IN ('collected', 'rejected', 'competitor_direct', 'competitor_partial')
     """
     
     with get_connection() as conn:
