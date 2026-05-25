@@ -322,6 +322,22 @@ def test_dismiss_common_overlays_page_none():
     return True
 
 
+def test_looks_like_product_url_ml_formats():
+    """R7.2K: Valida formatos de URL do Mercado Livre (/MLB-, /p/MLB, /up/MLB)."""
+    from shopee_core.radar_collector import _looks_like_product_url
+    
+    # Formatos aceitos
+    assert _looks_like_product_url("https://produto.mercadolivre.com.br/MLB-5230234162-mochila", "mercadolivre")
+    assert _looks_like_product_url("https://mercadolivre.com.br/mochila/p/MLB64529079", "mercadolivre")
+    assert _looks_like_product_url("https://mercadolivre.com.br/mochila/up/MLBU3488001019", "mercadolivre")
+    assert _looks_like_product_url("https://www.mercadolivre.com.br/mochila/p/MLB1234567", "mercadolivre")
+    
+    # Rejeitados
+    assert not _looks_like_product_url("https://mercadolivre.com.br/lista/mochilas", "mercadolivre")
+    assert not _looks_like_product_url("https://mercadolivre.com.br/categorias/mochilas", "mercadolivre")
+    return True
+
+
 def test_image_url_extract_timeout_constant():
     """R7.2H: Constante de timeout de imagem definida e positiva."""
     assert isinstance(IMAGE_URL_EXTRACT_TIMEOUT, (int, float))
@@ -351,6 +367,7 @@ if __name__ == "__main__":
         ("R7.2H: dismiss overlays falha nao quebra", test_dismiss_common_overlays_falha_nao_quebra),
         ("R7.2H: dismiss overlays page None", test_dismiss_common_overlays_page_none),
         ("R7.2H: timeout constante definida", test_image_url_extract_timeout_constant),
+        ("R7.2K: ML URL formats accepted", test_looks_like_product_url_ml_formats),
     ]
 
     passed = 0
