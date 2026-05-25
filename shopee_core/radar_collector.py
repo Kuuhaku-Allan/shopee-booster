@@ -39,6 +39,7 @@ MAX_ERROR_IMAGE_URLS = 80
 MAX_ASSET_IMAGES_PER_PRODUCT = 5
 ASSET_IMAGE_TIMEOUT_SECONDS = 5.0
 ASSET_TOTAL_TIMEOUT_SECONDS = 30.0
+IMAGE_URL_EXTRACT_TIMEOUT = 10  # R7.2H: max seconds for image URL extraction
 GENERIC_PRODUCT_TITLES = {
     "mochilas",
     "mochila",
@@ -148,6 +149,15 @@ def is_plausible_price(price: float | None, category_hint: str | None = None) ->
     return 10 <= value <= 5000
 
 
+def _is_obvious_test_url(url: str | None) -> bool:
+    """R7.2F: Detect URLs that are clearly test data (e.g., shopee.com/product/1/1)."""
+    if not url:
+        return False
+    url = str(url).strip()
+    # Padrões de URLs de teste óbvias: IDs sequenciais baixos
+    return bool(re.search(r'shopee\.com\.br/product/\d{1,2}/\d{1,2}$', url, re.I))
+
+
 def validate_product_extraction(data: dict, expected_marketplace: str) -> dict:
     """Validate whether extracted data looks like a real product page."""
     warnings: list[str] = []
@@ -179,6 +189,10 @@ def validate_product_extraction(data: dict, expected_marketplace: str) -> dict:
     canonical_url = data.get("canonical_url") or data.get("url")
     if not _looks_like_product_url(canonical_url, expected_marketplace or marketplace):
         errors.append("URL canonica nao parece pagina individual de produto.")
+
+    # R7.2F: Detect and reject obvious test URLs
+    if _is_obvious_test_url(canonical_url):
+        errors.append("URL parece ser de teste (ID sequencial obvio).")
 
     category_hint = _category_hint_from_data(data)
     price = _coerce_float(data.get("price"))
@@ -220,6 +234,7 @@ def collect_product_page(
     marketplace: str | None = None,
     interactive: bool = False,
     interactive_wait_seconds: int | None = None,
+    interactive_retry: bool = True,
     browser_channel: str | None = None,
     browser_mode: str = "persistent",
     cdp_url: str = DEFAULT_CDP_URL,
@@ -284,12 +299,21 @@ def collect_product_page(
             if time.monotonic() - url_start_time > 90:
                 raise TimeoutError("total_per_url_timeout_after_90s")
 
+            # R7.2H: Dismiss overlays before checking for intervention
+            print("[R7.2H] DISMISSING_OVERLAYS", flush=True)
+            _dismiss_common_overlays(page, url=url, stage="after_load")
+
             # Check 1: immediately after load
             if _needs_manual_intervention(page):
+                page_title = _page_title(page) or "(no title)"
+                print(f"[R7.2H] CHECK1_BLOCKED page_title={page_title!r}", flush=True)
                 raise RuntimeError("blocked_or_login_required")
 
             if manual_wait_ms > 0:
                 page.wait_for_timeout(manual_wait_ms)
+
+            # R7.2H: Dismiss overlays again after manual wait
+            _dismiss_common_overlays(page, url=url, stage="after_wait")
 
             # Check 2: before scroll
             if _needs_manual_intervention(page):
@@ -300,6 +324,9 @@ def collect_product_page(
 
             if time.monotonic() - url_start_time > 90:
                 raise TimeoutError("total_per_url_timeout_after_90s")
+
+            # R7.2H: Dismiss overlays again after scroll
+            _dismiss_common_overlays(page, url=url, stage="after_scroll")
 
             # Check 3: after scroll (and BEFORE extraction!)
             if _needs_manual_intervention(page):
@@ -334,33 +361,38 @@ def collect_product_page(
                 if _needs_manual_intervention(page):
                     raise RuntimeError("blocked_or_login_required")
 
-                if interactive or browser_mode == "cdp":
+                if interactive_retry:
                     _wait_for_manual_confirmation(
                         page,
                         _empty_data_retry_message(browser_mode),
                         timeout_seconds=interactive_wait_seconds,
                     )
-                    _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
-                    scroll_product_page(page)
+                else:
+                    print("[R7.2I] AUTO_RETRY_ONCE overlay_dismiss_and_reload", flush=True)
+                    _dismiss_common_overlays(page, url=url)
+                    time.sleep(1)
 
-                    if time.monotonic() - url_start_time > 90:
-                        raise TimeoutError("total_per_url_timeout_after_90s")
+                _reload_product_page(page, canonical_url, PlaywrightTimeoutError)
+                scroll_product_page(page)
 
-                    if detected_marketplace == "shopee":
-                        data = collect_shopee_product(
-                            page,
-                            canonical_url,
-                            url_start_time=url_start_time,
-                            collect_image_urls=collect_image_urls,
-                        )
-                    else:
-                        data = collect_mercadolivre_product(
-                            page,
-                            canonical_url,
-                            url_start_time=url_start_time,
-                            collect_image_urls=collect_image_urls,
-                        )
-                    data = _finalize_collected_data(data, detected_marketplace)
+                if time.monotonic() - url_start_time > 90:
+                    raise TimeoutError("total_per_url_timeout_after_90s")
+
+                if detected_marketplace == "shopee":
+                    data = collect_shopee_product(
+                        page,
+                        canonical_url,
+                        url_start_time=url_start_time,
+                        collect_image_urls=collect_image_urls,
+                    )
+                else:
+                    data = collect_mercadolivre_product(
+                        page,
+                        canonical_url,
+                        url_start_time=url_start_time,
+                        collect_image_urls=collect_image_urls,
+                    )
+                data = _finalize_collected_data(data, detected_marketplace)
 
             return data
         except Exception as e:
@@ -452,7 +484,41 @@ def collect_shopee_product(
         if time.monotonic() - url_start_time > 90:
             raise TimeoutError("total_per_url_timeout_after_90s")
 
-        # If both title and price are missing, return early
+        # R7.2J: If both title and price are missing, try dismiss overlay and retry once
+        if not visual_title and parsed_price is None:
+            print("[R7.2J] EMPTY_TITLE_PRICE retry_with_overlay_dismiss", flush=True)
+            _dismiss_common_overlays(page, url=url, stage="retry_empty_title_price")
+            page.wait_for_timeout(500)
+            body_text = _body_text(page)
+            visual_title = (
+                _first_text(
+                    page,
+                    [
+                        "h1",
+                        "[data-sqe='name']",
+                        "section h1",
+                        "div[class*='product-briefing'] h1",
+                    ],
+                )
+                or _first_meta(page, ["meta[property='og:title']", "meta[name='title']"])
+            )
+            title = visual_title
+            if not title:
+                title = _extract_title_from_url(url)
+            price_text = (
+                _first_meta(page, ["meta[property='product:price:amount']"])
+                or _first_text(
+                    page,
+                    [
+                        "[data-testid='product-price']",
+                        "div[class*='price']",
+                        "section div:has-text('R$')",
+                    ],
+                )
+                or _first_price_text(body_text)
+            )
+            parsed_price = parse_price(price_text or "")
+
         if not visual_title and parsed_price is None:
             return _result(
                 url=url,
@@ -494,6 +560,8 @@ def collect_shopee_product(
                 },
             )
 
+        # R7.2J: Dismiss overlays before description extraction
+        _dismiss_common_overlays(page, url=url, stage="before_description")
         print("[R7.2D] EXTRACTING_DESC", flush=True)
         shop_name = _first_text_quick(
             page,
@@ -520,9 +588,46 @@ def collect_shopee_product(
         image_urls = []
         video_urls = []
         if collect_image_urls:
-            current_stage = "Coletando URLs de imagens"
-            print("[R7.2E] EXTRACTING_IMAGE_URLS", flush=True)
-            image_urls, video_urls = _collect_media_urls(page)
+            # R7.2H: Overlay dismissal + timeout for image extraction
+            current_stage = "Fechando avisos da página"
+            print("[R7.2H] DISMISSING_OVERLAYS", flush=True)
+            try:
+                _dismiss_common_overlays(page, url=url, stage="before_images_shopee")
+            except Exception:
+                pass
+            current_stage = "Buscando imagens"
+            print("[R7.2H] EXTRACTING_IMAGE_URLS", flush=True)
+            image_deadline = time.monotonic() + IMAGE_URL_EXTRACT_TIMEOUT
+            # Priority A: meta og:image
+            remaining = image_deadline - time.monotonic()
+            if remaining > 0 and not image_urls:
+                print("[R7.2H] IMAGE_META", flush=True)
+                try:
+                    og_url = page.evaluate(
+                        """() => {
+                            const el = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
+                            return el ? (el.getAttribute('content') || null) : null;
+                        }""",
+                        timeout=int(min(3000, remaining * 1000)),
+                    )
+                    if og_url:
+                        image_urls = [og_url]
+                except Exception:
+                    pass
+            # Priority B: fallback img[src]
+            remaining = image_deadline - time.monotonic()
+            if remaining > 0 and not image_urls:
+                print("[R7.2H] IMAGE_HTML", flush=True)
+                try:
+                    img_urls, _ = _collect_media_urls(
+                        page, page_evaluate_timeout=int(min(3000, remaining * 1000))
+                    )
+                    if img_urls:
+                        image_urls = list(img_urls)
+                except Exception:
+                    pass
+            if not image_urls:
+                print("[R7.2H] IMAGE_TIMEOUT none", flush=True)
         else:
             meta_image = _first_meta(page, ["meta[property='og:image']", "meta[name='twitter:image']"])
             image_urls = normalize_image_urls([meta_image] if meta_image else [])
@@ -626,7 +731,47 @@ def collect_mercadolivre_product(
         if time.monotonic() - url_start_time > 90:
             raise TimeoutError("total_per_url_timeout_after_90s")
 
-        # If both title and price are missing, return early
+        # R7.2J: If both title and price are missing, try dismiss overlay and retry once
+        if not visual_title and parsed_price is None:
+            print("[R7.2J] EMPTY_TITLE_PRICE retry_with_overlay_dismiss", flush=True)
+            _dismiss_common_overlays(page, url=url, stage="retry_empty_title_price")
+            page.wait_for_timeout(500)
+            body_text = _body_text(page)
+            page_title = _page_title(page)
+            json_ld_product = _extract_json_ld_product(page)
+            visual_title = _best_product_title(
+                [
+                    _first_text(page, ["h1.ui-pdp-title", "[data-testid='title']"]),
+                    json_ld_product.get("name"),
+                    _first_meta(page, ["meta[property='og:title']", "meta[name='title']"]),
+                    _first_text(page, ["h1"]),
+                    page_title.split("|")[0].strip() if page_title else None,
+                ]
+            )
+            if _looks_like_intervention_title(visual_title) and page_title:
+                visual_title = page_title.split("|")[0].strip()
+            title = visual_title
+            if not title:
+                title = _extract_title_from_url(url)
+            json_ld_price = _coerce_float(json_ld_product.get("price"))
+            price_text = (
+                _first_meta(page, ["meta[itemprop='price']", "meta[property='product:price:amount']"])
+                or _first_text(
+                    page,
+                    [
+                        ".ui-pdp-price .andes-money-amount",
+                        "[data-testid='price-part']",
+                        "div.ui-pdp-price",
+                        "span.andes-money-amount",
+                        ".ui-search-price__second-line .andes-money-amount__fraction",
+                        ".andes-price__fraction",
+                        ".price-tag-fraction",
+                    ],
+                )
+                or _first_price_text(body_text)
+            )
+            parsed_price = json_ld_price if json_ld_price is not None else parse_price(price_text or "")
+
         if not visual_title and parsed_price is None:
             return _result(
                 url=url,
@@ -689,6 +834,8 @@ def collect_mercadolivre_product(
             )
             return data
 
+        # R7.2J: Dismiss overlays before description extraction
+        _dismiss_common_overlays(page, url=url, stage="before_description")
         print("[R7.2D] EXTRACTING_DESC", flush=True)
         original_price_text = _first_text_quick(
             page,
@@ -724,6 +871,10 @@ def collect_mercadolivre_product(
             ],
         )
 
+        # R7.2F: Try to expand Mercado Livre description
+        if not description:
+            description = _try_expand_ml_description(page)
+
         if time.monotonic() - extract_start > 25:
             raise TimeoutError("extract_timeout_after_25s")
         if time.monotonic() - url_start_time > 90:
@@ -733,19 +884,135 @@ def collect_mercadolivre_product(
         video_urls = []
         description_image_urls = []
         if collect_image_urls:
-            current_stage = "Coletando URLs de imagens"
-            print("[R7.2E] EXTRACTING_IMAGE_URLS", flush=True)
-            image_urls, video_urls = _collect_media_urls(page)
-            gallery_image_urls = (
-                _collect_mercadolivre_gallery_image_urls(page)
-                or json_ld_product.get("image_urls")
-                or []
-            )
-            if gallery_image_urls:
-                image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(gallery_image_urls))
-            else:
-                image_urls = filter_product_image_urls(_normalize_mercadolivre_image_urls(image_urls))
-            description_image_urls = filter_product_image_urls(_collect_description_image_urls(page))
+            # R7.2H: Overlay dismissal before image extraction
+            current_stage = "Fechando avisos da página"
+            print("[R7.2H] DISMISSING_OVERLAYS", flush=True)
+            try:
+                overlays = _dismiss_common_overlays(page, url=url, stage="before_images")
+                if overlays:
+                    print(f"[R7.2H] OVERLAYS_DISMISSED count={len(overlays)}", flush=True)
+            except Exception:
+                pass
+
+            # R7.2H: Priority-based image URL extraction with hard timeout
+            current_stage = "Buscando imagens"
+            print("[R7.2H] EXTRACTING_IMAGE_URLS", flush=True)
+            image_deadline = time.monotonic() + IMAGE_URL_EXTRACT_TIMEOUT
+
+            # Priority A: meta[property="og:image"]
+            remaining = image_deadline - time.monotonic()
+            if remaining > 0 and not image_urls:
+                print("[R7.2H] IMAGE_META", flush=True)
+                try:
+                    og_url = page.evaluate(
+                        """() => {
+                            const el = document.querySelector('meta[property="og:image"]');
+                            return el ? (el.getAttribute('content') || null) : null;
+                        }""",
+                        timeout=int(min(3000, remaining * 1000)),
+                    )
+                    if og_url:
+                        image_urls = [og_url]
+                except Exception:
+                    pass
+
+            # Priority B: JSON-LD image
+            remaining = image_deadline - time.monotonic()
+            if remaining > 0 and not image_urls:
+                try:
+                    json_imgs = json_ld_product.get("image_urls") or []
+                    if json_imgs:
+                        image_urls = list(json_imgs)
+                except Exception:
+                    pass
+
+            # Priority C: gallery selectors (DOM snapshot, fast)
+            remaining = image_deadline - time.monotonic()
+            if remaining > 0 and not image_urls:
+                print("[R7.2H] IMAGE_GALLERY", flush=True)
+                try:
+                    gallery_urls = page.evaluate(
+                        """() => {
+                            const absolutize = (value) => {
+                                if (!value) return null;
+                                try { return new URL(value.trim(), location.href).href; }
+                                catch (_) { return null; }
+                            };
+                            const urls = [];
+                            const selectors = [
+                                '.ui-pdp-gallery img', '.ui-pdp-gallery__figure img',
+                                '.ui-pdp-image', '.ui-pdp-thumbnail img',
+                                '[data-testid="image-gallery"] img'
+                            ];
+                            selectors.forEach(sel => {
+                                document.querySelectorAll(sel).forEach(node => {
+                                    if (urls.length >= 20) return;
+                                    const val = absolutize(node.currentSrc || node.src || node.getAttribute('data-src'));
+                                    if (val && !urls.includes(val)) urls.push(val);
+                                });
+                            });
+                            return urls;
+                        }""",
+                        timeout=int(min(4000, remaining * 1000)),
+                    )
+                    if gallery_urls:
+                        image_urls = list(gallery_urls)
+                except Exception:
+                    pass
+
+            # Priority D: fallback img[src] from page
+            remaining = image_deadline - time.monotonic()
+            if remaining > 0 and not image_urls:
+                print("[R7.2H] IMAGE_HTML", flush=True)
+                try:
+                    img_urls, _ = _collect_media_urls(
+                        page, page_evaluate_timeout=int(min(3000, remaining * 1000))
+                    )
+                    if img_urls:
+                        image_urls = list(img_urls)
+                except Exception:
+                    pass
+
+            # If timeout or no images found, try dismiss + retry once
+            if not image_urls:
+                print("[R7.2J] IMAGE_EMPTY retry_with_overlay_dismiss", flush=True)
+                try:
+                    _dismiss_common_overlays(page, url=url, stage="retry_empty_images")
+                    page.wait_for_timeout(500)
+                    remaining = image_deadline - time.monotonic()
+                    if remaining > 1000:
+                        og_url = page.evaluate(
+                            """() => {
+                                const el = document.querySelector('meta[property="og:image"]');
+                                return el ? (el.getAttribute('content') || null) : null;
+                            }""",
+                            timeout=3000,
+                        )
+                        if og_url:
+                            image_urls = [og_url]
+                except Exception:
+                    pass
+
+            if not image_urls:
+                print("[R7.2H] IMAGE_TIMEOUT none", flush=True)
+
+            # Normalize image URLs
+            image_urls = filter_product_image_urls(
+                _normalize_mercadolivre_image_urls(image_urls)
+            ) if image_urls else []
+
+            # Description images (best-effort, short timeout)
+            remaining = image_deadline - time.monotonic()
+            if remaining > 0:
+                print("[R7.2H] IMAGE_DESC", flush=True)
+                try:
+                    description_image_urls = filter_product_image_urls(
+                        _collect_description_image_urls(
+                            page, page_evaluate_timeout=int(min(3000, remaining * 1000))
+                        )
+                    )
+                except Exception:
+                    description_image_urls = []
         else:
             image_urls = filter_product_image_urls(
                 _normalize_mercadolivre_image_urls(json_ld_product.get("image_urls") or [])
@@ -851,6 +1118,137 @@ def scroll_product_page(page) -> None:
     except Exception:
         pass
     page.wait_for_timeout(500)
+
+
+def _dismiss_common_overlays(page, url: str | None = None, stage: str | None = None, max_attempts: int = 2) -> list[str]:
+    """
+    R7.2J: Best-effort dismissal of common overlays/modals on marketplace pages.
+    Remove overlays do DOM (nao apenas oculta), clica em botoes de aceitar/fechar.
+    Nunca quebra a coleta — retorna lista de acoes para debug.
+    Executa ate `max_attempts` vezes com pequeno intervalo para capturar
+    overlays carregados lazy.
+    Aceita `url` e `stage` para debug.
+    """
+    if not page:
+        return []
+    all_results = []
+    for attempt in range(max_attempts):
+        if attempt > 0:
+            try:
+                page.wait_for_timeout(400)
+            except Exception:
+                pass
+        results = []
+        try:
+            actions = page.evaluate(
+                """(attempt) => {
+                    const results = [];
+                    const now = Date.now();
+                    const deadline = now + 1500;
+
+                    /* ── 1. Clicar em botoes de aceitar/fechar ── */
+                    const buttonTexts = [
+                        'Entendi', 'OK', 'Continuar', 'Agora não', 'Mais tarde',
+                        'Concordo', 'Aceitar', 'Ver produto', 'Ir para o produto',
+                        'Recusar', 'Dispensar', 'Fechar aviso', 'Rejeitar',
+                        'Aceitar cookies', 'Aceitar todos', 'Rejeitar cookies',
+                        'Fechar aviso'
+                    ];
+                    const texts = buttonTexts.map(t => t.toLowerCase());
+                    const candidates = document.querySelectorAll('button, a, [role="button"], [role="link"], span, div[role="button"]');
+                    candidates.forEach(el => {
+                        if (Date.now() > deadline) return;
+                        const t = (el.textContent || '').trim().toLowerCase();
+                        if (texts.includes(t) && el.offsetParent !== null) {
+                            try { el.click(); results.push('clicked:' + t); } catch(_) {}
+                        }
+                    });
+
+                    /* ── 2. Remover overlays do DOM ── */
+                    const overlaySelectors = [
+                        '.andes-modal', '.andes-modal-overlay',
+                        '.modal', '.modal-overlay',
+                        '.overlay', '.andes-modal__overlay',
+                        '[class*="modal"]', '[class*="overlay"]',
+                        '[class*="popup"]', '[role="dialog"]', '[role="alertdialog"]',
+                        '.cookie-consent', '#cookieConsent', '.gdpr-banner',
+                        '.ui-pdp-actions-modal', '.ui-pdp-actions-modal__overlay',
+                        '[class*="international"]', '[class*="internacional"]',
+                        '[class*="aviso"]', '[class*="warning"]', '[class*="alert"]'
+                    ];
+                    const seen = new Set();
+                    overlaySelectors.forEach(sel => {
+                        if (Date.now() > deadline) return;
+                        document.querySelectorAll(sel).forEach(el => {
+                            if (Date.now() > deadline) return;
+                            const key = el.className + '|' + el.id;
+                            if (seen.has(key)) return;
+                            seen.add(key);
+                            try {
+                                el.remove();
+                                results.push('removed:' + (el.className || el.id || sel));
+                            } catch(_) {}
+                        });
+                    });
+
+                    /* ── 3. Detect overlays com texto especifico e remove ancestral ── */
+                    const overlayTexts = [
+                        'produto internacional', 'compra internacional',
+                        'custos de importacao', 'entendi',
+                        'este produto e de outro pais',
+                        'envio seguro', 'sua compra esta garantida',
+                        'internacional'
+                    ];
+                    const allEls = document.querySelectorAll('div, section, article');
+                    allEls.forEach(el => {
+                        if (Date.now() > deadline) return;
+                        const t = (el.textContent || '').trim().toLowerCase();
+                        if (overlayTexts.some(ot => t.includes(ot)) && el.children.length < 20 && el.offsetParent !== null) {
+                            if (el.tagName === 'DIV' || el.tagName === 'SECTION') {
+                                try { el.remove(); results.push('removed_text:' + t.slice(0, 40)); } catch(_) {}
+                            }
+                        }
+                    });
+
+                    return results;
+                }""",
+                attempt,
+                timeout=2500,
+            )
+            if actions:
+                results.extend(actions)
+        except Exception:
+            pass
+        # R7.2J: Playwright-level fallback clicking (catches what JS evaluate misses)
+        if not results:
+            try:
+                btn = page.get_by_role("button", name=re.compile("Entendi|OK|Continuar|Fechar", re.I)).first
+                if btn and btn.is_visible(timeout=500):
+                    btn.click(timeout=1000)
+                    results.append("pw_role_click")
+            except Exception:
+                pass
+        if not results:
+            try:
+                btn = page.locator("text=Entendi").first
+                if btn and btn.is_visible(timeout=500):
+                    btn.click(timeout=1000)
+                    results.append("pw_text_click")
+            except Exception:
+                pass
+        if not results:
+            try:
+                btn = page.locator("button:has-text('Entendi'), button:has-text('OK'), button:has-text('Continuar')").first
+                if btn and btn.is_visible(timeout=500):
+                    btn.click(timeout=1000)
+                    results.append("pw_css_click")
+            except Exception:
+                pass
+        all_results.extend(results)
+    if all_results and (url or stage):
+        short_url = url[-60:] if url and len(url or "") > 60 else url
+        print(f"[R7.2J] DISMISSED count={len(all_results)} url={short_url} stage={stage}", flush=True)
+    return all_results
 
 
 def collect_pending_jobs(
@@ -1219,7 +1617,8 @@ def _wait_for_manual_confirmation(
 
 
 def _needs_manual_intervention(page) -> bool:
-    text = _strip_accents((_body_text(page) or "").lower())
+    body = _body_text(page)
+    text = _strip_accents((body or "").lower())[:8000]
     patterns = [
         "captcha",
         "verificacao",
@@ -1237,7 +1636,12 @@ def _needs_manual_intervention(page) -> bool:
         "access denied",
         "verify you are human",
     ]
-    return any(pattern in text for pattern in patterns)
+    for pat in patterns:
+        if pat in text:
+            context = text[max(0, text.index(pat) - 40):text.index(pat) + 60]
+            print(f"[R7.2H] INTERVENTION_DETECTED pattern={pat} context={context!r}", flush=True)
+            return True
+    return False
 
 
 def _needs_interactive_retry(data: dict) -> bool:
@@ -1481,8 +1885,11 @@ def _first_price_text(text: str) -> str | None:
     return match.group(0) if match else None
 
 
-def _collect_media_urls(page) -> tuple[list[str], list[str]]:
+def _collect_media_urls(page, page_evaluate_timeout: int | None = None) -> tuple[list[str], list[str]]:
     try:
+        kwargs = {}
+        if page_evaluate_timeout is not None:
+            kwargs["timeout"] = page_evaluate_timeout
         data = page.evaluate(
             """
             () => {
@@ -1525,7 +1932,8 @@ def _collect_media_urls(page) -> tuple[list[str], list[str]]:
 
                 return { images, videos };
             }
-            """
+            """,
+            **kwargs
         )
     except Exception:
         return [], []
@@ -1533,8 +1941,11 @@ def _collect_media_urls(page) -> tuple[list[str], list[str]]:
     return data.get("images", []), data.get("videos", [])
 
 
-def _collect_description_image_urls(page) -> list[str]:
+def _collect_description_image_urls(page, page_evaluate_timeout: int | None = None) -> list[str]:
     try:
+        kwargs = {}
+        if page_evaluate_timeout is not None:
+            kwargs["timeout"] = page_evaluate_timeout
         urls = page.evaluate(
             """
             () => {
@@ -1555,7 +1966,8 @@ def _collect_description_image_urls(page) -> list[str]:
                 });
                 return images;
             }
-            """
+            """,
+            **kwargs
         )
     except Exception:
         return []
@@ -1921,6 +2333,41 @@ def _clean_text(text: str | None) -> str | None:
         return None
     clean = re.sub(r"\s+", " ", str(text)).strip()
     return clean or None
+
+
+def _try_expand_ml_description(page) -> str | None:
+    """R7.2F: Try to expand Mercado Livre description by clicking expand button."""
+    try:
+        expand_selectors = [
+            "button:has-text('Ver descrição completa')",
+            "button:has-text('Ver mais')",
+            "button:has-text('Mostrar mais')",
+            "button:has-text('Ler mais')",
+            "[data-testid='expand-description']",
+            ".ui-pdp-description__expand-button",
+            "button.andes-button--filled",
+        ]
+        for selector in expand_selectors:
+            try:
+                btn = page.query_selector(selector)
+                if btn:
+                    btn.click(timeout=3000)
+                    page.wait_for_timeout(500)
+                    break
+            except Exception:
+                continue
+
+        # Extract expanded description
+        return _first_text_quick(
+            page,
+            [
+                "#description",
+                ".ui-pdp-description",
+                "[data-testid='content']",
+            ],
+        )
+    except Exception:
+        return None
 
 
 def _looks_like_intervention_title(title: str | None) -> bool:

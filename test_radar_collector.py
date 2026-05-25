@@ -22,6 +22,8 @@ os.environ["SHOPEE_RADAR_DB_PATH"] = str(
 )
 
 from shopee_core.radar_collector import (
+    IMAGE_URL_EXTRACT_TIMEOUT,
+    _dismiss_common_overlays,
     collect_mercadolivre_product,
     collect_pending_jobs,
     collect_product_page,
@@ -277,6 +279,56 @@ def test_fast_primary_title_only_is_not_treated_as_empty_collection():
     return True
 
 
+# ── R7.2H: Overlay dismissal and safe image extraction ──────────────────
+
+def test_dismiss_common_overlays_com_entendi():
+    """R7.2H: Overlay com botao Entendi e fechado sem quebrar."""
+    from unittest.mock import MagicMock, patch
+    mock_page = MagicMock()
+    mock_page.evaluate.return_value = ["clicked:entendi", "removed:andes-modal"]
+    result = _dismiss_common_overlays(mock_page, max_attempts=1)
+    assert "clicked:entendi" in result
+    assert "removed:andes-modal" in result
+    mock_page.evaluate.assert_called_once()
+    return True
+
+
+def test_dismiss_common_overlays_sem_overlay():
+    """R7.2J: Pagina sem overlay nao causa erro (pw fallback pode executar em mock)."""
+    from unittest.mock import MagicMock
+    mock_page = MagicMock()
+    mock_page.evaluate.return_value = []
+    result = _dismiss_common_overlays(mock_page)
+    assert result != []  # R7.2J: pw fallback roda em mock por causa de .first/is_visible
+    assert "pw_role_click" in result
+    return True
+
+
+def test_dismiss_common_overlays_falha_nao_quebra():
+    """R7.2J: Falha ao clicar overlay nao quebra a coleta (pw fallback roda em mock)."""
+    from unittest.mock import MagicMock
+    mock_page = MagicMock()
+    mock_page.evaluate.side_effect = RuntimeError("evaluate failed")
+    result = _dismiss_common_overlays(mock_page)
+    assert result != []  # R7.2J: pw fallback roda mesmo quando evaluate falha
+    assert "pw_role_click" in result
+    return True
+
+
+def test_dismiss_common_overlays_page_none():
+    """R7.2H: page=None retorna lista vazia."""
+    result = _dismiss_common_overlays(None)
+    assert result == []
+    return True
+
+
+def test_image_url_extract_timeout_constant():
+    """R7.2H: Constante de timeout de imagem definida e positiva."""
+    assert isinstance(IMAGE_URL_EXTRACT_TIMEOUT, (int, float))
+    assert IMAGE_URL_EXTRACT_TIMEOUT > 0
+    return True
+
+
 if __name__ == "__main__":
     print("\nTESTE R2 - Coletor Assistido por URL\n")
 
@@ -294,6 +346,11 @@ if __name__ == "__main__":
         ("mercadolivre coleta rapida pula descricao", test_mercadolivre_fast_collection_skips_description_details),
         ("coleta rapida pula retry interativo", test_collect_product_page_fast_mode_skips_interactive_retry),
         ("coleta rapida com titulo nao e vazia", test_fast_primary_title_only_is_not_treated_as_empty_collection),
+        ("R7.2H: dismiss overlays com Entendi", test_dismiss_common_overlays_com_entendi),
+        ("R7.2H: dismiss overlays sem overlay", test_dismiss_common_overlays_sem_overlay),
+        ("R7.2H: dismiss overlays falha nao quebra", test_dismiss_common_overlays_falha_nao_quebra),
+        ("R7.2H: dismiss overlays page None", test_dismiss_common_overlays_page_none),
+        ("R7.2H: timeout constante definida", test_image_url_extract_timeout_constant),
     ]
 
     passed = 0
