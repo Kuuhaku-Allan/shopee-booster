@@ -2285,7 +2285,12 @@ def _looks_like_product_url(url: str | None, marketplace: str | None) -> bool:
     if marketplace and detected != marketplace:
         return False
     if detected == "mercadolivre":
-        return bool(re.search(r"/MLB-[a-z0-9]+", normalized_url, flags=re.IGNORECASE))
+        # R7.2K: Aceitar /MLB-XXXXX (tradicional) e /p/MLBXXXXX, /up/MLBUXXXXX (novo formato)
+        if re.search(r"/MLB-[a-z0-9]+", normalized_url, flags=re.IGNORECASE):
+            return True
+        if re.search(r"/(p|up)/MLB", normalized_url, flags=re.IGNORECASE):
+            return True
+        return bool(re.search(r"/MLB\d+", normalized_url, flags=re.IGNORECASE))
     if detected == "shopee":
         return "/i." in normalized_url or "/product/" in normalized_url or bool(
             re.search(r"i\.\d+\.\d+", normalized_url)
