@@ -3437,6 +3437,7 @@ def render_radar_workflow():
                             limit=limit,
                             save_assets=save_assets,
                             browser_mode=browser_mode,
+                            collect_image_urls=True,
                             progress_callback=progress_cb
                         )
                         st.session_state["radar_collection_result"] = res_coleta
@@ -3445,7 +3446,7 @@ def render_radar_workflow():
                         st.error(f"Erro na coleta: {e}")
 
     st.divider()
-    c_class, c_rep = st.columns(2)
+    c_class, c_rep, c_reclass = st.columns([1, 1, 2])
     with c_class:
         if st.button("Classificar Concorrentes", use_container_width=True):
             with st.spinner("Classificando..."):
@@ -3466,6 +3467,16 @@ def render_radar_workflow():
                     st.rerun()
                 else:
                     st.error(f"Não foi possível gerar: {res['error']}")
+    with c_reclass:
+        if st.button("Reclassificar Concorrentes (forçar)", use_container_width=True, type="secondary"):
+            with st.spinner("Reclassificando com limpeza..."):
+                res = classify_linked_candidates_for_product(selected_uid, force_reclassify=True)
+                if res["ok"]:
+                    st.success(f"Reclassificados: {res['total']} (Diretos: {res['direct']} | Parciais: {res['partial']} | Rejeitados: {res['rejected']})")
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.error(res["error"])
                     
     st.divider()
     st.write("##### Tabela de Concorrentes Vinculados")

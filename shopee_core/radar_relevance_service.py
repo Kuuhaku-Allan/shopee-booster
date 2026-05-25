@@ -23,6 +23,13 @@ from .radar_service import classify_product, get_product, list_product_assets, l
 MATCH_VERDICTS = {"competitor_direct", "competitor_partial", "rejected"}
 CONFIDENCE_LEVELS = {"high", "medium", "low"}
 
+_FAKE_URL_PATTERN = re.compile(r'shopee\.com\.br/product/\d{1,2}/\d{1,2}$', re.I)
+
+
+def _is_fake_product_url(url: str | None) -> bool:
+    """R7.2G: Detecta URLs de teste (shopee.com.br/product/1/1 ou /10/20)."""
+    return bool(_FAKE_URL_PATTERN.search(str(url or '').strip()))
+
 _STOPWORDS = {
     "a",
     "as",
@@ -53,7 +60,7 @@ _PRODUCT_TYPE_RULES = {
 }
 
 _AUDIENCE_RULES = {
-    "infantil": ["infantil", "crianca", "criancas", "kids", "menina", "menino"],
+    "infantil": ["infantil", "infantis", "crianca", "criancas", "kids", "menina", "menino"],
     "juvenil": ["juvenil", "adolescente", "teen"],
     "adulto": ["adulto", "adulta", "universitario", "universitaria", "executivo", "executiva"],
     "feminino": ["feminino", "feminina", "menina", "mulher", "princesa", "rosa"],
@@ -78,11 +85,18 @@ _STYLE_RULES = {
     "preta": ["preta", "preto"],
     "princesa": ["princesa", "princess"],
     "unicornio": ["unicornio", "unicorn"],
-    "personagem": ["personagem", "personagens"],
+    "personagem": ["personagem", "personagens", "cartoon", "hello kitty", "pokemon", "disney", "batman", "super heroi"],
     "minimalista": ["minimalista", "clean"],
     "premium": ["premium", "luxo"],
     "casual": ["casual"],
     "colorida": ["colorida", "colorido", "estampada", "estampado"],
+    "kawaii": ["kawaii", "fofa", "fofo", "fofinha", "fofinho"],
+    "dinossauro": ["dinossauro", "dinosaur", "t rex", "t-rex"],
+    "gatinho": ["gatinho", "gatinha", "kitten", "gato"],
+    "floral": ["floral", "florido", "florida", "flowers"],
+    "lilas": ["lilas", "roxo", "purple", "violeta"],
+    "personagem_fantasia": ["sereia", "fada", "bailarina", "boneca", "unicornio", "unicorn"],
+    "personagem_infantil": ["ursinho", "cachorrinho", "coelhinho", "patinho", "pelucia", "bichinho"],
 }
 
 _FEATURE_RULES = {
@@ -95,6 +109,9 @@ _FEATURE_RULES = {
     "notebook": ["notebook", "laptop"],
     "costura": ["costura", "costuras"],
     "ziper": ["ziper", "ziperes"],
+    "organizadora": ["organizadora", "organizado", "compartimento"],
+    "estojo_incluso": ["com estojo", "inclui estojo", "kit estojo"],
+    "costas": ["costas", "mochila de costas"],
 }
 
 
@@ -206,6 +223,17 @@ def compare_product_profiles(own_profile: dict, candidate_profile: dict) -> dict
     if audience_penalty:
         reasons.append("Publico-alvo parece diferente.")
 
+    # R7.2F: Feature matching (rodinhas, reforcada, impermeavel) as positive signals
+    own_features = set(own_profile.get("features") or [])
+    candidate_features = set(candidate_profile.get("features") or [])
+    feature_points = 0.0
+    if own_features and candidate_features:
+        shared_features = own_features & candidate_features
+        if shared_features:
+            feature_points = min(10.0, len(shared_features) * 3)
+            reasons.append(f"Features compartilhadas: {', '.join(shared_features)}.")
+    points += feature_points
+
     use_points, use_reason = _score_overlap(
         own_profile.get("use_case") or [],
         candidate_profile.get("use_case") or [],
@@ -222,6 +250,12 @@ def compare_product_profiles(own_profile: dict, candidate_profile: dict) -> dict
     penalties += use_penalty
     if use_penalty:
         reasons.append("Uso principal parece diferente.")
+
+    # R5.1C: Penalidade semantica por nicho
+    niche_penalty, niche_reason = _niche_mismatch_penalty(own_profile, candidate_profile)
+    penalties += niche_penalty
+    if niche_reason:
+        reasons.append(niche_reason)
 
     style_points, style_reason = _score_overlap(
         own_profile.get("style") or [],
@@ -244,8 +278,31 @@ def compare_product_profiles(own_profile: dict, candidate_profile: dict) -> dict
 
     raw_score = max(0.0, min(100.0, points - penalties))
     score = round(raw_score / 100.0, 4)
+
+    # R7.2G: Aplicar floor para nicho infantil/escolar
+    score = _apply_niche_floor(score, own_profile, candidate_profile, reasons)
+
     verdict = _verdict_for_score(score)
     confidence = _confidence_for(score, verdict, points, penalties, own_profile, candidate_profile)
+
+    # R7.2G: Adicionar reasons explicativos para sinais ausentes
+    own_features_all = set(own_profile.get("features") or [])
+    cand_features_all = set(candidate_profile.get("features") or [])
+    if "rodinhas" in own_features_all and "rodinhas" not in cand_features_all:
+        reasons.append("Não menciona rodinhas; reduz score, mas não invalida.")
+    elif "rodinhas" not in own_features_all and "rodinhas" not in cand_features_all:
+        pass  # Nenhum menciona rodinhas — não comentar
+
+    if not candidate_profile.get("price"):
+        reasons.append("Preço não informado no candidato; não invalida a comparação.")
+    elif own_profile.get("price") and candidate_profile.get("price"):
+        own_p = own_profile["price"]
+        cand_p = candidate_profile["price"]
+        if own_p > 0 and cand_p > 0 and cand_p < own_p * 0.5:
+            reasons.append("Preço abaixo da média; pode indicar produto mais simples, mas ainda comparável.")
+
+    if not candidate_profile.get("shop_name"):
+        reasons.append("Loja/vendedor não informado; não invalida a comparação.")
 
     return {
         "score": score,
@@ -261,6 +318,78 @@ def compare_product_profiles(own_profile: dict, candidate_profile: dict) -> dict
     }
 
 
+def _apply_niche_floor(
+    score: float,
+    own_profile: dict,
+    candidate_profile: dict,
+    reasons: list[str],
+) -> float:
+    """
+    R7.2G: Para nicho mochila/infantil/escolar, garante score mínimo de 0.35
+    (competitor_partial) a menos que haja sinais fortes de incompatibilidade.
+    """
+    own_type = own_profile.get("product_type")
+    cand_type = candidate_profile.get("product_type")
+
+    if own_type != "mochila" or cand_type != "mochila":
+        return score  # Aplica apenas quando ambos são mochilas
+
+    own_audience = set(own_profile.get("audience") or [])
+    own_use_case = set(own_profile.get("use_case") or [])
+
+    is_target_niche = (
+        ("infantil" in own_audience or "feminino" in own_audience)
+        and "escolar" in own_use_case
+    )
+    if not is_target_niche:
+        return score
+
+    # R7.2K: Verificar se candidato tambem tem sinais compativeis com o nicho
+    cand_audience = set(candidate_profile.get("audience") or [])
+    cand_use_case = set(candidate_profile.get("use_case") or [])
+
+    # Se candidato nao tem nenhum sinal de publico OU uso, nao aplica floor
+    if not cand_audience or not cand_use_case:
+        return score
+
+    # Candidato precisa ter pelo menos publico infantil OU feminino OU uso escolar
+    has_candidate_niche_signals = (
+        "infantil" in cand_audience
+        or "feminino" in cand_audience
+        or "escolar" in cand_use_case
+    )
+    if not has_candidate_niche_signals:
+        return score
+
+    # Verificar sinais fortes de incompatibilidade no candidato
+    cand_use_case = set(candidate_profile.get("use_case") or [])
+    cand_audience = set(candidate_profile.get("audience") or [])
+    cand_features = set(candidate_profile.get("features") or [])
+    cand_style = set(candidate_profile.get("style") or [])
+
+    has_notebook = "notebook" in cand_use_case or "notebook" in cand_features
+    has_work = bool(cand_use_case & {"trabalho", "faculdade"})
+    has_adult_masc = "adulto" in cand_audience and "masculino" in cand_audience
+    has_executive = bool({"preta", "minimalista", "premium"} & cand_style)
+
+    # Incompatibilidade forte: não aplica floor
+    if has_notebook and (has_work or "adulto" in cand_audience):
+        return score
+    if has_adult_masc and has_work and has_executive:
+        return score
+    if has_notebook and has_adult_masc:
+        return score
+
+    # Aplica floor: garante pelo menos competitor_partial
+    floor = 0.35
+    if score < floor:
+        reasons.append(
+            f"Score ajustado para mínimo {floor} (nicho mochila infantil/escolar — sem incompatibilidade detectada)."
+        )
+        return floor
+    return score
+
+
 def classify_candidate(own_product_uid: str, candidate_product_uid: str) -> dict:
     """Classify one candidate against one own product and persist the match."""
     own_product = get_product(own_product_uid)
@@ -271,8 +400,39 @@ def classify_candidate(own_product_uid: str, candidate_product_uid: str) -> dict
     if not candidate_product:
         raise ValueError(f"Candidato nao encontrado: {candidate_product_uid}")
 
+    # R7.2G: Verificar URL fake antes de qualquer análise
+    candidate_url = candidate_product.get("canonical_url") or candidate_product.get("url") or ""
+    if _is_fake_product_url(candidate_url):
+        fake_comparison = {
+            "score": 0.0,
+            "verdict": "rejected",
+            "confidence": "high",
+            "reasons": ["URL de teste detectada (shopee/product/N/N). Candidato ignorado."],
+            "signals": {"quality": {"ok": False, "errors": ["fake_test_url"]}, "points": 0.0, "penalties": 100.0},
+        }
+        match = _upsert_match(
+            own_product_uid=own_product_uid,
+            candidate_product_uid=candidate_product_uid,
+            comparison=fake_comparison,
+        )
+        classify_product(candidate_product_uid, "rejected", 0.0, rejection_reason="invalid_test_url")
+        return {
+            "match": match,
+            "own_product": own_product,
+            "candidate_product": candidate_product,
+            "own_profile": {},
+            "candidate_profile": {},
+            **fake_comparison,
+        }
+
     quality = _product_quality(candidate_product)
-    if not quality.get("ok"):
+    # R7.2G: Apenas rejeitar automaticamente se título ausente ou URL claramente inválida
+    # Preço ausente, loja ausente e descrição ausente são penalidades, não bloqueios
+    has_critical_error = any(
+        any(kw in str(err).lower() for kw in ["titulo vazio", "titulo generico", "pagina parece login", "url canonica nao"])
+        for err in (quality.get("errors") or [])
+    )
+    if not quality.get("ok") and has_critical_error:
         comparison = _low_quality_comparison(candidate_product, quality)
         match = _upsert_match(
             own_product_uid=own_product_uid,
@@ -511,6 +671,56 @@ def _upsert_match(
     return match
 
 
+def _niche_mismatch_penalty(own_profile: dict, candidate_profile: dict) -> tuple[float, str | None]:
+    """
+    R5.1C: Penalidade semantica quando candidato tem sinais fora do nicho do produto proprio.
+    
+    Se produto proprio e infantil/feminino/escolar e candidato tem sinais de
+    notebook/executivo/masculino/trabalho, aplicar penalidade maior.
+    """
+    own_audience = set(own_profile.get("audience") or [])
+    own_use_case = set(own_profile.get("use_case") or [])
+    own_style = set(own_profile.get("style") or [])
+    
+    candidate_audience = set(candidate_profile.get("audience") or [])
+    candidate_use_case = set(candidate_profile.get("use_case") or [])
+    candidate_features = set(candidate_profile.get("features") or [])
+    
+    # Detectar se produto proprio e infantil/feminino/escolar
+    is_child_school = (
+        ("infantil" in own_audience or "feminino" in own_audience)
+        and "escolar" in own_use_case
+    )
+    
+    # Detectar sinais problematicos no candidato
+    has_notebook = "notebook" in candidate_use_case or "notebook" in candidate_features
+    has_work_signals = bool(candidate_use_case & {"trabalho", "faculdade"})
+    has_adult_signals = "adulto" in candidate_audience
+    has_masculine = "masculino" in candidate_audience
+    has_executive_style = bool({"preta", "minimalista", "premium"} & set(candidate_profile.get("style") or []))
+    
+    if not is_child_school:
+        return 0.0, None
+    
+    # Notebook sozinho para nicho infantil/escolar
+    if has_notebook and not has_work_signals and not has_adult_signals:
+        return 10.0, "Produto menciona notebook, diferente do nicho infantil escolar."
+    
+    # Notebook + trabalho/faculdade/adulto
+    if has_notebook and (has_work_signals or has_adult_signals):
+        return 35.0, "Produto voltado a notebook/trabalho/adulto, diferente do publico infantil escolar."
+    
+    # Executivo/trabalho/masculino juntos
+    if has_work_signals and has_masculine and has_executive_style:
+        return 40.0, "Produto executivo masculino para trabalho, incompativel com nicho infantil feminino escolar."
+    
+    # Masculino executivo
+    if has_masculine and (has_work_signals or has_adult_signals):
+        return 25.0, "Produto masculino adulto/trabalho, diferente do publico infantil feminino."
+    
+    return 0.0, None
+
+
 def _score_overlap(
     own_values: list[str],
     candidate_values: list[str],
@@ -589,9 +799,10 @@ def _score_price(own_price, candidate_price) -> tuple[float, float, str | None]:
 
 
 def _verdict_for_score(score: float) -> str:
-    if score >= 0.72:
+    """R7.2G: Thresholds ajustados — direct >= 0.65, partial >= 0.35."""
+    if score >= 0.65:
         return "competitor_direct"
-    if score >= 0.45:
+    if score >= 0.35:
         return "competitor_partial"
     return "rejected"
 
@@ -652,6 +863,12 @@ def _matching_labels(normalized_text: str, rules: dict[str, list[str]]) -> list[
 
 
 def _has_pattern(normalized_text: str, pattern: str) -> bool:
+    """
+    Checks if `pattern` appears in `normalized_text`.
+    For single words, allows plural suffixes and common variations
+    via `\\bword\\w*\\b` so that 'princesa' matches 'princesas'.
+    For multi-word patterns, uses str.find().
+    """
     return _pattern_position(normalized_text, pattern) is not None
 
 
@@ -660,7 +877,8 @@ def _pattern_position(normalized_text: str, pattern: str) -> int | None:
     if " " in normalized_pattern:
         position = normalized_text.find(normalized_pattern)
         return position if position >= 0 else None
-    match = re.search(rf"\b{re.escape(normalized_pattern)}\b", normalized_text)
+    # R7.2K: Allow common plural/gender suffixes (s, a, o, as, os, es, is)
+    match = re.search(rf"\b{re.escape(normalized_pattern)}\w{{0,3}}\b", normalized_text)
     return match.start() if match else None
 
 

@@ -2,6 +2,7 @@ import uuid
 import time
 import re
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from shopee_core.radar_db import get_connection, init_db
 from shopee_core.radar_collector import detect_marketplace, normalize_product_url
 from shopee_core.radar_relevance_service import classify_candidates_for_product
@@ -71,12 +72,18 @@ def add_competitor_urls_for_product(own_product_uid: str, urls_text: str, niche:
     invalid_count = 0
     
     for url in lines:
+        # R7.2G: Bloquear URLs fake de teste antes de qualquer processamento
+        if _is_fake_competitor_url(url):
+            invalid_count += 1
+            continue
         try:
             mkt = detect_marketplace(url)
             norm = normalize_product_url(url)
             if mkt == "unknown" or not norm:
                 invalid_count += 1
             else:
+                # R7.2G: Normalização ML adicional — remove parâmetros de rastreamento
+                norm = _normalize_mercadolivre_url(norm)
                 valid_urls.append((mkt, norm, url))
         except Exception:
             invalid_count += 1
@@ -211,9 +218,12 @@ def get_radar_queue_summary(own_product_uid: str | None = None) -> dict:
     return res
 
 def get_competitor_table_for_product(own_product_uid: str) -> list[dict]:
+    """R7.2G: Retorna exatamente 1 linha por candidate_product_uid, sem duplicatas."""
     init_db()
+    # Usa subquery para pegar o job mais recente por produto (ROW_NUMBER seria ideal mas
+    # SQLite < 3.25 pode não ter; usamos subquery com MAX + desempate por job_uid).
     query = """
-        SELECT 
+        SELECT
             c.candidate_product_uid AS product_uid,
             p.title, p.price, p.marketplace, p.shop_name, p.canonical_url, p.status AS product_status,
             m.verdict, m.relevance_score, m.reasons_json,
@@ -221,22 +231,55 @@ def get_competitor_table_for_product(own_product_uid: str) -> list[dict]:
             j.status AS job_status, j.last_error
         FROM radar_candidate_links c
         JOIN radar_products p ON p.product_uid = c.candidate_product_uid
-        LEFT JOIN radar_competitor_matches m ON m.candidate_product_uid = c.candidate_product_uid AND m.own_product_uid = c.own_product_uid
-        LEFT JOIN radar_collection_jobs j ON j.product_uid = c.candidate_product_uid
+        LEFT JOIN radar_competitor_matches m
+            ON m.candidate_product_uid = c.candidate_product_uid
+            AND m.own_product_uid = c.own_product_uid
+        LEFT JOIN (
+            SELECT j1.product_uid, j1.status, j1.last_error
+            FROM radar_collection_jobs j1
+            INNER JOIN (
+                SELECT product_uid, MAX(updated_at || job_uid) AS max_key
+                FROM radar_collection_jobs
+                GROUP BY product_uid
+            ) j2 ON j1.product_uid = j2.product_uid
+                AND (j1.updated_at || j1.job_uid) = j2.max_key
+        ) j ON j.product_uid = c.candidate_product_uid
         WHERE c.own_product_uid = ?
         ORDER BY m.relevance_score DESC NULLS LAST, p.created_at DESC
     """
-    
+
     with get_connection() as conn:
         rows = conn.execute(query, (own_product_uid,)).fetchall()
-        
-    out = []
+
+    # Deduplicate by product_uid in Python (failsafe obrigatório — ajuste GPT #1)
+    seen: dict[str, dict] = {}
     for r in rows:
         d = dict(r)
-        
-        # Consolida verdict
+        uid = d["product_uid"]
+        if uid not in seen:
+            seen[uid] = d
+        else:
+            # Manter a linha com maior relevance_score; em empate, a mais recente
+            prev = seen[uid]
+            prev_score = prev.get("relevance_score") or -1
+            curr_score = d.get("relevance_score") or -1
+            if curr_score > prev_score:
+                seen[uid] = d
+            elif curr_score == prev_score:
+                prev_updated = prev.get("match_updated_at") or ""
+                curr_updated = d.get("match_updated_at") or ""
+                if curr_updated > prev_updated:
+                    seen[uid] = d
+
+    out = []
+    for d in seen.values():
+        # R7.2G: Filtrar URLs fake da tabela
+        if _is_fake_competitor_url(d.get("canonical_url")):
+            continue
+
+        # Consolida verdict / status
         if not d["verdict"]:
-            if d["job_status"] == "pending" or d["job_status"] == "running":
+            if d["job_status"] in ("pending", "running"):
                 d["status"] = "pending"
             elif d["job_status"] == "failed":
                 d["status"] = "failed"
@@ -246,12 +289,12 @@ def get_competitor_table_for_product(own_product_uid: str) -> list[dict]:
                 d["status"] = d["product_status"]
         else:
             d["status"] = d["verdict"]
-            
+
         out.append(d)
-        
+
     return out
 
-def classify_linked_candidates_for_product(own_product_uid: str) -> dict:
+def classify_linked_candidates_for_product(own_product_uid: str, force_reclassify: bool = False) -> dict:
     """
     Roda classify_candidates_for_product, mas no futuro ele pode ser refinado
     para classificar apenas os links na radar_candidate_links se a função core
@@ -262,14 +305,20 @@ def classify_linked_candidates_for_product(own_product_uid: str) -> dict:
     
     Na verdade classify_candidates_for_product varre a radar_products procurando 'competitor_candidate'.
     Para respeitar a separação (R7.2), o serviço precisará apenas buscar os vinculados.
+    
+    Se force_reclassify=True, roda dedupe_radar_links_and_matches antes e reclassifica
+    todos os candidatos vinculados, sobrescrevendo matches antigos.
     """
-    from shopee_core.radar_relevance_service import classify_candidate, get_product
+    from shopee_core.radar_relevance_service import classify_candidate
     init_db()
     
-    own = get_product(own_product_uid)
-    if not own:
-        return {"ok": False, "error": "Produto próprio não encontrado."}
-        
+    # R7.2K: Se force, limpa links e matches duplicados antes de reclassificar
+    if force_reclassify:
+        dedupe_radar_links_and_matches(own_product_uid)
+
+    # Validate own_product exists by checking if classify_candidate can proceed
+    # (classify_candidate will raise ValueError if not found)
+
     query = """
         SELECT c.candidate_product_uid 
         FROM radar_candidate_links c
@@ -283,11 +332,9 @@ def classify_linked_candidates_for_product(own_product_uid: str) -> dict:
     results = []
     for row in candidates:
         cand_uid = row["candidate_product_uid"]
-        cand = get_product(cand_uid)
-        if cand:
-            res = classify_candidate(own, cand)
-            results.append(res)
-            
+        res = classify_candidate(own_product_uid, cand_uid)
+        results.append(res)
+
     # Resumo
     summary = {"total": len(results), "direct": 0, "partial": 0, "rejected": 0, "avg_score": 0.0}
     scores = []
@@ -410,7 +457,33 @@ def _invalid_placeholder_error(url: str | None) -> str:
     clean = re.sub(r"[^a-zA-Z0-9]+", "_", str(url or "empty")).strip("_").lower()
     return f"invalid_empty_shopee_placeholder_url_{clean[:80]}"
 
-def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int = 5, save_assets: bool = False, browser_mode: str = "cdp", cdp_url: str | None = None) -> dict:
+
+def _is_fake_competitor_url(url: str | None) -> bool:
+    """R7.2G: Detecta URLs claramente de teste (ex: shopee.com.br/product/1/1)."""
+    if not url:
+        return False
+    return bool(re.search(r'shopee\.com\.br/product/\d{1,2}/\d{1,2}$', str(url).strip(), re.I))
+
+
+def _normalize_mercadolivre_url(url: str) -> str:
+    """R7.2G: Remove parâmetros de rastreamento de URLs do Mercado Livre."""
+    _ML_NOISE_PARAMS = {
+        'searchVariation', 'tracking_id', 'position', 'polycard_client',
+        'be_origin', 'search_layout', 'wid', 'sid',
+    }
+    try:
+        parsed = urlparse(url)
+        if 'mercadolivre.com.br' not in parsed.netloc:
+            return url
+        qs = parse_qs(parsed.query, keep_blank_values=False)
+        clean_qs = {k: v for k, v in qs.items() if k not in _ML_NOISE_PARAMS}
+        new_query = urlencode(clean_qs, doseq=True)
+        # Remove fragment/hash
+        return urlunparse(parsed._replace(query=new_query, fragment=''))
+    except Exception:
+        return url
+
+def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int = 5, save_assets: bool = False, browser_mode: str = "cdp", cdp_url: str | None = None, collect_image_urls: bool = True) -> dict:
     """
     Executa a coleta de candidatos vinculados de forma direta.
     """
@@ -511,11 +584,12 @@ def _run_linked_collection_for_product_direct(own_product_uid: str, limit: int =
             data = rc.collect_product_page(
                 url=running_job["url"],
                 marketplace=job["marketplace"],
+                interactive_retry=False,
                 browser_mode=browser_mode,
                 candidate_uid=product_uid,
                 job_uid=job_uid,
                 url_start_time=url_start_time,
-                collect_image_urls=save_assets,
+                collect_image_urls=collect_image_urls,
                 **opts
             )
             
@@ -666,6 +740,87 @@ def _asset_warning(
     }
 
 
+def dedupe_radar_links_and_matches(own_product_uid: str) -> dict:
+    """
+    R7.2G: Remove duplicatas reais em radar_candidate_links e radar_competitor_matches
+    para um dado own_product_uid. Também marca URLs fake como invalid_test_url.
+
+    Retorna:
+        {"links_removed": X, "matches_removed": Y, "products_flagged_as_fake": Z}
+    """
+    init_db()
+    now = _now()
+    links_removed = 0
+    matches_removed = 0
+    products_flagged_as_fake = 0
+
+    with get_connection() as conn:
+        # --- 1. Dedupe radar_candidate_links ---
+        # Para cada (own, candidate) duplicado, manter o link_uid mais antigo
+        dup_links = conn.execute("""
+            SELECT candidate_product_uid, MIN(link_uid) AS keep_uid
+            FROM radar_candidate_links
+            WHERE own_product_uid = ?
+            GROUP BY candidate_product_uid
+            HAVING COUNT(*) > 1
+        """, (own_product_uid,)).fetchall()
+
+        for row in dup_links:
+            deleted = conn.execute("""
+                DELETE FROM radar_candidate_links
+                WHERE own_product_uid = ?
+                  AND candidate_product_uid = ?
+                  AND link_uid != ?
+            """, (own_product_uid, row["candidate_product_uid"], row["keep_uid"])).rowcount
+            links_removed += deleted
+
+        # --- 2. Dedupe radar_competitor_matches ---
+        # Para cada (own, candidate) duplicado, manter o match mais recente (updated_at DESC)
+        dup_matches = conn.execute("""
+            SELECT candidate_product_uid, MAX(updated_at || match_uid) AS keep_key
+            FROM radar_competitor_matches
+            WHERE own_product_uid = ?
+            GROUP BY candidate_product_uid
+            HAVING COUNT(*) > 1
+        """, (own_product_uid,)).fetchall()
+
+        for row in dup_matches:
+            keep_key = row["keep_key"]
+            # keep_key = updated_at || match_uid, então match_uid = últimos 32 chars
+            keep_uid = keep_key[-32:] if keep_key and len(keep_key) >= 32 else None
+            if keep_uid:
+                deleted = conn.execute("""
+                    DELETE FROM radar_competitor_matches
+                    WHERE own_product_uid = ?
+                      AND candidate_product_uid = ?
+                      AND match_uid != ?
+                """, (own_product_uid, row["candidate_product_uid"], keep_uid)).rowcount
+                matches_removed += deleted
+
+        # --- 3. Flaggar URLs fake ---
+        fake_candidates = conn.execute("""
+            SELECT p.product_uid, p.canonical_url
+            FROM radar_candidate_links l
+            JOIN radar_products p ON p.product_uid = l.candidate_product_uid
+            WHERE l.own_product_uid = ?
+        """, (own_product_uid,)).fetchall()
+
+        for cand in fake_candidates:
+            if _is_fake_competitor_url(cand["canonical_url"]):
+                conn.execute("""
+                    UPDATE radar_products
+                    SET status = 'failed', rejection_reason = 'invalid_test_url', updated_at = ?
+                    WHERE product_uid = ? AND status != 'failed'
+                """, (now, cand["product_uid"]))
+                products_flagged_as_fake += 1
+
+    return {
+        "links_removed": links_removed,
+        "matches_removed": matches_removed,
+        "products_flagged_as_fake": products_flagged_as_fake,
+    }
+
+
 def mark_stale_running_jobs_as_pending_or_failed(max_age_minutes: int = 10) -> int:
     """
     Encontra jobs 'running' antigos no radar e os marca como 'failed' com last_error.
@@ -717,7 +872,7 @@ def mark_stale_running_jobs_as_pending_or_failed(max_age_minutes: int = 10) -> i
             
     return count
 
-def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save_assets: bool = False, browser_mode: str = "cdp", cdp_url: str | None = None, progress_callback = None) -> dict:
+def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save_assets: bool = False, browser_mode: str = "cdp", cdp_url: str | None = None, progress_callback = None, collect_image_urls: bool = True) -> dict:
     """
     Coleta os candidatos vinculados ao own_product_uid que possuem jobs pending.
     Em produção/Streamlit, executa a coleta em um subprocesso separado para evitar conflitos de event loop,
@@ -750,7 +905,8 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
             limit=limit,
             save_assets=save_assets,
             browser_mode=browser_mode,
-            cdp_url=cdp_url
+            cdp_url=cdp_url,
+            collect_image_urls=collect_image_urls,
         )
         
     # Em produção/Streamlit, chama via subprocesso lendo stdout unbuffered
@@ -770,7 +926,8 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
         str(limit),
         str(save_assets).lower(),
         browser_mode,
-        str(cdp_url) if cdp_url is not None else "None"
+        str(cdp_url) if cdp_url is not None else "None",
+        str(collect_image_urls).lower(),
     ]
     
     try:
@@ -804,13 +961,14 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                 continue
             stdout_lines.append(line_str)
             
-            if "[R7.2F]" in line_str or "[R7.2E]" in line_str or "[R7.2D]" in line_str or "[R7.2C]" in line_str:
+            if "[R7.2F]" in line_str or "[R7.2E]" in line_str or "[R7.2D]" in line_str or "[R7.2C]" in line_str or "[R7.2H]" in line_str:
                 clean_line = (
                     line_str
                     .replace("[R7.2F]", "")
                     .replace("[R7.2E]", "")
                     .replace("[R7.2D]", "")
                     .replace("[R7.2C]", "")
+                    .replace("[R7.2H]", "")
                     .strip()
                 )
                 
@@ -855,12 +1013,47 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
                 # EXTRACTING_IMAGE_URLS
                 elif clean_line.startswith("EXTRACTING_IMAGE_URLS"):
                     state["stage"] = "EXTRACTING_IMAGE_URLS"
-                    state["message"] = "Coletando URLs de imagens"
+                    state["message"] = "Buscando imagens no HTML"
 
                 # EXTRACTING_IMAGES (legacy)
                 elif clean_line.startswith("EXTRACTING_IMAGES"):
                     state["stage"] = "EXTRACTING_IMAGE_URLS"
                     state["message"] = "Coletando URLs de imagens"
+
+                # R7.2H: DISMISSING_OVERLAYS
+                elif clean_line.startswith("DISMISSING_OVERLAYS"):
+                    state["stage"] = "DISMISSING_OVERLAYS"
+                    state["message"] = "Fechando avisos da página"
+
+                # R7.2H: IMAGE_META (og:image)
+                elif clean_line.startswith("IMAGE_META"):
+                    state["stage"] = "IMAGE_META"
+                    state["message"] = "Buscando imagem principal em metadados"
+
+                # R7.2H: IMAGE_GALLERY
+                elif clean_line.startswith("IMAGE_GALLERY"):
+                    state["stage"] = "IMAGE_GALLERY"
+                    state["message"] = "Buscando imagens na galeria"
+
+                # R7.2H: IMAGE_HTML
+                elif clean_line.startswith("IMAGE_HTML"):
+                    state["stage"] = "IMAGE_HTML"
+                    state["message"] = "Buscando imagens no HTML"
+
+                # R7.2H: IMAGE_DESC
+                elif clean_line.startswith("IMAGE_DESC"):
+                    state["stage"] = "IMAGE_DESC"
+                    state["message"] = "Buscando imagens na descrição"
+
+                # R7.2H: IMAGE_TIMEOUT
+                elif clean_line.startswith("IMAGE_TIMEOUT"):
+                    state["stage"] = "IMAGE_TIMEOUT"
+                    state["message"] = "Pulando imagens: timeout/sem resultado"
+
+                # R7.2H: OVERLAYS_DISMISSED
+                elif clean_line.startswith("OVERLAYS_DISMISSED"):
+                    state["stage"] = "OVERLAYS_DISMISSED"
+                    state["message"] = "Avisos da página fechados"
 
                 # EXTRACTING
                 elif clean_line.startswith("EXTRACTING"):
