@@ -3214,6 +3214,7 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
 def _render_pattern_report_preview(report: dict):
     """R7.2L: Render a pattern report preview in the Radar Assistido UI."""
     _j = lambda items: "`, `".join(items) if items else ""
+    _brl = lambda v: f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if v is not None else "N/A"
 
     st.markdown("---")
     st.markdown("##### :bar_chart: Preview do Relatório de Padrões")
@@ -3225,7 +3226,7 @@ def _render_pattern_report_preview(report: dict):
     _pmin = report.get("price_min")
     _pmax = report.get("price_max")
     if _pmin is not None and _pmax is not None:
-        col4.metric("Faixa de Preço", f"R$ {_pmin:.0f} - R$ {_pmax:.0f}")
+        col4.metric("Faixa de Preço", f"{_brl(_pmin)} — {_brl(_pmax)}")
     else:
         col4.metric("Faixa de Preço", "N/A")
 
@@ -3257,7 +3258,8 @@ def _render_pattern_report_preview(report: dict):
             st.markdown(f"**Features recomendadas:** `{_j(rec)}`")
         off = strat_features.get("off_niche", [])
         if off:
-            st.markdown(f":warning: **Features off-niche:** `{_j(off)}`")
+            off_labels = [f.get("feature") if isinstance(f, dict) else f for f in off]
+            st.markdown(f":warning: **Features off-niche:** `{_j(off_labels)}`")
         for w in strat_features.get("warnings", []):
             if w:
                 st.markdown(f":warning: {w}")
@@ -3272,7 +3274,8 @@ def _render_pattern_report_preview(report: dict):
 
     with tabs[3]:
         avg_imgs = strat_images.get("avg_image_count", 0)
-        st.markdown(f"**Média de imagens:** {avg_imgs:.1f}")
+        avg_str = f"{avg_imgs:.1f}".replace(".", ",")
+        st.markdown(f"**Média de imagens:** {avg_str}")
         for rec_text in strat_images.get("recommendations", []):
             st.markdown(f":bulb: {rec_text}")
 
@@ -3282,7 +3285,7 @@ def _render_pattern_report_preview(report: dict):
             for e in evidence:
                 score = e.get("match_relevance_score") or "N/A"
                 verdict_label = e.get("match_verdict", "N/A").replace("competitor_", "")
-                price_str = f"R$ {e['price']:.2f}" if e.get("price") else "Sem preço"
+                price_str = _brl(e.get("price"))
                 st.markdown(
                     f"- **{e.get('title', 'Sem título')}** — "
                     f"*{verdict_label}* (score: {score}) — "
@@ -3291,15 +3294,17 @@ def _render_pattern_report_preview(report: dict):
 
     # Price detail
     with st.expander(":moneybag: Detalhes de Preço", expanded=False):
-        _fmt_price = lambda v: f"R$ {v:.2f}" if v is not None else "N/A"
-        st.markdown(f"- **Mínimo:** {_fmt_price(report.get('price_min'))}")
-        st.markdown(f"- **Máximo:** {_fmt_price(report.get('price_max'))}")
-        st.markdown(f"- **Média:** {_fmt_price(report.get('price_avg'))}")
-        st.markdown(f"- **Mediana:** {_fmt_price(report.get('price_median'))}")
+        st.markdown(f"- **Mínimo:** {_brl(report.get('price_min'))}")
+        st.markdown(f"- **Máximo:** {_brl(report.get('price_max'))}")
+        st.markdown(f"- **Média:** {_brl(report.get('price_avg'))}")
+        st.markdown(f"- **Mediana:** {_brl(report.get('price_median'))}")
         if _pmin is not None and _pmax is not None:
-            band_low = report.get("price_median", 0) * 0.85
-            band_high = report.get("price_median", 0) * 1.15
-            st.markdown(f"- :bulb: **Faixa sugerida:** R$ {band_low:.2f} - R$ {band_high:.2f}")
+            p_med = report.get("price_median")
+            if p_med:
+                band_low = p_med * 0.85
+                band_high = p_med * 1.15
+                st.markdown(f"- :bar_chart: **Faixa competitiva observada:** {_brl(band_low)} — {_brl(band_high)}")
+                st.caption("Use esta faixa como referência de mercado, não como preço final automático. A decisão deve considerar margem, qualidade, marca, frete e posicionamento.")
 
 
 def render_radar_workflow():

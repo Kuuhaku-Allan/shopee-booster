@@ -338,6 +338,62 @@ def test_relatorio_escopo_salvo_e_recuperado():
     return True
 
 
+# ── R7.2L.1 Tests ────────────────────────────────────────────────────────
+
+
+def test_noise_terms_removed_from_strong():
+    """Noise terms (cor, desenho, tecido, lisa) are not in strong_terms."""
+    products = [
+        _product_row("Mochila Cor Rosa Desenho Princesa Tecido Lisa", 90),
+        _product_row("Mochila Rosa Cor Tecido Lisa", 80),
+    ]
+    result = analyze_title_terms(products)
+    strong = {row["term"] for row in result["strong_terms"]}
+    for noise in ("cor", "desenho", "tecido", "lisa"):
+        assert noise not in strong, f"Noise term '{noise}' found in strong_terms"
+    # But meaningful terms should be there
+    assert "mochila" in strong
+    assert "rosa" in strong
+    return True
+
+
+def test_notebook_off_niche():
+    """Notebook continues to be detected as off-niche for child school niche."""
+    own = _product_row("Mochila Infantil Rosa Escolar", 89.9, product_uid="own")
+    products = [
+        _product_row("Mochila Infantil Rosa Escolar com Notebook", 99.9),
+    ]
+    result = analyze_feature_patterns(products, own_product=own)
+    off_niche = {row["feature"] for row in result["off_niche_features"]}
+    assert "notebook" in off_niche
+    return True
+
+
+def test_menino_menina_not_off_niche():
+    """Both genders (menino menina) does NOT trigger masculina off-niche."""
+    own = _product_row("Mochila Infantil Rosa Escolar", 89.9, product_uid="own")
+    products = [
+        _product_row("Mochila Infantil Menino Menina Escolar", 99.9),
+    ]
+    result = analyze_feature_patterns(products, own_product=own)
+    off_niche = {row["feature"] for row in result["off_niche_features"]}
+    assert "masculina" not in off_niche, "menino menina should not be off-niche"
+    return True
+
+
+def test_price_has_band_label():
+    """Price analysis includes band_label and band_disclaimer."""
+    products = [
+        _product_row("A", 50),
+        _product_row("B", 100),
+    ]
+    result = analyze_price_patterns(products)
+    assert "band_label" in result
+    assert "band_disclaimer" in result
+    assert "Faixa competitiva" in result["band_label"]
+    return True
+
+
 if __name__ == "__main__":
     print("\nTESTE R5 - Analise de Padroes\n")
 
@@ -361,6 +417,11 @@ if __name__ == "__main__":
         ("evidence list includes competitors", test_evidence_list_includes_competitors),
         ("price dispersion warning", test_price_dispersion_warning),
         ("scope salvo e recuperado", test_relatorio_escopo_salvo_e_recuperado),
+        # R7.2L.1
+        ("noise terms removidos", test_noise_terms_removed_from_strong),
+        ("notebook off-niche", test_notebook_off_niche),
+        ("menino menina nao off-niche", test_menino_menina_not_off_niche),
+        ("price band label presente", test_price_has_band_label),
     ]
 
     passed = 0

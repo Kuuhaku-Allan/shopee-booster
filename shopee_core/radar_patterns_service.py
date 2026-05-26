@@ -46,6 +46,15 @@ TITLE_STOPWORDS = {
     "sem",
     "uma",
     "um",
+    # R7.2L.1: noise/ML variation metadata — never strategic
+    "cor",
+    "desenho",
+    "tecido",
+    "lisa",
+    "unidade",
+    "vendido",
+    "mercado",
+    "livre",
 }
 
 FEATURE_PATTERNS = {
@@ -193,6 +202,8 @@ def analyze_price_patterns(products: list[dict], weights: dict[str, float] | Non
         "avg": round(avg, 2),
         "median": median,
         "suggested_band": {"low": low_band, "high": high_band},
+        "band_label": "Faixa competitiva observada",
+        "band_disclaimer": "Use esta faixa como referencia de mercado, nao como preco final automatico. A decisao deve considerar margem, qualidade, marca, frete e posicionamento.",
         "outliers": outliers,
         "dispersion_warning": dispersion_warning,
     }
@@ -255,6 +266,14 @@ def analyze_feature_patterns(products: list[dict], own_product: dict | None = No
         
         for row in features:
             feature = row["feature"]
+            # R7.2L.1: masculina so e off-niche se nao houver feminina junto (unissex ok)
+            if feature == "masculina":
+                has_feminina_too = any(
+                    r["feature"] == "feminina" for r in features
+                )
+                if has_feminina_too:
+                    in_niche_features.append(row)
+                    continue
             # Features problematicas para nicho infantil/feminino/escolar
             if is_child_school and feature in {"notebook", "masculina", "premium", "minimalista"}:
                 off_niche_features.append({
@@ -493,7 +512,8 @@ def _build_strategy_images(analyses: dict) -> dict:
     if avg >= 3:
         recs.append(f"Manter pelo menos {int(avg)} imagens, seguindo a media dos concorrentes.")
     elif avg > 0:
-        recs.append(f"Media baixa de imagens ({avg:.0f}); considerar aumentar para pelo menos 3.")
+        avg_str = f"{avg:.1f}".replace(".", ",")
+        recs.append(f"Media baixa de imagens ({avg_str}); considerar aumentar para pelo menos 3.")
     if img.get("downloaded_assets", 0) == 0 and avg > 0:
         recs.append("Registrar imagens como assets para analise visual futura.")
     return {
