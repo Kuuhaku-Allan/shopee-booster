@@ -436,13 +436,15 @@ def run_automatic_radar_cycle(
                 pass
 
     # Step 0: Ensure Chrome ready
-    _progress("chrome", "Verificando Chrome do Radar...")
+    _progress("chrome_check", "Procurando Chrome/Edge no sistema...")
     from shopee_core.radar_cdp_service import ensure_radar_chrome_ready
     chrome = ensure_radar_chrome_ready(cdp_url)
     if not chrome.get("ok"):
         result["step"] = "chrome"
         result["errors"].append(chrome.get("message", "Falha ao abrir Chrome do Radar."))
+        result["diagnostics"] = chrome.get("diagnostics", {})
         return result
+    _progress("chrome_validate", "Chrome CDP pronto e validado.")
 
     # Step 1: Generate queries
     _progress("queries", "Gerando buscas...")

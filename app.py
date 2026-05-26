@@ -3625,6 +3625,32 @@ def render_radar_workflow():
                                    options=["high", "medium", "low"],
                                    index=1, key="auto_target_conf")
 
+    # Botões auxiliares: reconectar / reiniciar Chrome
+    aux_a, aux_b = st.columns(2)
+    with aux_a:
+        if st.button("Reconectar ao Chrome aberto", use_container_width=True, key="btn_radar_reconnect"):
+            from shopee_core.radar_cdp_service import is_cdp_available, _fetch_json_version
+            if is_cdp_available():
+                v = _fetch_json_version()
+                browser = (v or {}).get("Browser", "Chrome")
+                st.success(f"Chrome CDP ativo: {browser}")
+            else:
+                st.error("Chrome CDP nao responde em http://127.0.0.1:9222/json/version")
+    with aux_b:
+        if st.button("Reiniciar Chrome do Radar", use_container_width=True, key="btn_radar_restart"):
+            from shopee_core.radar_cdp_service import kill_managed_radar_chrome, start_radar_chrome, ensure_radar_chrome_ready
+            kill_res = kill_managed_radar_chrome()
+            if kill_res.get("killed"):
+                st.info(f"Chrome do Radar encerrado (PID {kill_res.get('pids', [])}).")
+            start_res = ensure_radar_chrome_ready()
+            if start_res.get("ok"):
+                st.success(f"Chrome do Radar pronto: {start_res.get('message')}")
+            else:
+                diag = start_res.get("diagnostics", {})
+                with st.expander("Diagnostico do Chrome", expanded=True):
+                    st.code(json.dumps(diag, indent=2, default=str))
+                st.error(f"Falha ao reiniciar Chrome: {start_res.get('message')}")
+
     if st.button("Rodar Radar Automático", use_container_width=True, type="primary"):
         mkt_val = "mercadolivre" if "mercadolivre" in auto_mkt else "shopee"
         if mkt_val == "shopee":
@@ -3647,6 +3673,23 @@ def render_radar_workflow():
                 "report": "Gerando relatório",
                 "confidence": "Calculando confiança",
                 "done": "Concluído",
+            }
+            display = stage_map.get(stage, stage)
+            p_info.markdown(f"**Etapa:** {display}")
+            p_log.text(msg)
+
+        def chrome_progress(state_dict):
+            stage = state_dict.get("stage", "")
+            msg = state_dict.get("message", "")
+            stage_map = {
+                "chrome_check": "Procurando Chrome/Edge",
+                "chrome_start": "Abrindo Chrome do Radar",
+                "chrome_wait": "Aguardando porta 9222",
+                "chrome_validate": "Validando CDP",
+                "chrome_occupied": "Porta ocupada - analisando",
+                "chrome_kill_stale": "Limpando Chrome travado",
+                "done": "OK",
+                "error": "Falha",
             }
             display = stage_map.get(stage, stage)
             p_info.markdown(f"**Etapa:** {display}")
@@ -3696,7 +3739,34 @@ def render_radar_workflow():
             time.sleep(1)
             st.rerun()
         else:
-            st.error(f"Erro na etapa '{auto_res.get('step', '?')}': {'; '.join(auto_res.get('errors', []))}")
+            error_step = auto_res.get("step", "?")
+            errors_msg = "; ".join(auto_res.get("errors", []))
+            st.error(f"Erro na etapa '{error_step}': {errors_msg}")
+
+            # Show detailed diagnostics if Chrome failed
+            if error_step == "chrome":
+                diag = auto_res.get("diagnostics") or {}
+                if diag:
+                    with st.expander("Diagnostico do Chrome", expanded=True):
+                        st.code(json.dumps(diag, indent=2, default=str))
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("Tentar reconectar", key="retry_reconnect"):
+                        from shopee_core.radar_cdp_service import is_cdp_available
+                        if is_cdp_available():
+                            st.success("Chome CDP ativo!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("Chrome CDP ainda nao responde.")
+                with col_b:
+                    if st.button("Reiniciar Chrome do Radar", key="retry_restart"):
+                        from shopee_core.radar_cdp_service import kill_managed_radar_chrome, ensure_radar_chrome_ready
+                        kill_managed_radar_chrome()
+                        st.info("Chrome antigo encerrado. Tentando abrir novo...")
+                        time.sleep(2)
+                        st.rerun()
 
     st.divider()
     st.write("##### Tabela de Concorrentes Vinculados")

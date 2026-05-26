@@ -23,6 +23,7 @@ from shopee_core.radar_discovery_service import (
     calculate_radar_market_confidence,
     run_automatic_radar_cycle,
 )
+from unittest.mock import patch
 from shopee_core.radar_service import get_product, add_product_url, mark_product_collected
 from shopee_core.radar_relevance_service import classify_candidate
 from shopee_core.radar_patterns_service import generate_pattern_report, get_latest_pattern_report
@@ -165,8 +166,14 @@ def test_confidence_after_report():
 
 def test_cycle_errors_without_chrome():
     """Cycle returns error when Chrome is not available."""
-    # This will fail at chrome step because there's no CDP browser in testing
-    result = run_automatic_radar_cycle("nonexistent", browser_mode="cdp", cdp_url="http://127.0.0.1:19222")
+    from shopee_core.radar_cdp_service import ensure_radar_chrome_ready as real_ensure
+    with patch("shopee_core.radar_cdp_service.ensure_radar_chrome_ready") as mock_ready:
+        mock_ready.return_value = {
+            "ok": False, "environment_error": True,
+            "message": "Chrome do Radar nao respondeu.",
+            "diagnostics": {},
+        }
+        result = run_automatic_radar_cycle("nonexistent", browser_mode="cdp", cdp_url="http://127.0.0.1:19222")
     assert not result.get("ok")
     assert result.get("step") == "chrome" or len(result.get("errors", [])) > 0
     return True
@@ -174,7 +181,9 @@ def test_cycle_errors_without_chrome():
 
 def test_cycle_stops_on_missing_product():
     """Cycle stops gracefully when product doesn't exist."""
-    result = run_automatic_radar_cycle("nonexistent_uid_xyz")
+    with patch("shopee_core.radar_cdp_service.ensure_radar_chrome_ready") as mock_ready:
+        mock_ready.return_value = {"ok": True, "already_running": True}
+        result = run_automatic_radar_cycle("nonexistent_uid_xyz")
     assert not result.get("ok")
     return True
 
