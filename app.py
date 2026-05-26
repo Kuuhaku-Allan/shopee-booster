@@ -3222,7 +3222,12 @@ def _render_pattern_report_preview(report: dict):
     col2.metric("Concorrentes Usados", report.get("total_competitors", 0))
     scope_label = "Diretos" if report.get("candidate_scope") == "direct_only" else "Diretos+Parciais"
     col3.metric("Escopo", scope_label)
-    col4.metric("Faixa de Preço", f"R$ {report.get('price_min', 0):.0f} - R$ {report.get('price_max', 0):.0f}")
+    _pmin = report.get("price_min")
+    _pmax = report.get("price_max")
+    if _pmin is not None and _pmax is not None:
+        col4.metric("Faixa de Preço", f"R$ {_pmin:.0f} - R$ {_pmax:.0f}")
+    else:
+        col4.metric("Faixa de Preço", "N/A")
 
     if report.get("warnings"):
         with st.expander(":warning: Avisos", expanded=True):
@@ -3286,11 +3291,12 @@ def _render_pattern_report_preview(report: dict):
 
     # Price detail
     with st.expander(":moneybag: Detalhes de Preço", expanded=False):
-        st.markdown(f"- **Mínimo:** R$ {report.get('price_min', 'N/A')}")
-        st.markdown(f"- **Máximo:** R$ {report.get('price_max', 'N/A')}")
-        st.markdown(f"- **Média:** R$ {report.get('price_avg', 'N/A')}")
-        st.markdown(f"- **Mediana:** R$ {report.get('price_median', 'N/A')}")
-        if report.get("price_min") and report.get("price_max"):
+        _fmt_price = lambda v: f"R$ {v:.2f}" if v is not None else "N/A"
+        st.markdown(f"- **Mínimo:** {_fmt_price(report.get('price_min'))}")
+        st.markdown(f"- **Máximo:** {_fmt_price(report.get('price_max'))}")
+        st.markdown(f"- **Média:** {_fmt_price(report.get('price_avg'))}")
+        st.markdown(f"- **Mediana:** {_fmt_price(report.get('price_median'))}")
+        if _pmin is not None and _pmax is not None:
             band_low = report.get("price_median", 0) * 0.85
             band_high = report.get("price_median", 0) * 1.15
             st.markdown(f"- :bulb: **Faixa sugerida:** R$ {band_low:.2f} - R$ {band_high:.2f}")
