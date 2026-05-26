@@ -18,6 +18,10 @@ import sys
 import json
 from pathlib import Path
 
+# R7.2K.1: Ensure UTF-8 output for Windows console
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from shopee_core.radar_relevance_service import (

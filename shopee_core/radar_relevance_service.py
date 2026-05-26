@@ -699,21 +699,32 @@ def _niche_mismatch_penalty(own_profile: dict, candidate_profile: dict) -> tuple
     has_masculine = "masculino" in candidate_audience
     has_executive_style = bool({"preta", "minimalista", "premium"} & set(candidate_profile.get("style") or []))
     
+    # R7.2K.1: Se candidato tem sinais FORTES de publico infantil/feminino escolar,
+    # reduzir penalidade de notebook/adulto vindo de specs/atributos (ex: "compartimento para notebook", "idade: adultos")
+    has_strong_child_school = ("infantil" in own_audience and "escolar" in own_use_case)
+    cand_has_strong_child_school = (
+        ("infantil" in candidate_audience or "feminino" in candidate_audience)
+        and "escolar" in candidate_use_case
+    )
+
     if not is_child_school:
         return 0.0, None
-    
+
     # Notebook sozinho para nicho infantil/escolar
     if has_notebook and not has_work_signals and not has_adult_signals:
         return 10.0, "Produto menciona notebook, diferente do nicho infantil escolar."
-    
-    # Notebook + trabalho/faculdade/adulto
+
+    # Notebook + trabalho/faculdade/adulto — se candidato TAMBEM tem sinais infantis/escolares,
+    # penalidade menor (spec de compartimento para notebook nao define o produto)
     if has_notebook and (has_work_signals or has_adult_signals):
+        if cand_has_strong_child_school:
+            return 15.0, "Produto menciona notebook/adulto em especificacoes, mas publico principal parece infantil/escolar."
         return 35.0, "Produto voltado a notebook/trabalho/adulto, diferente do publico infantil escolar."
-    
+
     # Executivo/trabalho/masculino juntos
     if has_work_signals and has_masculine and has_executive_style:
         return 40.0, "Produto executivo masculino para trabalho, incompativel com nicho infantil feminino escolar."
-    
+
     # Masculino executivo
     if has_masculine and (has_work_signals or has_adult_signals):
         return 25.0, "Produto masculino adulto/trabalho, diferente do publico infantil feminino."
