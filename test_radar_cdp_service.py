@@ -178,7 +178,14 @@ def test_read_invalid_pid(tmp_path):
 
 
 def test_is_radar_managed_with_flags():
-    """Returns True for processes with correct flags."""
+    """Returns True for processes with correct flags and profile."""
+    proc = MagicMock()
+    proc.CommandLine = "chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\chrome_radar_profile"
+    assert _is_radar_managed_process(proc)
+
+
+def test_is_radar_managed_legacy_profile():
+    """Returns True even for legacy profile name."""
     proc = MagicMock()
     proc.CommandLine = "chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\radar_chrome_profile"
     assert _is_radar_managed_process(proc)

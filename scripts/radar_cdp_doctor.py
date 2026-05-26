@@ -45,6 +45,9 @@ from shopee_core.radar_cdp_service import (
     DEFAULT_PROFILE_DIR,
     DEFAULT_CDP_URL,
     CDP_PORT,
+    _BASE,
+    _OFFICIAL_PROFILE_NAME,
+    _LEGACY_PROFILE_NAME,
 )
 
 
@@ -257,7 +260,8 @@ def doctor():
 
     # 8. user_data_dir
     ud = Path(DEFAULT_PROFILE_DIR.resolve())
-    print(f"\n[8] User data dir: {ud}")
+    legacy_ud = _BASE / "data" / _LEGACY_PROFILE_NAME
+    print(f"\n[8] User data dir (oficial): {ud}")
     if ud.exists():
         items = list(ud.iterdir())
         print(f"    Existe: sim ({len(items)} itens)")
@@ -268,6 +272,23 @@ def doctor():
             print("    Lock files: nenhum")
     else:
         print("    Existe: nao (sera criado ao iniciar Chrome)")
+
+    # Legacy profile check
+    if legacy_ud.exists():
+        legacy_items = list(legacy_ud.iterdir())
+        print(f"\n    [!] Perfil legado {_LEGACY_PROFILE_NAME} tambem existe ({len(legacy_items)} itens)")
+        print(f"    Caminho: {legacy_ud}")
+        print("    ATENCAO: existem DOIS perfis de Radar. O oficial e data/chrome_radar_profile.")
+        # Check which profile is in use by running processes
+        procs = _get_wmi_processes()
+        for p in procs:
+            cmd = p.get("command_line", "") or ""
+            if _OFFICIAL_PROFILE_NAME in cmd:
+                print(f"    Perfil oficial em uso por PID {p['pid']}")
+            elif _LEGACY_PROFILE_NAME in cmd:
+                print(f"    Perfil legado em uso por PID {p['pid']}")
+    else:
+        print(f"\n    Perfil legado {_LEGACY_PROFILE_NAME}: nao existe")
 
     # 9. Command line
     print("\n[9] Comando que seria usado para abrir Chrome CDP:")

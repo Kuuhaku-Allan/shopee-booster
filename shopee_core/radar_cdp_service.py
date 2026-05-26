@@ -14,10 +14,12 @@ else:
     _BASE = Path(__file__).resolve().parent.parent
 
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
-DEFAULT_PROFILE_DIR = _BASE / "data" / "radar_chrome_profile"
+DEFAULT_PROFILE_DIR = _BASE / "data" / "chrome_radar_profile"
 PID_FILE = _BASE / "data" / "radar_chrome.pid"
 CDP_PORT = 9222
 _CREATE_NO_WINDOW = 0x08000000
+_OFFICIAL_PROFILE_NAME = "chrome_radar_profile"
+_LEGACY_PROFILE_NAME = "radar_chrome_profile"
 
 
 def is_cdp_available(cdp_url: str = DEFAULT_CDP_URL, timeout: float = 2.0) -> bool:
@@ -114,11 +116,14 @@ def _clear_radar_pid():
 
 
 def _is_radar_managed_process(proc) -> bool:
+    """Check if a process is a Radar-managed Chrome (right flags + profile)."""
     try:
         cmdline = proc.CommandLine or ""
     except Exception:
         return False
-    return "remote-debugging-port=9222" in cmdline and "radar_chrome_profile" in cmdline
+    if "remote-debugging-port=9222" not in cmdline:
+        return False
+    return _OFFICIAL_PROFILE_NAME in cmdline or _LEGACY_PROFILE_NAME in cmdline
 
 
 def _is_process_alive(pid: int) -> bool:
@@ -302,29 +307,30 @@ def start_radar_chrome(cdp_port: int = CDP_PORT, user_data_dir: Path | None = No
             "-Marketplace", "mercadolivre",
         ]
         try:
-            proc = subprocess.Popen(
+            subprocess.Popen(
                 ps1_cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            pid = proc.pid
-
-            time.sleep(2.5)
-            alive = _is_process_alive(pid)
-            # The PS1 finishes quickly (Start-Process returns immediately),
-            # so the powershell PID might not be alive. That's OK.
-            # Check if Chrome CDP is now available instead.
-            if is_cdp_available(cdp_url):
-                _write_radar_pid(pid)
-                return {
-                    "ok": True, "started": True, "already_running": False,
-                    "message": f"Chrome iniciado via PS1 (PID {pid}).",
-                    "pid": pid, "chrome_path": chrome_path,
-                    "user_data_dir": str(profile_dir), "cdp_url": cdp_url,
-                }
-
-            # If PS1 finished but CDP still not available, try direct method
-        except Exception as e:
+            # Wait for Chrome to start and CDP to respond (up to 15s)
+            for _ in range(30):
+                time.sleep(0.5)
+                if is_cdp_available(cdp_url):
+                    # Find the real Chrome PID
+                    chrome_pid = None
+                    for p in _get_wmi_processes():
+                        if _is_radar_managed_process(p):
+                            chrome_pid = p["pid"]
+                            break
+                    _write_radar_pid(chrome_pid or 0)
+                    return {
+                        "ok": True, "started": True, "already_running": False,
+                        "message": f"Chrome iniciado via PS1 (PID {chrome_pid}).",
+                        "pid": chrome_pid, "chrome_path": chrome_path,
+                        "user_data_dir": str(profile_dir), "cdp_url": cdp_url,
+                    }
+            # If PS1 launched but CDP not available after 15s, fall through
+        except Exception:
             pass  # fall through to direct method
 
     # ── Method 2: Direct subprocess (fallback) ───────────────────────
