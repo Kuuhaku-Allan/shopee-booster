@@ -87,6 +87,19 @@ def test_mochila_infantil_vs_universitaria_notebook_rejected_or_low_partial():
     return True
 
 
+def test_r73d_mochila_infantil_vs_natacao_nabaiji_not_direct():
+    result = _compare(
+        "Mochila Infantil Princesa Rosa Escolar Feminina Grande",
+        "Mochila Nabaiji 7L Para Natacao Cor Branca Ziper Infantil Feminino",
+        own_price=93.1,
+        candidate_price=69.9,
+    )
+    assert result["verdict"] != "competitor_direct"
+    assert result["score"] < 0.65
+    assert any("natacao" in reason.lower() for reason in result["reasons"])
+    return True
+
+
 def test_mochila_vs_lancheira_rejected_or_low_partial():
     result = _compare(
         "Mochila infantil rosa escolar",
@@ -507,6 +520,7 @@ if __name__ == "__main__":
         ("mochila infantil rosa vs princesa rosa", test_mochila_infantil_rosa_vs_princesa_direct),
         ("mochila infantil rosa vs escolar menina", test_mochila_infantil_rosa_vs_escolar_menina_direct_or_partial),
         ("mochila infantil vs universitaria notebook", test_mochila_infantil_vs_universitaria_notebook_rejected_or_low_partial),
+        ("R7.3D: infantil escolar vs natacao Nabaiji nao direct", test_r73d_mochila_infantil_vs_natacao_nabaiji_not_direct),
         ("mochila infantil vs lancheira infantil", test_mochila_vs_lancheira_rejected_or_low_partial),
         ("minimalista branca vs casual branca", test_minimalista_branca_vs_casual_branca_direct_or_partial),
         ("sem descricao usa titulo", test_sem_descricao_classifica_usando_titulo),

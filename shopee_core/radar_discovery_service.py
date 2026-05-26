@@ -8,9 +8,13 @@ then orchestrates collection, classification and pattern report generation.
 from __future__ import annotations
 
 import re
+import json
+import subprocess
+import sys
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from shopee_core.radar_db import get_connection, init_db
@@ -19,6 +23,7 @@ from shopee_core.radar_workflow_ui_service import (
     add_competitor_urls_for_product,
     classify_linked_candidates_for_product,
     ensure_collection_jobs_for_linked_candidates,
+    get_competitor_table_for_product,
     run_pattern_analysis_for_product,
     run_linked_collection_for_product,
 )
@@ -55,6 +60,11 @@ def generate_competitor_search_queries(own_product: dict) -> list[dict]:
         "cachorrinho", "ursinho", "sereia", "patrulha", "canina",
         "carros", "homem", "aranha", "batman", "super", "herois",
     )]
+
+    # Infantil/feminina com temas como princesa costuma puxar concorrencia escolar.
+    # Sem esse reforco, ML retorna nichos fracos como natacao/esporte.
+    if product_type == "mochila" and has_infantil and (has_feminina or themes):
+        has_escolar = True
 
     queries: list[dict] = []
     added_set: set[str] = set()
@@ -145,6 +155,8 @@ def _normalize_discovered_url(raw_url: str) -> str | None:
         return None
     if not canonical or detect_marketplace(canonical) not in ("mercadolivre",):
         return None
+    if not _is_valid_ml_product_url(canonical):
+        return None
     # Reject fake/test URLs
     if re.search(r"shopee\.com\.br/product/\d{1,2}/\d{1,2}$", canonical, re.I):
         return None
@@ -155,24 +167,27 @@ _EXTRACT_URL_JS = """
 () => {
     const results = [];
     const seen = new Set();
-    // Collect all hrefs from <a> tags
-    document.querySelectorAll('a[href]').forEach(a => {
-        const href = a.href;
+    const push = (href) => {
         if (!href || seen.has(href)) return;
         seen.add(href);
         results.push(href);
+    };
+    // Collect all hrefs from <a> tags
+    document.querySelectorAll('a[href]').forEach(a => {
+        push(a.href);
     });
     // Also check data attributes used by ML
     document.querySelectorAll('[data-product-id]').forEach(el => {
         const pid = el.getAttribute('data-product-id');
         if (pid) {
             const url = 'https://produto.mercadolivre.com.br/MLB-' + pid;
-            if (!seen.has(url)) {
-                seen.add(url);
-                results.push(url);
-            }
+            push(url);
         }
     });
+    // Some ML result links live inside hydrated JSON rather than plain anchors.
+    const html = document.documentElement ? document.documentElement.innerHTML : '';
+    const matches = html.match(/https?:\\/\\/[^"'<>\\s]+mercadolivre\\.com\\.br\\/[^"'<>\\s]+/g) || [];
+    matches.forEach(push);
     return results;
 }
 """
@@ -187,9 +202,11 @@ def _extract_ml_product_urls_from_page(page) -> list[str]:
         return []
 
     valid: list[str] = []
+    seen_norm: set[str] = set()
     for url in urls:
         norm = _normalize_discovered_url(url)
-        if norm:
+        if norm and norm not in seen_norm:
+            seen_norm.add(norm)
             valid.append(norm)
     return valid
 
@@ -197,19 +214,27 @@ def _extract_ml_product_urls_from_page(page) -> list[str]:
 # ── Part 3: Discover marketplace candidate URLs ──────────────────────────
 
 
-def discover_marketplace_candidate_urls(
+def _discover_marketplace_candidate_urls_direct(
     own_product_uid: str,
     marketplace: str = "mercadolivre",
     max_queries: int = 6,
     max_urls_per_query: int = 10,
     browser_mode: str = "cdp",
     cdp_url: str = "http://127.0.0.1:9222",
+    progress_callback=None,
 ) -> dict:
-    """Search marketplace and collect candidate URLs.
+    """Search marketplace and collect candidate URLs in the current process.
 
     Opens ML search pages in CDP Chrome, extracts product card URLs,
     normalizes and inserts them as linked candidates.
     """
+    def _progress(message: str):
+        if progress_callback:
+            try:
+                progress_callback({"stage": "discover", "message": message})
+            except Exception:
+                pass
+
     own_product = get_product(own_product_uid)
     if not own_product:
         return {"ok": False, "error": "Produto proprio nao encontrado.", "urls_found": 0, "urls_inserted": 0}
@@ -239,6 +264,8 @@ def discover_marketplace_candidate_urls(
             for q in queries:
                 search_url = _build_ml_search_url(q["query"])
                 try:
+                    _progress(f"Buscando no Mercado Livre: {q['query']}")
+                    print(f"[R7.3] SEARCH query={q['query']} url={search_url}", flush=True)
                     page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
                     time.sleep(1.5)
                     _dismiss_common_overlays(page, url=search_url, stage="ml_search")
@@ -247,6 +274,8 @@ def discover_marketplace_candidate_urls(
                     urls = _extract_ml_product_urls_from_page(page)
                     # Limit per query
                     urls = urls[:max_urls_per_query]
+                    print(f"[R7.3] FOUND query={q['query']} urls={len(urls)}", flush=True)
+                    _progress(f"{len(urls)} URL(s) de produto encontradas para: {q['query']}")
                     all_norm_urls.extend(urls)
                 except Exception as e:
                     errors.append(f"Busca '{q['query']}': {e}")
@@ -271,6 +300,19 @@ def discover_marketplace_candidate_urls(
     urls_text = "\n".join(unique_urls)
     insert_result = add_competitor_urls_for_product(own_product_uid, urls_text)
 
+    if not unique_urls:
+        return {
+            "ok": False,
+            "error": "; ".join(errors) if errors else "Nenhuma URL de produto encontrada nas buscas do Mercado Livre.",
+            "queries_used": len(queries),
+            "urls_found": len(all_norm_urls),
+            "urls_unique": len(unique_urls),
+            "urls_inserted": 0,
+            "urls_existing": 0,
+            "invalid": 0,
+            "errors": errors,
+        }
+
     return {
         "ok": True,
         "queries_used": len(queries),
@@ -281,6 +323,116 @@ def discover_marketplace_candidate_urls(
         "invalid": insert_result.get("invalid", 0),
         "errors": errors,
     }
+
+
+def discover_marketplace_candidate_urls(
+    own_product_uid: str,
+    marketplace: str = "mercadolivre",
+    max_queries: int = 6,
+    max_urls_per_query: int = 10,
+    browser_mode: str = "cdp",
+    cdp_url: str = "http://127.0.0.1:9222",
+    progress_callback=None,
+    use_subprocess: bool | None = None,
+) -> dict:
+    """Search marketplace and collect candidate URLs.
+
+    In Streamlit on Windows, Playwright's sync driver can fail inside the app
+    event loop. Production runs the discovery in a subprocess, mirroring the
+    existing linked-collection worker.
+    """
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    if use_subprocess is False or is_testing:
+        return _discover_marketplace_candidate_urls_direct(
+            own_product_uid=own_product_uid,
+            marketplace=marketplace,
+            max_queries=max_queries,
+            max_urls_per_query=max_urls_per_query,
+            browser_mode=browser_mode,
+            cdp_url=cdp_url,
+            progress_callback=progress_callback,
+        )
+
+    worker_path = Path(__file__).resolve().parent.parent / "scripts" / "radar_discover_worker.py"
+    cmd = [
+        sys.executable,
+        "-u",
+        str(worker_path),
+        own_product_uid,
+        marketplace,
+        str(max_queries),
+        str(max_urls_per_query),
+        browser_mode,
+        cdp_url if cdp_url is not None else "None",
+    ]
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+        )
+
+        stdout_lines: list[str] = []
+        final_json_str = None
+
+        for line in iter(process.stdout.readline, ""):
+            line_str = line.strip()
+            if not line_str:
+                continue
+            stdout_lines.append(line_str)
+
+            if line_str.startswith("[R7.3]") and progress_callback:
+                try:
+                    progress_callback({
+                        "stage": "discover",
+                        "message": line_str.replace("[R7.3]", "").strip(),
+                    })
+                except Exception:
+                    pass
+
+            if line_str.startswith("{") and line_str.endswith("}"):
+                final_json_str = line_str
+
+        process.stdout.close()
+        returncode = process.wait()
+
+        if final_json_str:
+            try:
+                parsed = json.loads(final_json_str)
+                if returncode != 0 and "worker_returncode" not in parsed:
+                    parsed["worker_returncode"] = returncode
+                return parsed
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "error": f"Erro decodificando retorno JSON da descoberta: {e}",
+                    "urls_found": 0,
+                    "urls_inserted": 0,
+                    "errors": [final_json_str],
+                }
+
+        err_msg = f"Erro executando subprocesso de descoberta (code {returncode})"
+        if stdout_lines:
+            err_msg += f". Ultimas linhas: {stdout_lines[-5:]}"
+        return {
+            "ok": False,
+            "error": err_msg,
+            "urls_found": 0,
+            "urls_inserted": 0,
+            "errors": stdout_lines[-20:],
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"Erro disparando subprocesso de descoberta: {e}",
+            "urls_found": 0,
+            "urls_inserted": 0,
+            "errors": [str(e)],
+        }
 
 
 # ── Part 4: Radar confidence score ───────────────────────────────────────
@@ -302,6 +454,7 @@ def calculate_radar_market_confidence(
     - report_exists (+10)
     """
     init_db()
+    counts = _get_auto_cycle_counts(own_product_uid)
 
     report = None
     if report_uid:
@@ -318,23 +471,27 @@ def calculate_radar_market_confidence(
         report = get_latest_pattern_report(own_product_uid)
 
     if not report:
-        return {"level": "insufficient", "score": 0, "warnings": ["Nenhum relatorio encontrado."]}
+        warnings = ["Nenhum relatorio encontrado."]
+        if counts["pending"]:
+            warnings.append(f"Ainda ha {counts['pending']} candidato(s) pendente(s) de coleta.")
+        return {
+            "level": "insufficient",
+            "score": 0,
+            "pending_count": counts["pending"],
+            "failed_count": counts["failed"],
+            "title_coverage": counts["title_coverage"],
+            "price_coverage": counts["price_coverage"],
+            "warnings": warnings,
+        }
 
     direct_count = report.get("direct_count", 0)
     partial_count = report.get("partial_count", 0)
     evidence_list = report.get("evidence_list", []) or report.get("raw", {}).get("evidence_list", [])
 
-    # Count failed collections
-    failed_count = 0
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS c FROM radar_collection_jobs j "
-            "JOIN radar_candidate_links l ON l.candidate_product_uid = j.product_uid "
-            "WHERE l.own_product_uid = ? AND j.status = 'failed'",
-            (own_product_uid,),
-        ).fetchone()
-        if row:
-            failed_count = row["c"]
+    pending_count = counts["pending"]
+    failed_count = counts["failed"]
+    price_coverage = counts["price_coverage"]
+    title_coverage = counts["title_coverage"]
 
     # Freshness
     freshness_days = 999
@@ -354,11 +511,15 @@ def calculate_radar_market_confidence(
     score += 5 if freshness_days < 1 else (2 if freshness_days < 7 else 0)
     score += min(len(evidence_list), 10)
     score += 10  # report_exists
+    score += 5 if title_coverage >= 0.9 else (2 if title_coverage >= 0.75 else 0)
+    score += 5 if price_coverage >= 0.8 else (2 if price_coverage >= 0.6 else 0)
 
     # Price dispersion penalty
     price_analysis = report.get("raw", {}).get("analyses", {}).get("price", {})
     if price_analysis.get("dispersion_warning"):
         score = max(0, score - 15)
+    if pending_count:
+        score = max(0, score - min(15, pending_count * 2))
 
     # Determine level
     level = "insufficient"
@@ -372,25 +533,114 @@ def calculate_radar_market_confidence(
     warnings = []
     if direct_count < 8:
         warnings.append(f"Poucos concorrentes diretos ({direct_count}); ideal > 8.")
+    if pending_count:
+        warnings.append(f"Ainda ha {pending_count} candidato(s) pendente(s) que podem alterar a base.")
     if failed_count > 3:
         warnings.append(f"{failed_count} coletas com falha.")
+    if title_coverage < 0.9:
+        warnings.append(f"Cobertura de titulo incompleta ({title_coverage:.0%}).")
+    if price_coverage < 0.8:
+        warnings.append(f"Cobertura de preco incompleta ({price_coverage:.0%}).")
     if freshness_days > 7:
         warnings.append("Relatorio desatualizado (mais de 7 dias).")
     if price_analysis.get("dispersion_warning"):
         warnings.append("Alta dispersao de precos.")
+
+    high_has_enough_competitors = direct_count >= 8 or (direct_count >= 5 and partial_count >= 8)
+    if level == "high" and not high_has_enough_competitors:
+        level = "medium"
+        warnings.append("Confiança alta bloqueada: base ainda tem poucos diretos/parciais fortes.")
+    if level == "high" and pending_count:
+        level = "medium"
+        warnings.append("Confiança alta bloqueada: ainda ha candidatos pendentes.")
+    if level == "high" and (title_coverage < 0.9 or price_coverage < 0.8):
+        level = "medium"
+        warnings.append("Confiança alta bloqueada: cobertura de titulo/preco insuficiente.")
 
     return {
         "level": level,
         "score": score,
         "direct_count": direct_count,
         "partial_count": partial_count,
+        "pending_count": pending_count,
         "failed_count": failed_count,
+        "title_coverage": title_coverage,
+        "price_coverage": price_coverage,
         "freshness_days": freshness_days,
         "warnings": warnings,
     }
 
 
 # ── Part 5: Full automatic cycle ──────────────────────────────────────────
+
+
+_CONFIDENCE_RANK = {
+    "insufficient": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+}
+
+
+def _confidence_reaches(level: str | None, target: str | None) -> bool:
+    return _CONFIDENCE_RANK.get(str(level or "insufficient"), 0) >= _CONFIDENCE_RANK.get(str(target or "high"), 3)
+
+
+def _get_auto_cycle_counts(own_product_uid: str) -> dict:
+    table = get_competitor_table_for_product(own_product_uid)
+    counts = {
+        "total_candidates": len(table),
+        "pending": 0,
+        "failed": 0,
+        "collected_unclassified": 0,
+        "direct": 0,
+        "partial": 0,
+        "rejected": 0,
+        "title_coverage": 0.0,
+        "price_coverage": 0.0,
+    }
+
+    collected_rows = []
+    for row in table:
+        status = row.get("status")
+        if status == "pending":
+            counts["pending"] += 1
+        elif status == "failed":
+            counts["failed"] += 1
+        elif status == "collected":
+            counts["collected_unclassified"] += 1
+            collected_rows.append(row)
+        elif status == "competitor_direct":
+            counts["direct"] += 1
+            collected_rows.append(row)
+        elif status == "competitor_partial":
+            counts["partial"] += 1
+            collected_rows.append(row)
+        elif status == "rejected":
+            counts["rejected"] += 1
+            collected_rows.append(row)
+
+    if collected_rows:
+        counts["title_coverage"] = round(
+            sum(1 for row in collected_rows if row.get("title")) / len(collected_rows),
+            4,
+        )
+        counts["price_coverage"] = round(
+            sum(1 for row in collected_rows if row.get("price") is not None) / len(collected_rows),
+            4,
+        )
+
+    return counts
+
+
+def _empty_collection_result() -> dict:
+    return {
+        "processed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "skipped": 0,
+        "errors": [],
+    }
 
 
 def run_automatic_radar_cycle(
@@ -400,32 +650,48 @@ def run_automatic_radar_cycle(
     max_queries: int = 6,
     max_urls_per_query: int = 10,
     max_collect: int = 15,
+    max_collect_per_cycle: int | None = None,
+    max_cycles: int = 3,
+    max_total_candidates: int = 60,
+    max_total_runtime_minutes: int = 20,
     candidate_scope: str = "direct_plus_partial",
     browser_mode: str = "cdp",
     cdp_url: str = "http://127.0.0.1:9222",
+    discover_new_urls: bool = True,
     progress_callback=None,
 ) -> dict:
-    """Run the full automatic radar cycle: discover -> collect -> classify -> report.
+    """Run discovery, collection, classification and reporting in bounded cycles."""
+    max_collect_per_cycle = int(max_collect_per_cycle or max_collect or 15)
+    max_cycles = max(1, int(max_cycles or 1))
+    max_total_candidates = max(1, int(max_total_candidates or 1))
+    max_total_runtime_minutes = max(1, int(max_total_runtime_minutes or 1))
+    start_time = time.monotonic()
 
-    Steps:
-    1. Ensure Chrome is ready
-    2. Generate search queries from product title
-    3. Discover candidate URLs on marketplace
-    4. Ensure collection jobs for new candidates
-    5. Collect pending candidates (up to max_collect)
-    6. Reclassify with force
-    7. Generate pattern report
-    8. Calculate confidence
-    """
     result: dict[str, Any] = {
         "ok": False,
+        "status": "error",
         "step": "",
+        "target_confidence": target_confidence,
+        "final_confidence": "insufficient",
+        "cycles_run": 0,
+        "cycle_results": [],
+        "urls_found": 0,
+        "candidates_inserted": 0,
+        "urls_existing": 0,
+        "collected": 0,
+        "pending": 0,
+        "failed": 0,
+        "direct": 0,
+        "partial": 0,
+        "rejected": 0,
+        "report_uid": None,
         "discovery": None,
         "collection": None,
         "classification": None,
         "report": None,
         "confidence": None,
         "errors": [],
+        "warnings": [],
     }
 
     def _progress(stage: str, message: str):
@@ -435,7 +701,6 @@ def run_automatic_radar_cycle(
             except Exception:
                 pass
 
-    # Step 0: Ensure Chrome ready
     _progress("chrome_check", "Procurando Chrome/Edge no sistema...")
     from shopee_core.radar_cdp_service import ensure_radar_chrome_ready
     chrome = ensure_radar_chrome_ready(cdp_url)
@@ -446,7 +711,6 @@ def run_automatic_radar_cycle(
         return result
     _progress("chrome_validate", "Chrome CDP pronto e validado.")
 
-    # Step 1: Generate queries
     _progress("queries", "Gerando buscas...")
     own_product = get_product(own_product_uid)
     if not own_product:
@@ -456,77 +720,183 @@ def run_automatic_radar_cycle(
     queries = generate_competitor_search_queries(own_product)
     result["queries_generated"] = len(queries)
 
-    # Step 2: Discover
-    _progress("discover", "Buscando URLs no Mercado Livre...")
-    discovery = discover_marketplace_candidate_urls(
-        own_product_uid=own_product_uid,
-        marketplace=marketplace,
-        max_queries=max_queries,
-        max_urls_per_query=max_urls_per_query,
-        browser_mode=browser_mode,
-        cdp_url=cdp_url,
-    )
-    result["discovery"] = discovery
-    if not discovery.get("ok"):
-        result["step"] = "discover"
-        result["errors"].append(discovery.get("error", "Falha na descoberta de URLs."))
-        return result
+    stop_reason = ""
 
-    # Step 3: Ensure collection jobs
-    _progress("jobs", "Preparando coletas...")
-    ensure_collection_jobs_for_linked_candidates(own_product_uid)
+    for cycle in range(1, max_cycles + 1):
+        elapsed_minutes = (time.monotonic() - start_time) / 60
+        if elapsed_minutes >= max_total_runtime_minutes:
+            result["status"] = "limit_reached"
+            stop_reason = f"Tempo maximo atingido ({max_total_runtime_minutes} min)."
+            break
 
-    # Step 4: Collect
-    _progress("collect", f"Coletando ate {max_collect} candidatos...")
-    collection = run_linked_collection_for_product(
-        own_product_uid=own_product_uid,
-        limit=max_collect,
-        save_assets=False,
-        browser_mode=browser_mode,
-        cdp_url=cdp_url,
-        collect_image_urls=True,
-    )
-    result["collection"] = collection
+        result["cycles_run"] = cycle
+        _progress("cycle", f"Ciclo {cycle}/{max_cycles}")
 
-    # Step 5: Classify with force
-    _progress("classify", "Classificando concorrentes...")
-    try:
-        classification = classify_linked_candidates_for_product(
-            own_product_uid, force_reclassify=True
+        discovery = {
+            "ok": True,
+            "queries_used": 0,
+            "urls_found": 0,
+            "urls_unique": 0,
+            "urls_inserted": 0,
+            "urls_existing": 0,
+            "invalid": 0,
+            "errors": [],
+        }
+
+        counts_before = _get_auto_cycle_counts(own_product_uid)
+        should_discover = (
+            discover_new_urls
+            and cycle == 1
+            and counts_before["total_candidates"] < max_total_candidates
         )
-        result["classification"] = classification
-    except Exception as e:
-        result["step"] = "classify"
-        result["errors"].append(f"Falha na classificacao: {e}")
-        return result
 
-    # Step 6: Generate report
-    _progress("report", "Gerando relatorio de padroes...")
-    try:
-        report = generate_pattern_report(
-            own_product_uid, candidate_scope=candidate_scope
+        if should_discover:
+            _progress("discover", "Buscando URLs no Mercado Livre...")
+            discovery = discover_marketplace_candidate_urls(
+                own_product_uid=own_product_uid,
+                marketplace=marketplace,
+                max_queries=max_queries,
+                max_urls_per_query=max_urls_per_query,
+                browser_mode=browser_mode,
+                cdp_url=cdp_url,
+                progress_callback=progress_callback,
+            )
+            result["discovery"] = discovery
+            result["urls_found"] += int(discovery.get("urls_found") or 0)
+            result["candidates_inserted"] += int(discovery.get("urls_inserted") or 0)
+            result["urls_existing"] += int(discovery.get("urls_existing") or 0)
+
+            if not discovery.get("ok"):
+                counts_after_failed_discovery = _get_auto_cycle_counts(own_product_uid)
+                has_existing_work = (
+                    counts_after_failed_discovery["pending"]
+                    or counts_after_failed_discovery["collected_unclassified"]
+                    or counts_after_failed_discovery["direct"]
+                    or counts_after_failed_discovery["partial"]
+                )
+                if not has_existing_work:
+                    result["step"] = "discover"
+                    result["errors"].append(discovery.get("error", "Falha na descoberta de URLs."))
+                    return result
+                result["warnings"].append(
+                    "Descoberta de URLs falhou, mas havia candidatos existentes; continuando com a fila atual."
+                )
+        elif not discover_new_urls:
+            result["warnings"].append("Descoberta pulada; continuando a partir dos candidatos pendentes existentes.")
+
+        _progress("jobs", "Preparando coletas...")
+        ensure_collection_jobs_for_linked_candidates(own_product_uid)
+        counts_ready = _get_auto_cycle_counts(own_product_uid)
+
+        if counts_ready["total_candidates"] >= max_total_candidates:
+            result["warnings"].append(
+                f"Limite total de candidatos atingido ({counts_ready['total_candidates']}/{max_total_candidates})."
+            )
+
+        if counts_ready["pending"] > 0:
+            collect_limit = min(max_collect_per_cycle, counts_ready["pending"])
+            _progress("collect", f"Coletando {collect_limit} candidato(s) pendente(s)...")
+            collection = run_linked_collection_for_product(
+                own_product_uid=own_product_uid,
+                limit=collect_limit,
+                save_assets=False,
+                browser_mode=browser_mode,
+                cdp_url=cdp_url,
+                collect_image_urls=True,
+                progress_callback=progress_callback,
+            )
+        else:
+            collection = _empty_collection_result()
+
+        result["collection"] = collection
+        result["collected"] += int(collection.get("succeeded") or 0)
+
+        _progress("classify", "Classificando candidatos coletados...")
+        try:
+            classification = classify_linked_candidates_for_product(
+                own_product_uid, force_reclassify=True
+            )
+            result["classification"] = classification
+        except Exception as e:
+            result["step"] = "classify"
+            result["errors"].append(f"Falha na classificacao: {e}")
+            return result
+
+        _progress("report", "Gerando relatorio de padroes...")
+        report = None
+        try:
+            report = generate_pattern_report(
+                own_product_uid, candidate_scope=candidate_scope
+            )
+            result["report"] = report
+            result["report_uid"] = report.get("report_uid") if report else None
+        except Exception as e:
+            result["warnings"].append(f"Falha ao gerar relatorio neste ciclo: {e}")
+
+        _progress("confidence", "Calculando confianca...")
+        report_uid = report.get("report_uid") if report else result.get("report_uid")
+        confidence = calculate_radar_market_confidence(
+            own_product_uid, report_uid=report_uid
         )
-        result["report"] = report
-    except Exception as e:
-        result["step"] = "report"
-        result["errors"].append(f"Falha ao gerar relatorio: {e}")
-        return result
+        result["confidence"] = confidence
+        result["final_confidence"] = confidence.get("level", "insufficient")
 
-    # Step 7: Calculate confidence
-    _progress("confidence", "Calculando confianca...")
-    report_uid = report.get("report_uid") if report else None
-    confidence = calculate_radar_market_confidence(
-        own_product_uid, report_uid=report_uid
-    )
-    result["confidence"] = confidence
+        counts_after = _get_auto_cycle_counts(own_product_uid)
+        result["cycle_results"].append({
+            "cycle": cycle,
+            "discovery": discovery,
+            "collection": collection,
+            "classification": classification,
+            "confidence": confidence,
+            "counts": counts_after,
+        })
 
-    result["ok"] = True
-    result["step"] = "done"
+        if _confidence_reaches(confidence.get("level"), target_confidence):
+            result["status"] = "success"
+            stop_reason = f"Confianca alvo atingida: {confidence.get('level')}."
+            break
 
-    # Check if target confidence reached
-    if confidence.get("level") == target_confidence or target_confidence == "high":
-        result["target_reached"] = confidence.get("level") == target_confidence
+        if counts_after["pending"] <= 0:
+            result["status"] = "exhausted"
+            stop_reason = "Nao ha candidatos pendentes para continuar coletando."
+            break
+
+        if counts_after["total_candidates"] >= max_total_candidates:
+            result["status"] = "limit_reached"
+            stop_reason = f"Limite total de candidatos atingido ({max_total_candidates})."
+            break
+
+        if cycle >= max_cycles:
+            result["status"] = "limit_reached"
+            stop_reason = f"Limite de ciclos atingido ({max_cycles})."
+            break
+
+    final_counts = _get_auto_cycle_counts(own_product_uid)
+    result["pending"] = final_counts["pending"]
+    result["failed"] = final_counts["failed"]
+    result["direct"] = final_counts["direct"]
+    result["partial"] = final_counts["partial"]
+    result["rejected"] = final_counts["rejected"]
+    result["total_candidates"] = final_counts["total_candidates"]
+    result["title_coverage"] = final_counts["title_coverage"]
+    result["price_coverage"] = final_counts["price_coverage"]
+
+    if result["status"] != "error":
+        result["ok"] = True
     else:
-        result["target_reached"] = False
+        result["ok"] = False
+
+    if result["ok"] and result["status"] == "error":
+        result["status"] = "needs_more_collection" if result["pending"] else "exhausted"
+
+    result["target_reached"] = result["status"] == "success"
+    result["stop_reason"] = stop_reason or (
+        "Ainda existem candidatos pendentes." if result["pending"] else "Ciclo encerrado."
+    )
+    if result["pending"] and result["status"] != "success":
+        result["warnings"].append(
+            f"Ainda existem {result['pending']} candidato(s) pendente(s); a confianca pode mudar apos novas coletas."
+        )
+    result["step"] = result["status"]
 
     return result

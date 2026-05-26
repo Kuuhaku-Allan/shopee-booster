@@ -76,6 +76,12 @@ _USE_CASE_RULES = {
     "viagem": ["viagem", "viajar", "bordo"],
     "passeio": ["passeio", "dia a dia"],
     "trabalho": ["trabalho", "executivo", "executiva", "office"],
+    "natacao": ["natacao", "natação", "nabaiji"],
+    "esporte": ["esporte", "esportiva", "esportivo", "academia", "fitness"],
+    "praia": ["praia"],
+    "hidratacao": ["hidratacao", "hidratação"],
+    "trekking": ["trekking", "trilha", "hiking"],
+    "urbano_adulto": ["urbano", "urbana", "corporativo", "corporativa"],
 }
 
 _STYLE_RULES = {
@@ -347,6 +353,8 @@ def _apply_niche_floor(
     # R7.2K: Verificar se candidato tambem tem sinais compativeis com o nicho
     cand_audience = set(candidate_profile.get("audience") or [])
     cand_use_case = set(candidate_profile.get("use_case") or [])
+    if _has_off_niche_use_case(candidate_profile) and not _has_child_school_compatibility(candidate_profile):
+        return score
 
     # Se candidato nao tem nenhum sinal de publico OU uso, nao aplica floor
     if not cand_audience or not cand_use_case:
@@ -710,6 +718,15 @@ def _niche_mismatch_penalty(own_profile: dict, candidate_profile: dict) -> tuple
     if not is_child_school:
         return 0.0, None
 
+    off_niche = _off_niche_use_cases(candidate_profile)
+    if off_niche and not _has_child_school_compatibility(candidate_profile):
+        if "natacao" in off_niche:
+            return 45.0, "Produto voltado a natacao, diferente do nicho escolar infantil."
+        return 32.0, (
+            "Produto tem uso fora do nicho escolar infantil "
+            f"({', '.join(sorted(off_niche))})."
+        )
+
     # Notebook sozinho para nicho infantil/escolar
     if has_notebook and not has_work_signals and not has_adult_signals:
         return 10.0, "Produto menciona notebook, diferente do nicho infantil escolar."
@@ -730,6 +747,43 @@ def _niche_mismatch_penalty(own_profile: dict, candidate_profile: dict) -> tuple
         return 25.0, "Produto masculino adulto/trabalho, diferente do publico infantil feminino."
     
     return 0.0, None
+
+
+_OFF_NICHE_USE_CASES = {
+    "natacao",
+    "esporte",
+    "praia",
+    "hidratacao",
+    "trekking",
+    "urbano_adulto",
+}
+
+
+def _off_niche_use_cases(profile: dict) -> set[str]:
+    return set(profile.get("use_case") or []) & _OFF_NICHE_USE_CASES
+
+
+def _has_off_niche_use_case(profile: dict) -> bool:
+    return bool(_off_niche_use_cases(profile))
+
+
+def _has_child_school_compatibility(profile: dict) -> bool:
+    use_case = set(profile.get("use_case") or [])
+    style = set(profile.get("style") or [])
+    return bool(
+        "escolar" in use_case
+        or style
+        & {
+            "princesa",
+            "unicornio",
+            "personagem",
+            "personagem_fantasia",
+            "personagem_infantil",
+            "kawaii",
+            "dinossauro",
+            "gatinho",
+        }
+    )
 
 
 def _score_overlap(

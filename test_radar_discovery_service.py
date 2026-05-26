@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 RUN_ID = uuid.uuid4().hex
@@ -20,6 +21,7 @@ from shopee_core.radar_discovery_service import (
     _build_ml_search_url,
     _is_valid_ml_product_url,
     _normalize_discovered_url,
+    _extract_ml_product_urls_from_page,
     calculate_radar_market_confidence,
     run_automatic_radar_cycle,
 )
@@ -127,6 +129,32 @@ def test_normalize_discovered_url():
     # Invalid URL
     assert _normalize_discovered_url("") is None
     assert _normalize_discovered_url("not-a-url") is None
+    assert _normalize_discovered_url("https://lista.mercadolivre.com.br/mochila-rosa") is None
+    return True
+
+
+def test_extract_urls_dedupes_normalized_product_links():
+    """Multiple href variants for the same listing count as one product URL."""
+
+    class FakePage:
+        def wait_for_timeout(self, _ms):
+            return None
+
+        def evaluate(self, _script):
+            return [
+                "https://www.mercadolivre.com.br/mochila-rosa/p/MLB60726487?tracking_id=abc",
+                "https://www.mercadolivre.com.br/mochila-rosa/p/MLB60726487?position=2",
+                "https://produto.mercadolivre.com.br/MLB-1234567890-mochila-princesa-_JM?utm_source=x",
+                "https://lista.mercadolivre.com.br/mochila-rosa",
+                "https://shopee.com.br/product/1/1",
+            ]
+
+    urls = _extract_ml_product_urls_from_page(FakePage())
+
+    assert urls == [
+        "https://mercadolivre.com.br/mochila-rosa/p/MLB60726487",
+        "https://produto.mercadolivre.com.br/MLB-1234567890-mochila-princesa-_JM",
+    ]
     return True
 
 
@@ -191,6 +219,140 @@ def test_cycle_stops_on_missing_product():
 # ── Runner ────────────────────────────────────────────────────────────────
 
 
+def _cycle_counts(pending=0, total=0, direct=0, partial=0, rejected=0, failed=0):
+    return {
+        "total_candidates": total,
+        "pending": pending,
+        "failed": failed,
+        "collected_unclassified": 0,
+        "direct": direct,
+        "partial": partial,
+        "rejected": rejected,
+        "title_coverage": 1.0,
+        "price_coverage": 1.0,
+    }
+
+
+def test_cycle_continues_collecting_until_target_high():
+    counts = iter([
+        _cycle_counts(pending=0, total=0),
+        _cycle_counts(pending=10, total=10),
+        _cycle_counts(pending=5, total=10, direct=4),
+        _cycle_counts(pending=5, total=10, direct=4),
+        _cycle_counts(pending=5, total=10, direct=4),
+        _cycle_counts(pending=0, total=10, direct=8),
+        _cycle_counts(pending=0, total=10, direct=8),
+    ])
+
+    def next_counts(_uid):
+        try:
+            return next(counts)
+        except StopIteration:
+            return _cycle_counts(pending=0, total=10, direct=8)
+
+    with patch("shopee_core.radar_cdp_service.ensure_radar_chrome_ready", return_value={"ok": True}):
+        with patch("shopee_core.radar_discovery_service.get_product", return_value={"title": "Mochila Infantil Princesa Rosa Escolar"}):
+            with patch("shopee_core.radar_discovery_service._get_auto_cycle_counts", side_effect=next_counts):
+                with patch("shopee_core.radar_discovery_service.discover_marketplace_candidate_urls", return_value={
+                    "ok": True, "urls_found": 12, "urls_inserted": 10, "urls_existing": 0,
+                }):
+                    with patch("shopee_core.radar_discovery_service.ensure_collection_jobs_for_linked_candidates"):
+                        with patch("shopee_core.radar_discovery_service.run_linked_collection_for_product") as mock_collect:
+                            mock_collect.side_effect = [
+                                {"processed": 5, "succeeded": 5, "failed": 0, "skipped": 0, "errors": []},
+                                {"processed": 5, "succeeded": 5, "failed": 0, "skipped": 0, "errors": []},
+                            ]
+                            with patch("shopee_core.radar_discovery_service.classify_linked_candidates_for_product", return_value={
+                                "ok": True, "total": 8, "direct": 8, "partial": 0, "rejected": 0,
+                            }):
+                                with patch("shopee_core.radar_discovery_service.generate_pattern_report", return_value={"report_uid": "r1"}):
+                                    with patch("shopee_core.radar_discovery_service.calculate_radar_market_confidence") as mock_conf:
+                                        mock_conf.side_effect = [
+                                            {"level": "medium", "score": 65, "warnings": []},
+                                            {"level": "high", "score": 88, "warnings": []},
+                                        ]
+                                        result = run_automatic_radar_cycle(
+                                            "own-1",
+                                            target_confidence="high",
+                                            max_cycles=3,
+                                            max_collect_per_cycle=5,
+                                        )
+
+    assert result["status"] == "success"
+    assert result["cycles_run"] == 2
+    assert result["target_reached"]
+    assert mock_collect.call_count == 2
+    return True
+
+
+def test_cycle_limit_reached_with_pending_candidates():
+    counts = iter([
+        _cycle_counts(pending=0, total=0),
+        _cycle_counts(pending=12, total=12),
+        _cycle_counts(pending=7, total=12, direct=3),
+        _cycle_counts(pending=7, total=12, direct=3),
+        _cycle_counts(pending=7, total=12, direct=3),
+        _cycle_counts(pending=2, total=12, direct=5),
+        _cycle_counts(pending=2, total=12, direct=5),
+    ])
+
+    def next_counts(_uid):
+        try:
+            return next(counts)
+        except StopIteration:
+            return _cycle_counts(pending=2, total=12, direct=5)
+
+    with patch("shopee_core.radar_cdp_service.ensure_radar_chrome_ready", return_value={"ok": True}):
+        with patch("shopee_core.radar_discovery_service.get_product", return_value={"title": "Mochila Infantil Princesa Rosa Escolar"}):
+            with patch("shopee_core.radar_discovery_service._get_auto_cycle_counts", side_effect=next_counts):
+                with patch("shopee_core.radar_discovery_service.discover_marketplace_candidate_urls", return_value={
+                    "ok": True, "urls_found": 12, "urls_inserted": 12, "urls_existing": 0,
+                }):
+                    with patch("shopee_core.radar_discovery_service.ensure_collection_jobs_for_linked_candidates"):
+                        with patch("shopee_core.radar_discovery_service.run_linked_collection_for_product", return_value={
+                            "processed": 5, "succeeded": 5, "failed": 0, "skipped": 0, "errors": [],
+                        }):
+                            with patch("shopee_core.radar_discovery_service.classify_linked_candidates_for_product", return_value={
+                                "ok": True, "total": 5, "direct": 5, "partial": 0, "rejected": 0,
+                            }):
+                                with patch("shopee_core.radar_discovery_service.generate_pattern_report", return_value={"report_uid": "r1"}):
+                                    with patch("shopee_core.radar_discovery_service.calculate_radar_market_confidence", return_value={
+                                        "level": "medium", "score": 68, "warnings": [],
+                                    }):
+                                        result = run_automatic_radar_cycle(
+                                            "own-1",
+                                            target_confidence="high",
+                                            max_cycles=2,
+                                            max_collect_per_cycle=5,
+                                        )
+
+    assert result["status"] == "limit_reached"
+    assert result["pending"] == 2
+    assert not result["target_reached"]
+    return True
+
+
+def test_confidence_high_blocked_when_pending_candidates_remain():
+    report = {
+        "report_uid": "r1",
+        "direct_count": 8,
+        "partial_count": 4,
+        "created_at": datetime.utcnow().isoformat(),
+        "raw": {"analyses": {"price": {}}},
+        "evidence_list": ["a", "b", "c"],
+    }
+    with patch("shopee_core.radar_discovery_service._get_auto_cycle_counts", return_value=_cycle_counts(
+        pending=3, total=15, direct=8, partial=4,
+    )):
+        with patch("shopee_core.radar_discovery_service.get_latest_pattern_report", return_value=report):
+            conf = calculate_radar_market_confidence("own-1")
+
+    assert conf["level"] == "medium"
+    assert conf["pending_count"] == 3
+    assert any("pendente" in w.lower() for w in conf["warnings"])
+    return True
+
+
 if __name__ == "__main__":
     print("\nTESTE R7.3 - Radar Discovery Service\n")
 
@@ -201,11 +363,15 @@ if __name__ == "__main__":
         ("ML search URL", test_build_ml_search_url),
         ("ML product URL valida", test_is_valid_ml_product_url),
         ("normaliza URL descoberta", test_normalize_discovered_url),
+        ("dedupe URL descoberta", test_extract_urls_dedupes_normalized_product_links),
         ("rejeita URL fake", test_reject_fake_url),
         ("confianca sem relatorio", test_confidence_without_report),
         ("confianca apos relatorio", test_confidence_after_report),
         ("ciclo sem chrome retorna erro", test_cycle_errors_without_chrome),
         ("ciclo para sem produto", test_cycle_stops_on_missing_product),
+        ("R7.3D: ciclo continua ate high", test_cycle_continues_collecting_until_target_high),
+        ("R7.3D: ciclo para por limite com pendentes", test_cycle_limit_reached_with_pending_candidates),
+        ("R7.3D: high bloqueado com pendentes", test_confidence_high_blocked_when_pending_candidates_remain),
     ]
 
     passed = 0

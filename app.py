@@ -3548,6 +3548,11 @@ def render_radar_workflow():
     c_class, c_reclass = st.columns([1, 1])
     with c_class:
         if st.button("Classificar Concorrentes", use_container_width=True):
+            if summary.get("jobs_pending", 0) > 0:
+                st.warning(
+                    f"Existem {summary['jobs_pending']} candidatos pendentes. "
+                    "Eles precisam ser coletados antes de serem classificados."
+                )
             with st.spinner("Classificando..."):
                 res = classify_linked_candidates_for_product(selected_uid)
                 if res["ok"]:
@@ -3610,14 +3615,17 @@ def render_radar_workflow():
     st.write("##### 🤖 Radar Automático")
     st.caption("Busca concorrentes no Mercado Livre, coleta dados, classifica e gera relatório automaticamente.")
 
-    auto_col1, auto_col2 = st.columns(2)
+    auto_col1, auto_col2, auto_col3 = st.columns(3)
     with auto_col1:
         auto_mkt = st.selectbox("Marketplace:", ["mercadolivre", "shopee (experimental)"], index=0,
                                 key="auto_marketplace")
         auto_max_q = st.number_input("Máx. buscas:", min_value=1, max_value=12, value=6, key="auto_max_queries")
         auto_max_u = st.number_input("Máx. URLs por busca:", min_value=1, max_value=20, value=10, key="auto_max_urls")
     with auto_col2:
-        auto_max_c = st.number_input("Máx. coletas:", min_value=1, max_value=30, value=15, key="auto_max_collect")
+        auto_max_c = st.number_input("Coletas por ciclo:", min_value=1, max_value=30, value=10, key="auto_max_collect")
+        auto_max_cycles = st.number_input("Máx. ciclos:", min_value=1, max_value=5, value=3, key="auto_max_cycles")
+        auto_max_total = st.number_input("Máx. candidatos:", min_value=10, max_value=100, value=60, step=5, key="auto_max_total_candidates")
+    with auto_col3:
         auto_scope = st.selectbox("Escopo do relatório:",
                                   options=["direct_only", "direct_plus_partial"],
                                   format_func=lambda s: "Diretos apenas" if s == "direct_only" else "Diretos + Parciais",
@@ -3625,6 +3633,7 @@ def render_radar_workflow():
         auto_target = st.selectbox("Confiança alvo:",
                                    options=["high", "medium", "low"],
                                    index=1, key="auto_target_conf")
+        auto_runtime = st.number_input("Tempo limite (min):", min_value=5, max_value=60, value=20, key="auto_runtime_minutes")
 
     # Botões auxiliares: reconectar / reiniciar Chrome
     aux_a, aux_b = st.columns(2)
@@ -3652,7 +3661,13 @@ def render_radar_workflow():
                     st.code(json.dumps(diag, indent=2, default=str))
                 st.error(f"Falha ao reiniciar Chrome: {start_res.get('message')}")
 
-    if st.button("Rodar Radar Automático", use_container_width=True, type="primary"):
+    auto_run_col, auto_continue_col = st.columns(2)
+    with auto_run_col:
+        run_auto_clicked = st.button("Rodar Radar Automático", use_container_width=True, type="primary")
+    with auto_continue_col:
+        continue_auto_clicked = st.button("Continuar ciclo automático", use_container_width=True)
+
+    if run_auto_clicked or continue_auto_clicked:
         mkt_val = "mercadolivre" if "mercadolivre" in auto_mkt else "shopee"
         if mkt_val == "shopee":
             st.warning("Shopee esta em modo experimental. Pode haver bloqueios. Preferencia: Mercado Livre.")
@@ -3666,6 +3681,9 @@ def render_radar_workflow():
             msg = state_dict.get("message", "")
             stage_map = {
                 "chrome": "Abrindo Chrome",
+                "chrome_check": "Procurando Chrome/Edge",
+                "chrome_validate": "Validando CDP",
+                "cycle": "Executando ciclo",
                 "queries": "Gerando buscas",
                 "discover": "Buscando URLs no ML",
                 "jobs": "Preparando coletas",
@@ -3704,31 +3722,54 @@ def render_radar_workflow():
                 max_queries=int(auto_max_q),
                 max_urls_per_query=int(auto_max_u),
                 max_collect=int(auto_max_c),
+                max_collect_per_cycle=int(auto_max_c),
+                max_cycles=int(auto_max_cycles),
+                max_total_candidates=int(auto_max_total),
+                max_total_runtime_minutes=int(auto_runtime),
                 candidate_scope=auto_scope,
+                discover_new_urls=not continue_auto_clicked,
                 progress_callback=auto_progress,
             )
 
         if auto_res.get("ok"):
-            st.success("Ciclo automático concluído!")
+            status = auto_res.get("status", "unknown")
+            status_label = {
+                "success": "confianca alvo atingida",
+                "needs_more_collection": "ainda precisa coletar mais",
+                "limit_reached": "limite configurado atingido",
+                "exhausted": "fila esgotada",
+            }.get(status, status)
+            if status == "success":
+                st.success(f"Ciclo automatico concluido: {status_label}.")
+            else:
+                st.warning(f"Ciclo automatico parou: {status_label}.")
+                if auto_res.get("stop_reason"):
+                    st.info(auto_res["stop_reason"])
             disc = auto_res.get("discovery") or {}
             coll = auto_res.get("collection") or {}
             clas = auto_res.get("classification") or {}
             conf = auto_res.get("confidence") or {}
 
             st.json({
+                "Status": status,
+                "Motivo de parada": auto_res.get("stop_reason", ""),
+                "Ciclos executados": auto_res.get("cycles_run", 0),
                 "URLs encontradas": disc.get("urls_found", 0),
-                "Novos candidatos": disc.get("urls_inserted", 0),
-                "Coletados": coll.get("succeeded", 0),
-                "Falhas coleta": coll.get("failed", 0),
-                "Direct": clas.get("direct", 0),
-                "Partial": clas.get("partial", 0),
-                "Rejected": clas.get("rejected", 0),
+                "Novos candidatos": auto_res.get("candidates_inserted", disc.get("urls_inserted", 0)),
+                "Coletados nesta rodada": auto_res.get("collected", coll.get("succeeded", 0)),
+                "Pendentes restantes": auto_res.get("pending", 0),
+                "Falhas coleta": auto_res.get("failed", coll.get("failed", 0)),
+                "Direct": auto_res.get("direct", clas.get("direct", 0)),
+                "Partial": auto_res.get("partial", clas.get("partial", 0)),
+                "Rejected": auto_res.get("rejected", clas.get("rejected", 0)),
+                "Confianca alvo": auto_res.get("target_confidence", auto_target).upper(),
                 "Confiança": f"{conf.get('level', 'N/A').upper()} ({conf.get('score', 0)} pts)",
             })
 
-            if conf.get("warnings"):
+            warnings_auto = list(auto_res.get("warnings") or []) + list(conf.get("warnings") or [])
+            if warnings_auto:
                 with st.expander("Avisos de confiança", expanded=False):
-                    for w in conf["warnings"]:
+                    for w in warnings_auto:
                         st.markdown(f"- {w}")
 
             # Refresh report preview in session state
@@ -3737,8 +3778,7 @@ def render_radar_workflow():
             if fresh_report:
                 st.session_state["last_pattern_report"] = fresh_report
 
-            time.sleep(1)
-            st.rerun()
+            st.session_state["last_auto_radar_result"] = auto_res
         else:
             error_step = auto_res.get("step", "?")
             errors_msg = "; ".join(auto_res.get("errors", []))
@@ -3788,22 +3828,33 @@ def render_radar_workflow():
         for r in table_data:
             r["status"] = STATUS_TRANSLATIONS.get(r["status"], r["status"])
 
-        filter_status = st.selectbox("Filtrar status:", ["Todos", "coleta_pendente", "aguardando_classificacao", "competitor_direct", "competitor_partial", "rejected", "falha_coleta"])
-        
-        filtered = table_data
-        if filter_status != "Todos":
-            filtered = [r for r in table_data if r["status"] == filter_status]
-            
-        if filtered:
-            import pandas as pd
-            df = pd.DataFrame(filtered)
-            
-            show_cols = ["status", "relevance_score", "title", "price", "marketplace", "shop_name", "canonical_url", "product_uid"]
-            exist_cols = [c for c in show_cols if c in df.columns]
-            
-            st.dataframe(df[exist_cols], hide_index=True)
-        else:
-            st.warning("Nenhum registro para este filtro.")
+        import pandas as pd
+        show_cols = ["status", "relevance_score", "title", "price", "marketplace", "shop_name", "canonical_url", "product_uid"]
+
+        classified_rows = [r for r in table_data if r["status"] in ["competitor_direct", "competitor_partial", "rejected"]]
+        pending_rows = [r for r in table_data if r["status"] == "coleta_pendente"]
+        other_rows = [r for r in table_data if r["status"] in ["aguardando_classificacao", "falha_coleta"]]
+
+        tab_classified, tab_pending, tab_other = st.tabs([
+            "Classificados",
+            f"Fila pendente de coleta ({len(pending_rows)})",
+            f"Outros ({len(other_rows)})",
+        ])
+
+        def _render_rows(rows, empty_msg):
+            if rows:
+                df = pd.DataFrame(rows)
+                exist_cols = [c for c in show_cols if c in df.columns]
+                st.dataframe(df[exist_cols], hide_index=True)
+            else:
+                st.info(empty_msg)
+
+        with tab_classified:
+            _render_rows(classified_rows, "Nenhum concorrente classificado ainda.")
+        with tab_pending:
+            _render_rows(pending_rows, "Nenhum candidato pendente de coleta.")
+        with tab_other:
+            _render_rows(other_rows, "Nenhum item aguardando classificacao ou com falha.")
 
 def render_espelho_loja():
 

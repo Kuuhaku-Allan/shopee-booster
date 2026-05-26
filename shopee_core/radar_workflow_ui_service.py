@@ -1197,9 +1197,14 @@ def run_automatic_radar_cycle(
     max_queries: int = 6,
     max_urls_per_query: int = 10,
     max_collect: int = 15,
+    max_collect_per_cycle: int | None = None,
+    max_cycles: int = 3,
+    max_total_candidates: int = 60,
+    max_total_runtime_minutes: int = 20,
     candidate_scope: str = "direct_plus_partial",
     browser_mode: str = "cdp",
     cdp_url: str = "http://127.0.0.1:9222",
+    discover_new_urls: bool = True,
     progress_callback=None,
 ) -> dict:
     """Run the full automatic radar cycle (passthrough)."""
@@ -1211,8 +1216,13 @@ def run_automatic_radar_cycle(
         max_queries=max_queries,
         max_urls_per_query=max_urls_per_query,
         max_collect=max_collect,
+        max_collect_per_cycle=max_collect_per_cycle,
+        max_cycles=max_cycles,
+        max_total_candidates=max_total_candidates,
+        max_total_runtime_minutes=max_total_runtime_minutes,
         candidate_scope=candidate_scope,
         browser_mode=browser_mode,
         cdp_url=cdp_url,
+        discover_new_urls=discover_new_urls,
         progress_callback=progress_callback,
     )
