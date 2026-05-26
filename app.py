@@ -3316,7 +3316,8 @@ def render_radar_workflow():
         add_competitor_urls_for_product, get_radar_queue_summary,
         get_competitor_table_for_product, classify_linked_candidates_for_product,
         run_pattern_analysis_for_product, run_linked_collection_for_product,
-        ensure_collection_jobs_for_linked_candidates
+        ensure_collection_jobs_for_linked_candidates,
+        run_automatic_radar_cycle,
     )
     import shopee_core.radar_collector as rc
     import time
@@ -3602,6 +3603,100 @@ def render_radar_workflow():
         _render_pattern_report_preview(last_report)
     else:
         st.info("Nenhum relatório gerado ainda. Selecione o escopo e clique em 'Gerar/Atualizar Relatório de Padrões'.")
+
+    st.divider()
+    # ── R7.3: Radar Automático ──────────────────────────────
+    st.write("##### 🤖 Radar Automático")
+    st.caption("Busca concorrentes no Mercado Livre, coleta dados, classifica e gera relatório automaticamente.")
+
+    auto_col1, auto_col2 = st.columns(2)
+    with auto_col1:
+        auto_mkt = st.selectbox("Marketplace:", ["mercadolivre", "shopee (experimental)"], index=0,
+                                key="auto_marketplace")
+        auto_max_q = st.number_input("Máx. buscas:", min_value=1, max_value=12, value=6, key="auto_max_queries")
+        auto_max_u = st.number_input("Máx. URLs por busca:", min_value=1, max_value=20, value=10, key="auto_max_urls")
+    with auto_col2:
+        auto_max_c = st.number_input("Máx. coletas:", min_value=1, max_value=30, value=15, key="auto_max_collect")
+        auto_scope = st.selectbox("Escopo do relatório:",
+                                  options=["direct_only", "direct_plus_partial"],
+                                  format_func=lambda s: "Diretos apenas" if s == "direct_only" else "Diretos + Parciais",
+                                  key="auto_scope")
+        auto_target = st.selectbox("Confiança alvo:",
+                                   options=["high", "medium", "low"],
+                                   index=1, key="auto_target_conf")
+
+    if st.button("Rodar Radar Automático", use_container_width=True, type="primary"):
+        mkt_val = "mercadolivre" if "mercadolivre" in auto_mkt else "shopee"
+        if mkt_val == "shopee":
+            st.warning("Shopee esta em modo experimental. Pode haver bloqueios. Preferencia: Mercado Livre.")
+
+        p_info = st.empty()
+        p_log = st.empty()
+        p_bar = st.progress(0.0)
+
+        def auto_progress(state_dict):
+            stage = state_dict.get("stage", "")
+            msg = state_dict.get("message", "")
+            stage_map = {
+                "chrome": "Abrindo Chrome",
+                "queries": "Gerando buscas",
+                "discover": "Buscando URLs no ML",
+                "jobs": "Preparando coletas",
+                "collect": "Coletando candidatos",
+                "classify": "Classificando concorrentes",
+                "report": "Gerando relatório",
+                "confidence": "Calculando confiança",
+                "done": "Concluído",
+            }
+            display = stage_map.get(stage, stage)
+            p_info.markdown(f"**Etapa:** {display}")
+            p_log.text(msg)
+
+        with st.spinner("Executando ciclo do Radar Automático..."):
+            auto_res = run_automatic_radar_cycle(
+                own_product_uid=selected_uid,
+                marketplace=mkt_val,
+                target_confidence=auto_target,
+                max_queries=int(auto_max_q),
+                max_urls_per_query=int(auto_max_u),
+                max_collect=int(auto_max_c),
+                candidate_scope=auto_scope,
+                progress_callback=auto_progress,
+            )
+
+        if auto_res.get("ok"):
+            st.success("Ciclo automático concluído!")
+            disc = auto_res.get("discovery") or {}
+            coll = auto_res.get("collection") or {}
+            clas = auto_res.get("classification") or {}
+            conf = auto_res.get("confidence") or {}
+
+            st.json({
+                "URLs encontradas": disc.get("urls_found", 0),
+                "Novos candidatos": disc.get("urls_inserted", 0),
+                "Coletados": coll.get("succeeded", 0),
+                "Falhas coleta": coll.get("failed", 0),
+                "Direct": clas.get("direct", 0),
+                "Partial": clas.get("partial", 0),
+                "Rejected": clas.get("rejected", 0),
+                "Confiança": f"{conf.get('level', 'N/A').upper()} ({conf.get('score', 0)} pts)",
+            })
+
+            if conf.get("warnings"):
+                with st.expander("Avisos de confiança", expanded=False):
+                    for w in conf["warnings"]:
+                        st.markdown(f"- {w}")
+
+            # Refresh report preview in session state
+            from shopee_core.radar_patterns_service import get_latest_pattern_report
+            fresh_report = get_latest_pattern_report(selected_uid)
+            if fresh_report:
+                st.session_state["last_pattern_report"] = fresh_report
+
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.error(f"Erro na etapa '{auto_res.get('step', '?')}': {'; '.join(auto_res.get('errors', []))}")
 
     st.divider()
     st.write("##### Tabela de Concorrentes Vinculados")

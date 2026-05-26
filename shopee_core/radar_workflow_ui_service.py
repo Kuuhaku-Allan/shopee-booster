@@ -1173,3 +1173,46 @@ def run_linked_collection_for_product(own_product_uid: str, limit: int = 5, save
             "skipped": 0,
             "errors": [{"candidate_product_uid": "all", "error": f"Erro disparando subprocesso: {e}", "url": "none"}]
         }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# R7.3: Radar automatico de concorrentes
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def generate_search_queries_for_product(own_product_uid: str) -> list[dict]:
+    """Generate search queries for a product (passthrough)."""
+    from shopee_core.radar_discovery_service import generate_competitor_search_queries as _gq
+    from shopee_core.radar_service import get_product
+    product = get_product(own_product_uid)
+    if not product:
+        return []
+    return _gq(product)
+
+
+def run_automatic_radar_cycle(
+    own_product_uid: str,
+    marketplace: str = "mercadolivre",
+    target_confidence: str = "high",
+    max_queries: int = 6,
+    max_urls_per_query: int = 10,
+    max_collect: int = 15,
+    candidate_scope: str = "direct_plus_partial",
+    browser_mode: str = "cdp",
+    cdp_url: str = "http://127.0.0.1:9222",
+    progress_callback=None,
+) -> dict:
+    """Run the full automatic radar cycle (passthrough)."""
+    from shopee_core.radar_discovery_service import run_automatic_radar_cycle as _rc
+    return _rc(
+        own_product_uid=own_product_uid,
+        marketplace=marketplace,
+        target_confidence=target_confidence,
+        max_queries=max_queries,
+        max_urls_per_query=max_urls_per_query,
+        max_collect=max_collect,
+        candidate_scope=candidate_scope,
+        browser_mode=browser_mode,
+        cdp_url=cdp_url,
+        progress_callback=progress_callback,
+    )
