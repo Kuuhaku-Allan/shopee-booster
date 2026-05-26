@@ -12,6 +12,7 @@ Para alterar cores/tipografia/CSS → ui_theme.py
 
 import streamlit as st
 import streamlit.elements.image as st_image
+import json
 
 # ── Monkeypatch para st_canvas (Correção de compatibilidade Streamlit 1.55) ──
 if not hasattr(st_image, "image_to_url"):

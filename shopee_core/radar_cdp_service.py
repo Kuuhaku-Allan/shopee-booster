@@ -313,26 +313,23 @@ def start_radar_chrome(cdp_port: int = CDP_PORT, user_data_dir: Path | None = No
     cmd = [
         chrome_path,
         f"--remote-debugging-port={cdp_port}",
-        "--remote-debugging-address=127.0.0.1",
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-sync",
-        "--disable-default-apps",
-        "--disable-extensions",
-        "about:blank",
+        "--disable-popup-blocking",
+        "https://www.mercadolivre.com.br/",
     ]
 
-    try:
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = subprocess.CREATE_NO_WINDOW | 0x00000008  # DETACHED_PROCESS
+    # Set environment to prevent Chrome from trying to reuse existing instance
+    env = os.environ.copy()
+    env["CHROME_CRASH_HANDLER_PIPE_COUNT"] = "0"
 
+    try:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
+            env=env,
         )
 
         pid = proc.pid
