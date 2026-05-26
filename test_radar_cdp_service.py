@@ -245,16 +245,25 @@ def test_start_chrome_without_executable():
 
 def test_start_chrome_process_spawn():
     """Successfully spawns a Chrome process."""
+    import tempfile as _tf
+    from pathlib import Path
     with patch("shopee_core.radar_cdp_service.is_cdp_available", return_value=False):
         with patch("shopee_core.radar_cdp_service.find_chrome_executable", return_value="C:\\chrome.exe"):
-            mock_proc = MagicMock()
-            mock_proc.pid = 99999
-            with patch("subprocess.Popen", return_value=mock_proc):
-                with patch("shopee_core.radar_cdp_service._write_radar_pid"):
-                    res = start_radar_chrome()
-                    assert res.get("ok")
-                    assert res.get("started")
-                    assert res.get("pid") == 99999
+            with patch("shopee_core.radar_cdp_service._clean_stale_locks"):
+                with patch("shopee_core.radar_cdp_service.tempfile.NamedTemporaryFile") as mock_tmp:
+                    mock_f = MagicMock()
+                    mock_f.name = str(Path(_tf.gettempdir()) / "radar_test_stderr.log")
+                    mock_tmp.return_value = mock_f
+                    mock_proc = MagicMock()
+                    mock_proc.pid = 99999
+                    with patch("subprocess.Popen", return_value=mock_proc):
+                        with patch("shopee_core.radar_cdp_service.time.sleep"):
+                            with patch("shopee_core.radar_cdp_service._is_process_alive", return_value=True):
+                                with patch("shopee_core.radar_cdp_service._write_radar_pid"):
+                                    res = start_radar_chrome()
+                                    assert res.get("ok")
+                                    assert res.get("started")
+                                    assert res.get("pid") == 99999
 
 
 # ── Tests: ensure_radar_chrome_ready ─────────────────────────────────────
@@ -314,7 +323,6 @@ def test_ensure_ready_managed_process_stale():
 def test_ensure_ready_successful_start():
     """Returns ok=True when Chrome starts and CDP responds."""
     def delayed_version(url, timeout=3.0):
-        # First call returns None (not yet), second returns data
         if not hasattr(delayed_version, "call_count"):
             delayed_version.call_count = 0
         delayed_version.call_count += 1
@@ -331,10 +339,11 @@ def test_ensure_ready_successful_start():
                     "cdp_url": "http://127.0.0.1:9222",
                 }):
                     with patch("shopee_core.radar_cdp_service.time.sleep"):
-                        res = ensure_radar_chrome_ready()
-                        assert res.get("ok")
-                        assert res.get("started")
-                        assert res.get("pid") == 12345
+                        with patch("shopee_core.radar_cdp_service._is_process_alive", return_value=True):
+                            res = ensure_radar_chrome_ready()
+                            assert res.get("ok")
+                            assert res.get("started")
+                            assert res.get("pid") == 12345
 
 
 # ── Tests: kill_managed_radar_chrome ─────────────────────────────────────

@@ -3,7 +3,9 @@
 radar_cdp_doctor.py - Diagnostico do Chrome CDP do Radar.
 
 Uso:
-    python scripts/radar_cdp_doctor.py
+    python scripts/radar_cdp_doctor.py            # diagnostico completo
+    python scripts/radar_cdp_doctor.py --print-start-command  # exibe comando usado
+    python scripts/radar_cdp_doctor.py --start     # abre Chrome e testa CDP
 
 Exibe:
 - CDP responde? (versao do browser)
@@ -12,6 +14,7 @@ Exibe:
 - Chrome/Edge encontrado?
 - user_data_dir
 - PID file
+- Lock files no profile
 - Recomendacao final
 """
 
@@ -20,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import subprocess
 from pathlib import Path
 
@@ -34,6 +38,9 @@ from shopee_core.radar_cdp_service import (
     _is_port_open,
     _get_wmi_processes,
     _is_radar_managed_process,
+    _build_chrome_cmd,
+    start_radar_chrome,
+    ensure_radar_chrome_ready,
     PID_FILE,
     DEFAULT_PROFILE_DIR,
     DEFAULT_CDP_URL,
@@ -51,6 +58,107 @@ def _wmi_query_raw(query: str) -> str:
         return ps.stdout.strip() or "(vazio)"
     except Exception as e:
         return f"(erro: {e})"
+
+
+def print_start_command():
+    """Print the exact command that would be used to start Chrome CDP."""
+    chrome_path = find_chrome_executable()
+    if not chrome_path:
+        print("Chrome/Edge nao encontrado. Nao e possivel montar comando.")
+        return
+
+    profile_dir = DEFAULT_PROFILE_DIR.resolve()
+    cmd = _build_chrome_cmd(chrome_path, CDP_PORT, profile_dir)
+
+    print("Comando que seria usado para abrir Chrome CDP:")
+    print()
+    # Show one flag per line for readability
+    print(f"  {cmd[0]}")
+    for flag in cmd[1:-1]:
+        print(f"    {flag}")
+    print(f"    {cmd[-1]}")
+    print()
+    print(f"  Caminho absoluto:     {chrome_path}")
+    print(f"  User data dir:        {profile_dir}")
+    print(f"  CDP endpoint:         http://127.0.0.1:{CDP_PORT}")
+    print(f"  Profile dir existe:   {profile_dir.exists()}")
+    if profile_dir.exists():
+        locks = [f.name for f in profile_dir.iterdir() if "Singleton" in f.name]
+        if locks:
+            print(f"  Lock files presentes: {', '.join(locks)}")
+        else:
+            print("  Lock files: nenhum")
+
+
+def start_and_test():
+    """Start Chrome and wait for CDP, print progress and result."""
+    print("Iniciando Chrome do Radar e aguardando CDP...")
+    print()
+
+    already = is_cdp_available()
+    if already:
+        v = _fetch_json_version()
+        browser = (v or {}).get("Browser", "desconhecido")
+        print(f"CDP JA ESTAVA ATIVO: {browser}")
+        return True
+
+    # Print the command first
+    print_start_command()
+    print()
+
+    # Start Chrome
+    print("Abrindo Chrome...")
+    res = start_radar_chrome()
+    if not res.get("ok"):
+        print(f"FALHA ao abrir Chrome: {res.get('message')}")
+        if res.get("stderr"):
+            print(f"Stderr: {res['stderr'][:500]}")
+        if res.get("chrome_process_exited_before_cdp_ready"):
+            print("O processo Chrome morreu antes de expor a porta CDP.")
+            print("Possiveis causas:")
+            print("  - Chrome ja estava aberto e rejeitou a nova instancia")
+            print("  - Flag --remote-debugging-port ignorada")
+            print("  - Lock file stale no profile")
+        return False
+
+    print(f"Chrome iniciado (PID {res.get('pid')}). Aguardando CDP...")
+
+    # Wait up to 30s
+    for attempt in range(60):
+        time.sleep(0.5)
+        v = _fetch_json_version()
+        if v:
+            print(f"\nCDP RESPONDEU apos {attempt//2 + 1}s: {v.get('Browser', 'chrome')}")
+            return True
+        if attempt % 4 == 0:
+            pid = res.get("pid")
+            alive = False
+            try:
+                check = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                    capture_output=True, text=True, timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                alive = str(pid) in check.stdout
+            except Exception:
+                pass
+            if not alive:
+                print(f"\nProcesso (PID {pid}) MORREU durante a espera!")
+                # Try to find stderr
+                try:
+                    logs = list(Path(DEFAULT_PROFILE_DIR.resolve()).glob("radar_chrome_stderr_*.log"))
+                    if logs:
+                        logs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                        stderr = logs[0].read_text(errors="ignore")[:500]
+                        if stderr:
+                            print(f"Stderr: {stderr}")
+                except Exception:
+                    pass
+                return False
+            print(".", end="", flush=True)
+
+    print("\nTimeout de 30s: CDP nao respondeu.")
+    return False
 
 
 def doctor():
@@ -88,7 +196,18 @@ def doctor():
     radar_proc = _find_radar_chrome_process()
     print("\n[4] Processo gerenciado pelo Radar")
     if radar_proc:
+        alive = True
+        try:
+            check = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {radar_proc['pid']}", "/NH"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            alive = str(radar_proc['pid']) in check.stdout
+        except Exception:
+            pass
         print(f"    Encontrado: PID {radar_proc['pid']} (fonte: {radar_proc['source']})")
+        print(f"    Processo vivo: {'SIM' if alive else 'NAO (stale)'}")
     else:
         print("    Nenhum processo gerenciado do Radar encontrado.")
 
@@ -137,30 +256,31 @@ def doctor():
         print("    Nao existe")
 
     # 8. user_data_dir
-    print(f"\n[8] User data dir: {DEFAULT_PROFILE_DIR.resolve()}")
     ud = Path(DEFAULT_PROFILE_DIR.resolve())
+    print(f"\n[8] User data dir: {ud}")
     if ud.exists():
         items = list(ud.iterdir())
         print(f"    Existe: sim ({len(items)} itens)")
+        locks = [f.name for f in items if "Singleton" in f.name]
+        if locks:
+            print(f"    Lock files: {', '.join(locks)}")
+        else:
+            print("    Lock files: nenhum")
     else:
         print("    Existe: nao (sera criado ao iniciar Chrome)")
 
-    # 9. PowerShell raw check for debugging
-    print("\n[9] Diagnostico extra (PowerShell)")
-    raw = _wmi_query_raw(
-        "Get-CimInstance Win32_Process -Filter \"name='chrome.exe' OR name='msedge.exe'\" | "
-        "Select-Object ProcessId, Name, CommandLine | ConvertTo-Json -Compress"
-    )
-    print(f"    {raw[:300]}")
+    # 9. Command line
+    print("\n[9] Comando que seria usado para abrir Chrome CDP:")
+    print_start_command()
 
-    # ── Recommendation ─────────────────────────────────────────────────
+    # 10. Recommendation
     print("\n" + "=" * 60)
     print("  RECOMENDACAO")
     print("=" * 60)
 
     if cdp_ok:
         print("  CDP OK - O Radar deve funcionar normalmente.")
-        print("  Se ainda houver erro, verifique se o Chrome nao travou.")
+        print("  Se ainda houver erro na etapa chrome, verifique se o Chrome nao travou.")
     elif port_open:
         print("  Porta 9222 ocupada mas CDP nao responde.")
         print("  Execute: python -c \"from shopee_core.radar_cdp_service import kill_managed_radar_chrome; kill_managed_radar_chrome()\"")
@@ -170,11 +290,21 @@ def doctor():
     else:
         print("  Chrome encontrado mas nao esta rodando com CDP.")
         print("  O Radar deve abri-lo automaticamente ao clicar em 'Rodar Radar Automatico'.")
-        print("  Se falhar, abra manualmente:")
-        print(f"    \"{chrome_path}\" --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir=\"{DEFAULT_PROFILE_DIR.resolve()}\" --no-first-run --no-default-browser-check about:blank")
+        print("  Para testar manualmente:")
+        print(f"    python scripts/radar_cdp_doctor.py --start")
+        print()
+        print("  Se falhar, diagnostique com:")
+        print(f"    tasklist /FI \"IMAGENAME eq chrome.exe\"")
+        print(f"    netstat -ano | findstr :9222")
 
     print()
 
 
 if __name__ == "__main__":
-    doctor()
+    if "--print-start-command" in sys.argv:
+        print_start_command()
+    elif "--start" in sys.argv:
+        ok = start_and_test()
+        sys.exit(0 if ok else 1)
+    else:
+        doctor()
