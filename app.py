@@ -3211,6 +3211,91 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
 # ESPELHO DA LOJA
 # ══════════════════════════════════════════════════════════════════════════
 
+def _render_pattern_report_preview(report: dict):
+    """R7.2L: Render a pattern report preview in the Radar Assistido UI."""
+    _j = lambda items: "`, `".join(items) if items else ""
+
+    st.markdown("---")
+    st.markdown("##### :bar_chart: Preview do Relatório de Padrões")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Confiança", report.get("confidence", "N/A").upper())
+    col2.metric("Concorrentes Usados", report.get("total_competitors", 0))
+    scope_label = "Diretos" if report.get("candidate_scope") == "direct_only" else "Diretos+Parciais"
+    col3.metric("Escopo", scope_label)
+    col4.metric("Faixa de Preço", f"R$ {report.get('price_min', 0):.0f} - R$ {report.get('price_max', 0):.0f}")
+
+    if report.get("warnings"):
+        with st.expander(":warning: Avisos", expanded=True):
+            for w in report["warnings"]:
+                st.markdown(f"- {w}")
+
+    strat_title = report.get("strategy_title", {})
+    strat_features = report.get("strategy_features", {})
+    strat_desc = report.get("strategy_description", {})
+    strat_images = report.get("strategy_images", {})
+
+    tabs = st.tabs(["Termos do Título", "Features", "Descrição", "Imagens", "Evidências"])
+
+    with tabs[0]:
+        strong = strat_title.get("strong_terms", [])
+        secondary = strat_title.get("secondary_terms", [])
+        if strong:
+            st.markdown(f"**Termos fortes:** `{_j(strong)}`")
+        if secondary:
+            st.markdown(f"**Termos secundários:** `{_j(secondary)}`")
+        if strat_title.get("avoid_terms"):
+            st.markdown(f":warning: **Termos de baixa recorrência:** `{_j(strat_title['avoid_terms'])}`")
+
+    with tabs[1]:
+        rec = strat_features.get("recommended", [])
+        if rec:
+            st.markdown(f"**Features recomendadas:** `{_j(rec)}`")
+        off = strat_features.get("off_niche", [])
+        if off:
+            st.markdown(f":warning: **Features off-niche:** `{_j(off)}`")
+        for w in strat_features.get("warnings", []):
+            if w:
+                st.markdown(f":warning: {w}")
+
+    with tabs[2]:
+        comm = strat_desc.get("commercial_arguments", [])
+        if comm:
+            st.markdown(f"**Argumentos comerciais recorrentes:** `{_j(comm)}`")
+        for obs in strat_desc.get("observations", []):
+            if obs:
+                st.markdown(f":bulb: {obs}")
+
+    with tabs[3]:
+        avg_imgs = strat_images.get("avg_image_count", 0)
+        st.markdown(f"**Média de imagens:** {avg_imgs:.1f}")
+        for rec_text in strat_images.get("recommendations", []):
+            st.markdown(f":bulb: {rec_text}")
+
+    with tabs[4]:
+        evidence = report.get("evidence_list", [])
+        if evidence:
+            for e in evidence:
+                score = e.get("match_relevance_score") or "N/A"
+                verdict_label = e.get("match_verdict", "N/A").replace("competitor_", "")
+                price_str = f"R$ {e['price']:.2f}" if e.get("price") else "Sem preço"
+                st.markdown(
+                    f"- **{e.get('title', 'Sem título')}** — "
+                    f"*{verdict_label}* (score: {score}) — "
+                    f"{price_str} — {e.get('marketplace', '')}"
+                )
+
+    # Price detail
+    with st.expander(":moneybag: Detalhes de Preço", expanded=False):
+        st.markdown(f"- **Mínimo:** R$ {report.get('price_min', 'N/A')}")
+        st.markdown(f"- **Máximo:** R$ {report.get('price_max', 'N/A')}")
+        st.markdown(f"- **Média:** R$ {report.get('price_avg', 'N/A')}")
+        st.markdown(f"- **Mediana:** R$ {report.get('price_median', 'N/A')}")
+        if report.get("price_min") and report.get("price_max"):
+            band_low = report.get("price_median", 0) * 0.85
+            band_high = report.get("price_median", 0) * 1.15
+            st.markdown(f"- :bulb: **Faixa sugerida:** R$ {band_low:.2f} - R$ {band_high:.2f}")
+
+
 def render_radar_workflow():
     st.markdown('<div class="page-header-title">Radar Assistido de Concorrentes</div>', unsafe_allow_html=True)
     st.markdown("Cadastre URLs de produtos concorrentes, colete dados e gere uma análise de mercado para usar na Auditoria.")
@@ -3446,7 +3531,8 @@ def render_radar_workflow():
                         st.error(f"Erro na coleta: {e}")
 
     st.divider()
-    c_class, c_rep, c_reclass = st.columns([1, 1, 2])
+    st.write("##### Classificação e Relatório de Padrões")
+    c_class, c_reclass = st.columns([1, 1])
     with c_class:
         if st.button("Classificar Concorrentes", use_container_width=True):
             with st.spinner("Classificando..."):
@@ -3457,18 +3543,8 @@ def render_radar_workflow():
                     st.rerun()
                 else:
                     st.error(res["error"])
-    with c_rep:
-        if st.button("Gerar Relatório de Padrões", use_container_width=True):
-            with st.spinner("Analisando padrões..."):
-                res = run_pattern_analysis_for_product(selected_uid)
-                if res["ok"]:
-                    st.success("Relatório gerado com sucesso!")
-                    time.sleep(2)
-                    st.rerun()
-                else:
-                    st.error(f"Não foi possível gerar: {res['error']}")
     with c_reclass:
-        if st.button("Reclassificar Concorrentes (forçar)", use_container_width=True, type="secondary"):
+        if st.button("Reclassificar (forçar)", use_container_width=True, type="secondary"):
             with st.spinner("Reclassificando com limpeza..."):
                 res = classify_linked_candidates_for_product(selected_uid, force_reclassify=True)
                 if res["ok"]:
@@ -3477,7 +3553,45 @@ def render_radar_workflow():
                     st.rerun()
                 else:
                     st.error(res["error"])
-                    
+
+    # ── R7.2L: Relatório de Padrões ──────────────────────
+    st.write("##### :bar_chart: Relatório de Padrões")
+    scope_col, btn_col = st.columns([1, 2])
+    with scope_col:
+        report_scope = st.selectbox(
+            "Escopo do relatório:",
+            options=["direct_only", "direct_plus_partial"],
+            format_func=lambda s: "Diretos apenas" if s == "direct_only" else "Diretos + Parciais",
+            key="report_scope_selector",
+        )
+    with btn_col:
+        st.write("")
+        st.write("")
+        if st.button("Gerar/Atualizar Relatório de Padrões", use_container_width=True):
+            with st.spinner("Analisando padrões de mercado..."):
+                res = run_pattern_analysis_for_product(selected_uid, candidate_scope=report_scope)
+                if res["ok"]:
+                    st.session_state["last_pattern_report"] = res["report"]
+                    st.success("Relatório gerado com sucesso!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Não foi possível gerar: {res['error']}")
+
+    # Preview do relatório se existir
+    last_report = st.session_state.get("last_pattern_report")
+    if not last_report:
+        from shopee_core.radar_patterns_service import get_latest_pattern_report as _get_latest
+        _cached = _get_latest(selected_uid)
+        if _cached:
+            last_report = _cached
+            st.session_state["last_pattern_report"] = _cached
+
+    if last_report and last_report.get("own_product_uid") == selected_uid:
+        _render_pattern_report_preview(last_report)
+    else:
+        st.info("Nenhum relatório gerado ainda. Selecione o escopo e clique em 'Gerar/Atualizar Relatório de Padrões'.")
+
     st.divider()
     st.write("##### Tabela de Concorrentes Vinculados")
     

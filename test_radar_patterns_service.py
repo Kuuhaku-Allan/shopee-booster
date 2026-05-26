@@ -26,6 +26,7 @@ from shopee_core.radar_patterns_service import (
     generate_pattern_report,
     get_latest_pattern_report,
 )
+from shopee_core.radar_db import get_connection, init_db
 from shopee_core.radar_relevance_service import classify_candidate
 from shopee_core.radar_service import (
     add_product_asset,
@@ -222,6 +223,121 @@ def test_relatorio_ignora_rejected():
     return True
 
 
+# ── R7.2L Tests ──────────────────────────────────────────────────────────
+
+
+def test_candidate_scope_direct_only():
+    """Direct_only uses only competitor_direct matches."""
+    own = _create_product("Mochila Infantil Rosa Escolar", 89.9, source_type="own_product")
+    direct = _create_product("Mochila Infantil Rosa com Rodinhas", 99.9)
+    partial = _create_product("Mochila Juvenil Rosa Escolar", 79.9)
+    classify_candidate(own["product_uid"], direct["product_uid"])
+    classify_candidate(own["product_uid"], partial["product_uid"])
+    # Force partial verdict for the second candidate
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE radar_competitor_matches SET verdict = 'competitor_partial' WHERE own_product_uid = ? AND candidate_product_uid = ?",
+            (own["product_uid"], partial["product_uid"])
+        )
+
+    report = generate_pattern_report(own["product_uid"], candidate_scope="direct_only")
+    assert report["direct_count"] == 1
+    assert report["partial_count"] == 0
+    assert report["total_competitors"] == 1
+    return True
+
+
+def test_candidate_scope_direct_plus_partial():
+    """Direct_plus_partial includes partial matches."""
+    own = _create_product("Mochila Infantil Rosa Escolar", 89.9, source_type="own_product")
+    direct = _create_product("Mochila Infantil Rosa com Rodinhas", 99.9)
+    partial = _create_product("Mochila Juvenil Rosa Escolar", 79.9)
+    classify_candidate(own["product_uid"], direct["product_uid"])
+    classify_candidate(own["product_uid"], partial["product_uid"])
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE radar_competitor_matches SET verdict = 'competitor_partial' WHERE own_product_uid = ? AND candidate_product_uid = ?",
+            (own["product_uid"], partial["product_uid"])
+        )
+
+    report = generate_pattern_report(own["product_uid"], candidate_scope="direct_plus_partial")
+    assert report["direct_count"] == 1
+    assert report["partial_count"] == 1
+    assert report["total_competitors"] == 2
+    return True
+
+
+def test_confidence_medium_with_5_direct():
+    """5 direct competitors yields medium confidence."""
+    own = _create_product("Mochila Infantil Rosa Escolar", 89.9, source_type="own_product")
+    for i in range(5):
+        p = _create_product(f"Mochila Infantil Rosa Escolar Diferente {i}", 80.0 + i)
+        classify_candidate(own["product_uid"], p["product_uid"])
+    report = generate_pattern_report(own["product_uid"])
+    assert report["direct_count"] >= 5, f"Got {report['direct_count']} direct, expected >=5"
+    assert report["confidence"] == "medium"
+    return True
+
+
+def test_confidence_high_with_10_direct():
+    """10 direct competitors yields high confidence."""
+    own = _create_product("Mochila Infantil Rosa Escolar", 89.9, source_type="own_product")
+    for i in range(10):
+        p = _create_product(f"Mochila Infantil Rosa Escolar Variante {i}", 80.0 + i)
+        classify_candidate(own["product_uid"], p["product_uid"])
+    report = generate_pattern_report(own["product_uid"])
+    assert report["direct_count"] >= 10, f"Got {report['direct_count']} direct, expected >=10"
+    assert report["confidence"] == "high"
+    return True
+
+
+def test_strategy_sections_present():
+    """Report has all R7.2L strategy sections."""
+    own, direct_1, direct_2, _ = _seed_report_products()
+    report = generate_pattern_report(own["product_uid"])
+    assert "strategy_title" in report
+    assert "strategy_features" in report
+    assert "strategy_description" in report
+    assert "strategy_images" in report
+    assert "evidence_list" in report
+    assert "candidate_scope" in report
+    return True
+
+
+def test_evidence_list_includes_competitors():
+    """Evidence list contains all competitors used in report."""
+    own, direct_1, direct_2, _ = _seed_report_products()
+    report = generate_pattern_report(own["product_uid"])
+    evidence_uids = {e["product_uid"] for e in report["evidence_list"]}
+    assert direct_1["product_uid"] in evidence_uids
+    assert direct_2["product_uid"] in evidence_uids
+    return True
+
+
+def test_price_dispersion_warning():
+    """High price dispersion generates warning."""
+    products = [
+        _product_row("A", 10),
+        _product_row("B", 100),
+        _product_row("C", 200),
+    ]
+    result = analyze_price_patterns(products)
+    assert result["dispersion_warning"] is not None
+    assert "dispersao" in result["dispersion_warning"]
+    return True
+
+
+def test_relatorio_escopo_salvo_e_recuperado():
+    """candidate_scope is saved and recovered from DB."""
+    own = _create_product("Mochila Teste", 89.9, source_type="own_product")
+    p = _create_product("Mochila Similar", 99.9)
+    classify_candidate(own["product_uid"], p["product_uid"])
+    report = generate_pattern_report(own["product_uid"], candidate_scope="direct_plus_partial")
+    latest = get_latest_pattern_report(own["product_uid"])
+    assert latest["candidate_scope"] == "direct_plus_partial"
+    return True
+
+
 if __name__ == "__main__":
     print("\nTESTE R5 - Analise de Padroes\n")
 
@@ -236,6 +352,15 @@ if __name__ == "__main__":
         ("menos de 3 gera warning", test_menos_de_3_concorrentes_gera_warning),
         ("get_latest_pattern_report", test_get_latest_pattern_report),
         ("relatorio ignora rejected", test_relatorio_ignora_rejected),
+        # R7.2L
+        ("scope direct_only", test_candidate_scope_direct_only),
+        ("scope direct_plus_partial", test_candidate_scope_direct_plus_partial),
+        ("confidence medium com 5 direct", test_confidence_medium_with_5_direct),
+        ("confidence high com 10 direct", test_confidence_high_with_10_direct),
+        ("strategy sections present", test_strategy_sections_present),
+        ("evidence list includes competitors", test_evidence_list_includes_competitors),
+        ("price dispersion warning", test_price_dispersion_warning),
+        ("scope salvo e recuperado", test_relatorio_escopo_salvo_e_recuperado),
     ]
 
     passed = 0

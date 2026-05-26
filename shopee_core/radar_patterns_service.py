@@ -137,26 +137,37 @@ def get_direct_competitors_for_analysis(
     return products
 
 
-def analyze_price_patterns(products: list[dict]) -> dict:
+def analyze_price_patterns(products: list[dict], weights: dict[str, float] | None = None) -> dict:
     """Calculate basic price statistics and simple outlier signals."""
-    prices = [
-        float(product["price"])
-        for product in products
-        if _coerce_float(product.get("price")) is not None
-        and is_plausible_price(_coerce_float(product.get("price")), _category_hint(product))
-    ]
-    if not prices:
+    weighted_pairs = []
+    for product in products:
+        p = _coerce_float(product.get("price"))
+        if p is None or not is_plausible_price(p, _category_hint(product)):
+            continue
+        w = (weights or {}).get(product.get("product_uid"), 1.0)
+        weighted_pairs.append((p, w))
+
+    if not weighted_pairs:
         return {
-            "min": None,
-            "max": None,
-            "avg": None,
-            "median": None,
+            "min": None, "max": None, "avg": None, "median": None,
             "suggested_band": {"low": None, "high": None},
-            "outliers": [],
+            "outliers": [], "dispersion_warning": None,
         }
 
-    avg = sum(prices) / len(prices)
-    median = statistics.median(prices)
+    prices = [p for p, _ in weighted_pairs]
+    total_weight = sum(w for _, w in weighted_pairs)
+    avg = sum(p * w for p, w in weighted_pairs) / total_weight if total_weight else 0
+    # Weighted median: sort by price, accumulate weights until reaching half
+    sorted_pairs = sorted(weighted_pairs, key=lambda x: x[0])
+    cumulative = 0.0
+    median = sorted_pairs[-1][0]
+    for p, w in sorted_pairs:
+        cumulative += w
+        if cumulative >= total_weight / 2:
+            median = p
+            break
+
+    median = round(median, 2)
     low_band = round(max(min(prices), median * 0.85), 2)
     high_band = round(min(max(prices), median * 1.15), 2)
     outliers = []
@@ -170,29 +181,34 @@ def analyze_price_patterns(products: list[dict]) -> dict:
         elif price > median * 1.8:
             outliers.append(_price_outlier(product, "high"))
 
+    dispersion_warning = None
+    if len(prices) >= 3 and max(prices) > 0:
+        cv = statistics.stdev(prices) / statistics.mean(prices)
+        if cv > 0.5:
+            dispersion_warning = f"Alta dispersao de precos (CV={cv:.2f}). Mediana ({median}) e mais representativa que media ({round(avg, 2)})."
+
     return {
         "min": round(min(prices), 2),
         "max": round(max(prices), 2),
         "avg": round(avg, 2),
-        "median": round(median, 2),
-        "suggested_band": {
-            "low": low_band,
-            "high": high_band,
-        },
+        "median": median,
+        "suggested_band": {"low": low_band, "high": high_band},
         "outliers": outliers,
+        "dispersion_warning": dispersion_warning,
     }
 
 
-def analyze_title_terms(products: list[dict]) -> dict:
+def analyze_title_terms(products: list[dict], weights: dict[str, float] | None = None) -> dict:
     """Extract frequent meaningful title terms."""
     counter: Counter[str] = Counter()
-    total = len(products)
-
     for product in products:
+        w = (weights or {}).get(product.get("product_uid"), 1.0)
         terms = set(_tokenize(product.get("title") or ""))
-        counter.update(terms)
+        for term in terms:
+            counter[term] += w
 
-    top_terms = _counter_to_frequency_rows(counter, total)
+    total_weight = sum((weights or {}).get(p.get("product_uid"), 1.0) for p in products) or 1.0
+    top_terms = _counter_to_frequency_rows(counter, total_weight)
     return {
         "top_terms": top_terms[:20],
         "strong_terms": [row for row in top_terms if row["frequency"] >= 0.4],
@@ -200,39 +216,76 @@ def analyze_title_terms(products: list[dict]) -> dict:
     }
 
 
-def analyze_feature_patterns(products: list[dict]) -> dict:
-    """Detect recurring product features from title, description and raw data."""
+def analyze_feature_patterns(products: list[dict], own_product: dict | None = None, weights: dict[str, float] | None = None) -> dict:
+    """
+    Detect recurring product features from title, description and raw data.
+    R5.1C: Separa features off-niche quando produto proprio e fornecido.
+    """
     counter: Counter[str] = Counter()
-    total = len(products)
+    feature_sources: dict[str, list[str]] = {}
+    total_weight = sum((weights or {}).get(p.get("product_uid"), 1.0) for p in products) or 1.0
 
     for product in products:
+        w = (weights or {}).get(product.get("product_uid"), 1.0)
         text = _product_full_text(product)
-        features = {
-            feature
-            for feature, patterns in FEATURE_PATTERNS.items()
-            if any(_has_pattern(text, pattern) for pattern in patterns)
-        }
-        counter.update(features)
+        title = _normalize_text(product.get("title") or "")
 
-    features = _counter_to_frequency_rows(counter, total, key_name="feature")
+        for feature, patterns in FEATURE_PATTERNS.items():
+            if any(_has_pattern(text, pattern) for pattern in patterns):
+                counter[feature] += w
+                if feature not in feature_sources:
+                    feature_sources[feature] = []
+                if any(_has_pattern(title, pattern) for pattern in patterns):
+                    feature_sources[feature].append("title")
+                else:
+                    feature_sources[feature].append("description")
+
+    features = _counter_to_frequency_rows(counter, total_weight, key_name="feature")
+    
+    # R5.1C: Detectar features off-niche
+    off_niche_features = []
+    in_niche_features = []
+    
+    if own_product:
+        own_profile = _build_simple_profile(own_product)
+        is_child_school = (
+            ("infantil" in own_profile.get("audience", []) or "feminino" in own_profile.get("audience", []))
+            and "escolar" in own_profile.get("use_case", [])
+        )
+        
+        for row in features:
+            feature = row["feature"]
+            # Features problematicas para nicho infantil/feminino/escolar
+            if is_child_school and feature in {"notebook", "masculina", "premium", "minimalista"}:
+                off_niche_features.append({
+                    **row,
+                    "warning": f"Feature '{feature}' pode ser ruido/off-niche para produto infantil feminino escolar.",
+                })
+            else:
+                in_niche_features.append(row)
+    else:
+        in_niche_features = features
+
     return {
-        "features": features,
-        "strong_patterns": [row for row in features if row["frequency"] >= 0.4],
+        "features": in_niche_features,
+        "off_niche_features": off_niche_features,
+        "strong_patterns": [row for row in in_niche_features if row["frequency"] >= 0.4],
         "medium_patterns": [
-            row for row in features if 0.2 <= row["frequency"] < 0.4
+            row for row in in_niche_features if 0.2 <= row["frequency"] < 0.4
         ],
         "possible_differentials": [
-            row for row in features if row["frequency"] < 0.2
+            row for row in in_niche_features if row["frequency"] < 0.2
         ],
     }
 
 
-def analyze_description_patterns(products: list[dict]) -> dict:
+def analyze_description_patterns(products: list[dict], weights: dict[str, float] | None = None) -> dict:
     """Detect recurring commercial arguments in descriptions."""
     counter: Counter[str] = Counter()
-    total = len(products)
+    total_weight = sum((weights or {}).get(p.get("product_uid"), 1.0) for p in products) or 1.0
 
     for product in products:
+        w = (weights or {}).get(product.get("product_uid"), 1.0)
         text = _normalize_text(
             " ".join(
                 [
@@ -246,9 +299,10 @@ def analyze_description_patterns(products: list[dict]) -> dict:
             for argument, patterns in DESCRIPTION_ARGUMENTS.items()
             if any(_has_pattern(text, pattern) for pattern in patterns)
         }
-        counter.update(arguments)
+        for arg in arguments:
+            counter[arg] += w
 
-    rows = _counter_to_frequency_rows(counter, total, key_name="argument")
+    rows = _counter_to_frequency_rows(counter, total_weight, key_name="argument")
     found = {row["argument"] for row in rows}
     return {
         "commercial_arguments": rows,
@@ -312,6 +366,157 @@ def analyze_image_patterns(products: list[dict]) -> dict:
         "downloaded_assets": downloaded_assets,
         "warnings": warnings,
     }
+
+
+def _build_simple_profile(product: dict) -> dict:
+    """Build a simple profile for niche detection."""
+    raw = _load_json_dict(product.get("raw_json"))
+    text = _normalize_text(
+        " ".join([
+            product.get("title") or "",
+            _product_description(product, raw),
+        ])
+    )
+    
+    audience = []
+    if any(pattern in text for pattern in ["infantil", "crianca", "menina", "menino"]):
+        audience.append("infantil")
+    if any(pattern in text for pattern in ["feminino", "feminina", "menina", "princesa", "rosa"]):
+        audience.append("feminino")
+    if any(pattern in text for pattern in ["masculino", "masculina", "menino"]):
+        audience.append("masculino")
+    if any(pattern in text for pattern in ["adulto", "adulta", "executivo", "executiva"]):
+        audience.append("adulto")
+    
+    use_case = []
+    if any(pattern in text for pattern in ["escolar", "escola"]):
+        use_case.append("escolar")
+    if any(pattern in text for pattern in ["notebook", "laptop"]):
+        use_case.append("notebook")
+    if any(pattern in text for pattern in ["trabalho", "executivo", "executiva", "office"]):
+        use_case.append("trabalho")
+    if any(pattern in text for pattern in ["faculdade", "universidade", "universitario"]):
+        use_case.append("faculdade")
+    
+    return {
+        "audience": audience,
+        "use_case": use_case,
+    }
+
+
+def _compute_competitor_weights(
+    competitors: list[dict], candidate_scope: str
+) -> dict[str, float]:
+    """Compute analysis weight per competitor based on scope."""
+    weights: dict[str, float] = {}
+    for prod in competitors:
+        uid = prod.get("product_uid")
+        if candidate_scope == "direct_only":
+            weights[uid] = 1.0 if prod.get("match_verdict") == "competitor_direct" else 0.0
+        else:
+            weights[uid] = 1.0 if prod.get("match_verdict") == "competitor_direct" else 0.5
+    return weights
+
+
+def _compute_confidence(direct_count: int, partial_count: int, candidate_scope: str) -> str:
+    """R7.2L: Confidence tiers based on count and scope."""
+    effective = direct_count
+    if candidate_scope == "direct_plus_partial":
+        effective = direct_count + int(partial_count * 0.5)
+
+    if effective >= 10 or (direct_count >= 7 and partial_count >= 3):
+        return "high"
+    if effective >= 5:
+        return "medium"
+    if effective >= 3:
+        return "low"
+    return "insufficient"
+
+
+def _build_strategy_title(analyses: dict) -> dict:
+    """Build title strategy section from term analysis."""
+    strong = analyses.get("title_terms", {}).get("strong_terms", [])
+    weak = analyses.get("title_terms", {}).get("weak_terms", [])
+    all_terms = analyses.get("title_terms", {}).get("top_terms", [])
+
+    strong_set = {r["term"] for r in strong}
+    weak_set = {r["term"] for r in weak}
+    secondary = [r for r in all_terms if r["term"] not in strong_set and r["term"] not in weak_set]
+
+    return {
+        "strong_terms": [r["term"] for r in strong],
+        "secondary_terms": [r["term"] for r in secondary],
+        "avoid_terms": [r["term"] for r in weak],
+        "evidence_note": "Termos fortes aparecem em pelo menos 40% dos concorrentes; secundarios entre 20% e 40%.",
+    }
+
+
+def _build_strategy_features(analyses: dict) -> dict:
+    """Build feature strategy section from feature analysis."""
+    features_data = analyses.get("features", {})
+    return {
+        "recommended": [r["feature"] for r in features_data.get("strong_patterns", [])],
+        "recurring": [r["feature"] for r in features_data.get("medium_patterns", [])],
+        "off_niche": [r["feature"] for r in features_data.get("off_niche_features", [])],
+        "warnings": [f.get("warning", "") for f in features_data.get("off_niche_features", [])],
+    }
+
+
+def _build_strategy_description(analyses: dict) -> dict:
+    """Build description strategy section from description analysis."""
+    desc = analyses.get("description", {})
+    common = desc.get("common_promises", [])
+    all_args = desc.get("commercial_arguments", [])
+    missing = desc.get("missing_opportunities", [])
+
+    quality_terms = [r for r in all_args if r.get("argument") in (
+        "material resistente", "qualidade premium", "durabilidade", "facil limpeza", "garantia")]
+    use_arguments = [r for r in all_args if r.get("argument") in (
+        "conforto", "espaco interno", "organizacao", "volta as aulas")]
+    observations = []
+    if missing:
+        observations.append(f"Oportunidades nao exploradas: {', '.join(missing[:4])}.")
+
+    return {
+        "commercial_arguments": [r["argument"] for r in all_args],
+        "quality_terms": [r["argument"] for r in quality_terms],
+        "use_arguments": [r["argument"] for r in use_arguments],
+        "observations": observations,
+    }
+
+
+def _build_strategy_images(analyses: dict) -> dict:
+    """Build image strategy section."""
+    img = analyses.get("images", {})
+    avg = img.get("avg_image_count", 0)
+    recs = []
+    if avg >= 3:
+        recs.append(f"Manter pelo menos {int(avg)} imagens, seguindo a media dos concorrentes.")
+    elif avg > 0:
+        recs.append(f"Media baixa de imagens ({avg:.0f}); considerar aumentar para pelo menos 3.")
+    if img.get("downloaded_assets", 0) == 0 and avg > 0:
+        recs.append("Registrar imagens como assets para analise visual futura.")
+    return {
+        "avg_image_count": avg,
+        "main_image_presence": "Presente" if avg > 0 else "Nao verificado",
+        "recommendations": recs,
+    }
+
+
+def _build_evidence_list(competitors: list[dict]) -> list[dict]:
+    """Build evidence list of competitors used in the report."""
+    evidence = []
+    for prod in competitors:
+        evidence.append({
+            "product_uid": prod.get("product_uid"),
+            "title": prod.get("title"),
+            "price": prod.get("price"),
+            "marketplace": prod.get("marketplace"),
+            "shop_name": prod.get("shop_name"),
+            "match_verdict": prod.get("match_verdict"),
+            "match_relevance_score": prod.get("match_relevance_score"),
+        })
+    return evidence
 
 
 def build_recommendations(own_product: dict, analyses: dict) -> list[dict]:
@@ -378,11 +583,27 @@ def build_recommendations(own_product: dict, analyses: dict) -> list[dict]:
             ]
         )
     )
+    
+    # R5.1C: Usar apenas features in-niche, ignorar off-niche
     missing_features = []
     for row in analyses.get("features", {}).get("strong_patterns", []):
         feature = row["feature"]
         if not _has_pattern(own_text, feature):
             missing_features.append(feature)
+    
+    # Avisar sobre features off-niche se existirem
+    off_niche = analyses.get("features", {}).get("off_niche_features", [])
+    if off_niche:
+        warnings_text = "; ".join([f["warning"] for f in off_niche[:3]])
+        recommendations.append(
+            {
+                "type": "features",
+                "priority": "low",
+                "recommendation": f"Features off-niche detectadas: {', '.join([f['feature'] for f in off_niche[:3]])}.",
+                "evidence": warnings_text,
+            }
+        )
+    
     if missing_features:
         recommendations.append(
             {
@@ -443,37 +664,63 @@ def build_recommendations(own_product: dict, analyses: dict) -> list[dict]:
 def generate_pattern_report(
     own_product_uid: str,
     include_partial: bool = False,
+    candidate_scope: str | None = None,
     min_direct: int = 3,
     save: bool = True,
 ) -> dict:
-    """Generate and optionally save a full R5 pattern report."""
+    """Generate and optionally save a full R5 pattern report.
+
+    Args:
+        own_product_uid: Product UID of the own product.
+        include_partial: Legacy flag (True = include partial matches).
+        candidate_scope: 'direct_only' (default) or 'direct_plus_partial'.
+                         Overrides include_partial if provided.
+        min_direct: Minimum direct competitors for reliable report.
+        save: Whether to persist the report to DB.
+    """
+    # R7.2L: candidate_scope overrides include_partial
+    if candidate_scope is None:
+        candidate_scope = "direct_plus_partial" if include_partial else "direct_only"
+
     own_product = get_product(own_product_uid)
     if not own_product:
         raise ValueError(f"Produto proprio nao encontrado: {own_product_uid}")
 
     all_competitors = get_direct_competitors_for_analysis(
         own_product_uid,
-        include_partial=include_partial,
+        include_partial=(candidate_scope == "direct_plus_partial"),
         include_low_quality=True,
     )
     competitors = [
         product for product in all_competitors if product.get("quality", {}).get("ok")
     ]
     ignored_low_quality = len(all_competitors) - len(competitors)
+
+    # Filter by scope — only keep products with weight > 0
+    weights = _compute_competitor_weights(competitors, candidate_scope)
+    scoped_competitors = [p for p in competitors if weights.get(p.get("product_uid"), 0) > 0]
+    # Recompute weights for the scoped set only
+    weights = _compute_competitor_weights(scoped_competitors, candidate_scope)
+    # Filter out products with zero weight (should not happen but safeguard)
+    scoped_competitors = [p for p in scoped_competitors if weights.get(p.get("product_uid"), 0) > 0]
+    # Recompute weights one more time for the clean set
+    weights = _compute_competitor_weights(scoped_competitors, candidate_scope)
+
     direct_count = sum(
-        1 for product in competitors if product.get("match_verdict") == "competitor_direct"
+        1 for p in scoped_competitors if p.get("match_verdict") == "competitor_direct"
     )
     partial_count = sum(
-        1 for product in competitors if product.get("match_verdict") == "competitor_partial"
+        1 for p in scoped_competitors if p.get("match_verdict") == "competitor_partial"
     )
 
     analyses = {
-        "price": analyze_price_patterns(competitors),
-        "title_terms": analyze_title_terms(competitors),
-        "features": analyze_feature_patterns(competitors),
-        "description": analyze_description_patterns(competitors),
-        "images": analyze_image_patterns(competitors),
+        "price": analyze_price_patterns(scoped_competitors, weights),
+        "title_terms": analyze_title_terms(scoped_competitors, weights),
+        "features": analyze_feature_patterns(scoped_competitors, own_product=own_product, weights=weights),
+        "description": analyze_description_patterns(scoped_competitors, weights),
+        "images": analyze_image_patterns(scoped_competitors),
     }
+
     warnings = []
     if direct_count < 3:
         warnings.append("Base pequena. Recomendacoes podem ser pouco confiaveis.")
@@ -482,28 +729,40 @@ def generate_pattern_report(
     if ignored_low_quality:
         warnings.append(f"{ignored_low_quality} produtos ignorados por baixa qualidade de extracao.")
     warnings.extend(analyses["images"].get("warnings") or [])
+    dispersion_warning = analyses["price"].get("dispersion_warning")
+    if dispersion_warning:
+        warnings.append(dispersion_warning)
 
-    confidence = "high"
-    if direct_count < 3:
-        confidence = "low"
-    elif direct_count < 5:
-        confidence = "medium"
+    confidence = _compute_confidence(direct_count, partial_count, candidate_scope)
+
+    # R7.2L: Strategy sections and evidence list
+    strategy_title = _build_strategy_title(analyses)
+    strategy_features = _build_strategy_features(analyses)
+    strategy_description = _build_strategy_description(analyses)
+    strategy_images = _build_strategy_images(analyses)
+    evidence_list = _build_evidence_list(scoped_competitors)
 
     recommendations = build_recommendations(own_product, analyses)
     raw = {
         "own_product": _public_product(own_product),
-        "competitors": [_public_product(product) for product in competitors],
+        "competitors": [_public_product(p) for p in scoped_competitors],
         "analyses": analyses,
         "confidence": confidence,
-        "include_partial": include_partial,
+        "candidate_scope": candidate_scope,
         "ignored_low_quality": ignored_low_quality,
+        "strategy_title": strategy_title,
+        "strategy_features": strategy_features,
+        "strategy_description": strategy_description,
+        "strategy_images": strategy_images,
+        "evidence_list": evidence_list,
     }
     report = {
         "report_uid": str(uuid.uuid4()),
         "own_product_uid": own_product_uid,
-        "total_competitors": len(competitors),
+        "total_competitors": len(scoped_competitors),
         "direct_count": direct_count,
         "partial_count": partial_count,
+        "candidate_scope": candidate_scope,
         "price_min": analyses["price"]["min"],
         "price_max": analyses["price"]["max"],
         "price_avg": analyses["price"]["avg"],
@@ -514,6 +773,11 @@ def generate_pattern_report(
         "image_patterns": analyses["images"],
         "warnings": warnings,
         "recommendations": recommendations,
+        "strategy_title": strategy_title,
+        "strategy_features": strategy_features,
+        "strategy_description": strategy_description,
+        "strategy_images": strategy_images,
+        "evidence_list": evidence_list,
         "raw": raw,
         "confidence": confidence,
         "ignored_low_quality": ignored_low_quality,
@@ -598,6 +862,13 @@ def _decode_report_row(row: dict) -> dict:
     row["raw"] = _load_json_dict(row.pop("raw_json", None))
     row["confidence"] = row["raw"].get("confidence")
     row["ignored_low_quality"] = row["raw"].get("ignored_low_quality", 0)
+    # R7.2L: Decode strategy sections from raw
+    row["candidate_scope"] = row["raw"].get("candidate_scope", "direct_only")
+    row["strategy_title"] = row["raw"].get("strategy_title", {})
+    row["strategy_features"] = row["raw"].get("strategy_features", {})
+    row["strategy_description"] = row["raw"].get("strategy_description", {})
+    row["strategy_images"] = row["raw"].get("strategy_images", {})
+    row["evidence_list"] = row["raw"].get("evidence_list", [])
     return row
 
 

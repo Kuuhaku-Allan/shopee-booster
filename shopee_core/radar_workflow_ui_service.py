@@ -355,9 +355,9 @@ def classify_linked_candidates_for_product(own_product_uid: str, force_reclassif
     summary["ok"] = True
     return summary
 
-def run_pattern_analysis_for_product(own_product_uid: str) -> dict:
+def run_pattern_analysis_for_product(own_product_uid: str, candidate_scope: str = "direct_only") -> dict:
     try:
-        report = generate_pattern_report(own_product_uid)
+        report = generate_pattern_report(own_product_uid, candidate_scope=candidate_scope)
         if not report:
             return {"ok": False, "error": "Relatório vazio ou insuficiente concorrentes."}
         return {"ok": True, "report": report}
