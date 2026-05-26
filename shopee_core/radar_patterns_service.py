@@ -15,6 +15,7 @@ import unicodedata
 import uuid
 from collections import Counter
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Any
 
 from .radar_collector import is_plausible_price, validate_product_extraction
@@ -60,6 +61,14 @@ TITLE_STOPWORDS = {
 FEATURE_PATTERNS = {
     "rodinhas": ["rodinha", "rodinhas", "rodas", "360"],
     "notebook": ["notebook", "laptop"],
+    "natacao": ["natacao", "nabaiji", "piscina"],
+    "praia": ["praia"],
+    "esportiva": ["esporte", "esportiva", "esportivo", "academia", "fitness"],
+    "trekking": ["trekking", "trilha", "hiking"],
+    "hidratacao": ["hidratacao"],
+    "executivo": ["executivo", "executiva"],
+    "corporativo": ["corporativo", "corporativa"],
+    "urbano adulto": ["urbano", "urbana"],
     "impermeavel": ["impermeavel", "resistente a agua"],
     "reforcada": ["reforcada", "reforcado", "reforco"],
     "costura reforcada": ["costura reforcada", "costuras reforcadas"],
@@ -77,6 +86,37 @@ FEATURE_PATTERNS = {
     "masculina": ["masculina", "masculino", "menino"],
     "minimalista": ["minimalista", "clean"],
     "premium": ["premium", "luxo"],
+}
+
+OFF_NICHE_FEATURES_CHILD_SCHOOL = {
+    "notebook",
+    "natacao",
+    "praia",
+    "esportiva",
+    "trekking",
+    "hidratacao",
+    "executivo",
+    "corporativo",
+    "urbano adulto",
+    "premium",
+    "minimalista",
+}
+
+NOISE_TITLE_TERMS = {
+    "10l",
+    "16l",
+    "20l",
+    "agua",
+    "alca",
+    "alcas",
+    "partes",
+    "prova",
+    "top",
+    "up4you",
+    "marechal",
+    "nabaiji",
+    "ziper",
+    "ziperes",
 }
 
 DESCRIPTION_ARGUMENTS = {
@@ -275,7 +315,9 @@ def analyze_feature_patterns(products: list[dict], own_product: dict | None = No
                     in_niche_features.append(row)
                     continue
             # Features problematicas para nicho infantil/feminino/escolar
-            if is_child_school and feature in {"notebook", "masculina", "premium", "minimalista"}:
+            if is_child_school and (
+                feature in OFF_NICHE_FEATURES_CHILD_SCHOOL or feature == "masculina"
+            ):
                 off_niche_features.append({
                     **row,
                     "warning": f"Feature '{feature}' pode ser ruido/off-niche para produto infantil feminino escolar.",
@@ -423,6 +465,128 @@ def _build_simple_profile(product: dict) -> dict:
     }
 
 
+def cluster_competitor_variants(candidates: list[dict]) -> list[dict]:
+    """Group duplicated or near-duplicate competitor variants for effective counts."""
+    clusters: list[dict] = []
+    for candidate in candidates or []:
+        placed = False
+        for cluster in clusters:
+            representative = cluster["representative_candidate"]
+            reason = _variant_match_reason(representative, candidate)
+            if reason:
+                cluster["candidates"].append(candidate)
+                cluster["variants_count"] = len(cluster["candidates"])
+                cluster["reason"] = reason
+                cluster["representative_candidate"] = _choose_cluster_representative(
+                    cluster["representative_candidate"],
+                    candidate,
+                )
+                placed = True
+                break
+        if not placed:
+            clusters.append({
+                "cluster_id": f"cluster-{len(clusters) + 1}",
+                "representative_candidate": candidate,
+                "variants_count": 1,
+                "candidates": [candidate],
+                "reason": "representante unico",
+            })
+
+    for cluster in clusters:
+        representative = dict(cluster["representative_candidate"])
+        representative["_variant_cluster"] = {
+            "cluster_id": cluster["cluster_id"],
+            "variants_count": cluster["variants_count"],
+            "reason": cluster["reason"],
+        }
+        cluster["representative_candidate"] = representative
+    return clusters
+
+
+def _choose_cluster_representative(current: dict, candidate: dict) -> dict:
+    verdict_rank = {"competitor_direct": 3, "competitor_partial": 2, "rejected": 1}
+    current_rank = verdict_rank.get(current.get("match_verdict"), 0)
+    candidate_rank = verdict_rank.get(candidate.get("match_verdict"), 0)
+    if candidate_rank > current_rank:
+        return candidate
+    if candidate_rank == current_rank:
+        current_score = _coerce_float(current.get("match_relevance_score")) or 0.0
+        candidate_score = _coerce_float(candidate.get("match_relevance_score")) or 0.0
+        if candidate_score > current_score:
+            return candidate
+    return current
+
+
+def _variant_match_reason(left: dict, right: dict) -> str | None:
+    left_id = _marketplace_product_id(left)
+    right_id = _marketplace_product_id(right)
+    if left_id and left_id == right_id:
+        return "mesmo marketplace product id"
+
+    left_url = _normalized_product_url(left)
+    right_url = _normalized_product_url(right)
+    if left_url and left_url == right_url:
+        return "mesma URL canonica"
+
+    left_title = _normalized_variant_title(left)
+    right_title = _normalized_variant_title(right)
+    if not left_title or not right_title:
+        return None
+
+    same_seller = _normalize_text(left.get("shop_name") or "") == _normalize_text(right.get("shop_name") or "")
+    price_close = _prices_close(left.get("price"), right.get("price"))
+    title_similarity = SequenceMatcher(None, left_title, right_title).ratio()
+    same_signature = set(left_title.split()) == set(right_title.split())
+
+    if (same_signature or title_similarity >= 0.94) and (same_seller or price_close):
+        return "titulo muito parecido com vendedor/preco compativel"
+    if same_seller and price_close and title_similarity >= 0.88:
+        return "variacao do mesmo vendedor com preco proximo"
+    return None
+
+
+def _normalized_product_url(product: dict) -> str:
+    raw_url = str(product.get("canonical_url") or product.get("url") or "").lower().strip()
+    if not raw_url:
+        return ""
+    raw_url = raw_url.split("?")[0].split("#")[0].rstrip("/")
+    return raw_url
+
+
+def _marketplace_product_id(product: dict) -> str:
+    url = _normalized_product_url(product)
+    match = re.search(r"\b(mlb-?\d+|mlb\d+)\b", url, flags=re.I)
+    if match:
+        return match.group(1).replace("-", "").lower()
+    return ""
+
+
+def _normalized_variant_title(product: dict) -> str:
+    tokens = _tokenize(product.get("title") or "")
+    return " ".join(tokens)
+
+
+def _prices_close(left, right) -> bool:
+    left_price = _coerce_float(left)
+    right_price = _coerce_float(right)
+    if left_price is None or right_price is None:
+        return False
+    high = max(left_price, right_price)
+    low = min(left_price, right_price)
+    if high <= 0:
+        return True
+    return (high - low) / high <= 0.08
+
+
+def format_brl_markdown(value) -> str:
+    """Format BRL preserving the dollar sign when rendered via Markdown."""
+    value_float = _coerce_float(value)
+    if value_float is None:
+        return "N/A"
+    raw = f"R$ {value_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return raw.replace("$", r"\$")
+
+
 def _compute_competitor_weights(
     competitors: list[dict], candidate_scope: str
 ) -> dict[str, float]:
@@ -465,7 +629,9 @@ def _build_strategy_title(analyses: dict) -> dict:
     return {
         "strong_terms": [r["term"] for r in strong],
         "secondary_terms": [r["term"] for r in secondary],
-        "avoid_terms": [r["term"] for r in weak],
+        "avoid_terms": [
+            r["term"] for r in weak if not _is_noise_title_token(r.get("term", ""))
+        ][:20],
         "evidence_note": "Termos fortes aparecem em pelo menos 40% dos concorrentes; secundarios entre 20% e 40%.",
     }
 
@@ -473,10 +639,22 @@ def _build_strategy_title(analyses: dict) -> dict:
 def _build_strategy_features(analyses: dict) -> dict:
     """Build feature strategy section from feature analysis."""
     features_data = analyses.get("features", {})
+    off_niche = [r["feature"] for r in features_data.get("off_niche_features", [])]
+    off_niche_set = set(off_niche) | OFF_NICHE_FEATURES_CHILD_SCHOOL
+    recommended = [
+        r["feature"]
+        for r in features_data.get("strong_patterns", [])
+        if r.get("feature") not in off_niche_set
+    ]
+    recurring = [
+        r["feature"]
+        for r in features_data.get("medium_patterns", [])
+        if r.get("feature") not in off_niche_set
+    ]
     return {
-        "recommended": [r["feature"] for r in features_data.get("strong_patterns", [])],
-        "recurring": [r["feature"] for r in features_data.get("medium_patterns", [])],
-        "off_niche": [r["feature"] for r in features_data.get("off_niche_features", [])],
+        "recommended": recommended,
+        "recurring": recurring,
+        "off_niche": off_niche,
         "warnings": [f.get("warning", "") for f in features_data.get("off_niche_features", [])],
     }
 
@@ -535,6 +713,8 @@ def _build_evidence_list(competitors: list[dict]) -> list[dict]:
             "shop_name": prod.get("shop_name"),
             "match_verdict": prod.get("match_verdict"),
             "match_relevance_score": prod.get("match_relevance_score"),
+            "variants_count": (prod.get("_variant_cluster") or {}).get("variants_count", 1),
+            "cluster_reason": (prod.get("_variant_cluster") or {}).get("reason"),
         })
     return evidence
 
@@ -732,40 +912,67 @@ def generate_pattern_report(
     partial_count = sum(
         1 for p in scoped_competitors if p.get("match_verdict") == "competitor_partial"
     )
+    variant_clusters = cluster_competitor_variants(scoped_competitors)
+    effective_competitors = [cluster["representative_candidate"] for cluster in variant_clusters]
+    variants_grouped = sum(max(0, cluster["variants_count"] - 1) for cluster in variant_clusters)
+    effective_direct_count = sum(
+        1 for p in effective_competitors if p.get("match_verdict") == "competitor_direct"
+    )
+    effective_partial_count = sum(
+        1 for p in effective_competitors if p.get("match_verdict") == "competitor_partial"
+    )
+    effective_weights = _compute_competitor_weights(effective_competitors, candidate_scope)
 
     analyses = {
-        "price": analyze_price_patterns(scoped_competitors, weights),
-        "title_terms": analyze_title_terms(scoped_competitors, weights),
-        "features": analyze_feature_patterns(scoped_competitors, own_product=own_product, weights=weights),
-        "description": analyze_description_patterns(scoped_competitors, weights),
-        "images": analyze_image_patterns(scoped_competitors),
+        "price": analyze_price_patterns(effective_competitors, effective_weights),
+        "title_terms": analyze_title_terms(effective_competitors, effective_weights),
+        "features": analyze_feature_patterns(effective_competitors, own_product=own_product, weights=effective_weights),
+        "description": analyze_description_patterns(effective_competitors, effective_weights),
+        "images": analyze_image_patterns(effective_competitors),
     }
 
     warnings = []
-    if direct_count < 3:
+    if effective_direct_count < 3:
         warnings.append("Base pequena. Recomendacoes podem ser pouco confiaveis.")
-    if direct_count < min_direct:
-        warnings.append(f"Concorrentes diretos abaixo do minimo solicitado ({min_direct}).")
+    if effective_direct_count < min_direct:
+        warnings.append(f"Concorrentes diretos efetivos abaixo do minimo solicitado ({min_direct}).")
     if ignored_low_quality:
         warnings.append(f"{ignored_low_quality} produtos ignorados por baixa qualidade de extracao.")
+    if variants_grouped:
+        warnings.append(f"{variants_grouped} variacao(oes) agrupada(s) para evitar contagem inflada.")
     warnings.extend(analyses["images"].get("warnings") or [])
     dispersion_warning = analyses["price"].get("dispersion_warning")
     if dispersion_warning:
         warnings.append(dispersion_warning)
 
-    confidence = _compute_confidence(direct_count, partial_count, candidate_scope)
+    confidence = _compute_confidence(effective_direct_count, effective_partial_count, candidate_scope)
 
     # R7.2L: Strategy sections and evidence list
     strategy_title = _build_strategy_title(analyses)
     strategy_features = _build_strategy_features(analyses)
     strategy_description = _build_strategy_description(analyses)
     strategy_images = _build_strategy_images(analyses)
-    evidence_list = _build_evidence_list(scoped_competitors)
+    evidence_list = _build_evidence_list(effective_competitors)
 
     recommendations = build_recommendations(own_product, analyses)
     raw = {
         "own_product": _public_product(own_product),
         "competitors": [_public_product(p) for p in scoped_competitors],
+        "effective_competitors": [_public_product(p) for p in effective_competitors],
+        "variant_clusters": [
+            {
+                "cluster_id": cluster["cluster_id"],
+                "representative_candidate": _public_product(cluster["representative_candidate"]),
+                "variants_count": cluster["variants_count"],
+                "candidates": [_public_product(p) for p in cluster["candidates"]],
+                "reason": cluster["reason"],
+            }
+            for cluster in variant_clusters
+        ],
+        "effective_direct_count": effective_direct_count,
+        "effective_partial_count": effective_partial_count,
+        "effective_competitor_count": len(effective_competitors),
+        "variants_grouped": variants_grouped,
         "analyses": analyses,
         "confidence": confidence,
         "candidate_scope": candidate_scope,
@@ -782,6 +989,11 @@ def generate_pattern_report(
         "total_competitors": len(scoped_competitors),
         "direct_count": direct_count,
         "partial_count": partial_count,
+        "effective_competitor_count": len(effective_competitors),
+        "effective_direct_count": effective_direct_count,
+        "effective_partial_count": effective_partial_count,
+        "variants_grouped": variants_grouped,
+        "variant_clusters": raw["variant_clusters"],
         "candidate_scope": candidate_scope,
         "price_min": analyses["price"]["min"],
         "price_max": analyses["price"]["max"],
@@ -889,6 +1101,11 @@ def _decode_report_row(row: dict) -> dict:
     row["strategy_description"] = row["raw"].get("strategy_description", {})
     row["strategy_images"] = row["raw"].get("strategy_images", {})
     row["evidence_list"] = row["raw"].get("evidence_list", [])
+    row["effective_competitor_count"] = row["raw"].get("effective_competitor_count", row.get("total_competitors", 0))
+    row["effective_direct_count"] = row["raw"].get("effective_direct_count", row.get("direct_count", 0))
+    row["effective_partial_count"] = row["raw"].get("effective_partial_count", row.get("partial_count", 0))
+    row["variants_grouped"] = row["raw"].get("variants_grouped", 0)
+    row["variant_clusters"] = row["raw"].get("variant_clusters", [])
     return row
 
 
@@ -1029,6 +1246,7 @@ def _public_product(product: dict) -> dict:
         "shop_name": product.get("shop_name"),
         "match_verdict": product.get("match_verdict"),
         "match_relevance_score": product.get("match_relevance_score"),
+        "variants_count": (product.get("_variant_cluster") or {}).get("variants_count", 1),
     }
 
 
@@ -1037,8 +1255,16 @@ def _tokenize(text: str) -> list[str]:
     return [
         token
         for token in tokens
-        if len(token) > 2 and token not in TITLE_STOPWORDS
+        if len(token) > 2 and token not in TITLE_STOPWORDS and not _is_noise_title_token(token)
     ]
+
+
+def _is_noise_title_token(token: str) -> bool:
+    if token in NOISE_TITLE_TERMS:
+        return True
+    if re.search(r"\d", token):
+        return True
+    return False
 
 
 def _has_pattern(normalized_text: str, pattern: str) -> bool:

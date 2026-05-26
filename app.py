@@ -3214,22 +3214,25 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
 
 def _render_pattern_report_preview(report: dict):
     """R7.2L: Render a pattern report preview in the Radar Assistido UI."""
+    from shopee_core.radar_patterns_service import format_brl_markdown
+
     _j = lambda items: "`, `".join(items) if items else ""
     _brl = lambda v: f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if v is not None else "N/A"
+    _brl_md = format_brl_markdown
 
     st.markdown("---")
     st.markdown("##### :bar_chart: Preview do Relatório de Padrões")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Confiança", report.get("confidence", "N/A").upper())
     col2.metric("Concorrentes Usados", report.get("total_competitors", 0))
-    scope_label = "Diretos" if report.get("candidate_scope") == "direct_only" else "Diretos+Parciais"
-    col3.metric("Escopo", scope_label)
+    col3.metric("Concorrentes Efetivos", report.get("effective_competitor_count", report.get("total_competitors", 0)))
+    col4.metric("Variacoes Agrupadas", report.get("variants_grouped", 0))
     _pmin = report.get("price_min")
     _pmax = report.get("price_max")
     if _pmin is not None and _pmax is not None:
-        col4.metric("Faixa de Preço", f"{_brl(_pmin)} — {_brl(_pmax)}")
+        col5.metric("Faixa de Preço", f"{_brl(_pmin)} — {_brl(_pmax)}")
     else:
-        col4.metric("Faixa de Preço", "N/A")
+        col5.metric("Faixa de Preço", "N/A")
 
     if report.get("warnings"):
         with st.expander(":warning: Avisos", expanded=True):
@@ -3290,21 +3293,26 @@ def _render_pattern_report_preview(report: dict):
                 st.markdown(
                     f"- **{e.get('title', 'Sem título')}** — "
                     f"*{verdict_label}* (score: {score}) — "
-                    f"{price_str} — {e.get('marketplace', '')}"
+                    f"{_escape_markdown_currency(price_str)} — {e.get('marketplace', '')}"
                 )
+                if int(e.get("variants_count") or 1) > 1:
+                    st.caption(
+                        f"{e.get('variants_count')} variacoes agrupadas: "
+                        f"{e.get('cluster_reason') or 'titulo/vendedor/preco semelhantes'}"
+                    )
 
     # Price detail
     with st.expander(":moneybag: Detalhes de Preço", expanded=False):
-        st.markdown(f"- **Mínimo:** {_brl(report.get('price_min'))}")
-        st.markdown(f"- **Máximo:** {_brl(report.get('price_max'))}")
-        st.markdown(f"- **Média:** {_brl(report.get('price_avg'))}")
-        st.markdown(f"- **Mediana:** {_brl(report.get('price_median'))}")
+        st.markdown(f"- **Mínimo:** {_brl_md(report.get('price_min'))}")
+        st.markdown(f"- **Máximo:** {_brl_md(report.get('price_max'))}")
+        st.markdown(f"- **Média:** {_brl_md(report.get('price_avg'))}")
+        st.markdown(f"- **Mediana:** {_brl_md(report.get('price_median'))}")
         if _pmin is not None and _pmax is not None:
             p_med = report.get("price_median")
             if p_med:
                 band_low = p_med * 0.85
                 band_high = p_med * 1.15
-                st.markdown(f"- :bar_chart: **Faixa competitiva observada:** {_brl(band_low)} — {_brl(band_high)}")
+                st.markdown(f"- :bar_chart: **Faixa competitiva observada:** {_brl_md(band_low)} — {_brl_md(band_high)}")
                 st.caption("Use esta faixa como referência de mercado, não como preço final automático. A decisão deve considerar margem, qualidade, marca, frete e posicionamento.")
 
 
@@ -3624,7 +3632,15 @@ def render_radar_workflow():
     with auto_col2:
         auto_max_c = st.number_input("Coletas por ciclo:", min_value=1, max_value=30, value=10, key="auto_max_collect")
         auto_max_cycles = st.number_input("Máx. ciclos:", min_value=1, max_value=5, value=3, key="auto_max_cycles")
-        auto_max_total = st.number_input("Máx. candidatos:", min_value=10, max_value=100, value=60, step=5, key="auto_max_total_candidates")
+        auto_max_total = st.number_input(
+            "Máx. candidatos:",
+            min_value=10,
+            max_value=100,
+            value=60,
+            step=5,
+            key="auto_max_total_candidates",
+            help="Limita a descoberta de novos candidatos. Pendentes ja existentes continuam sendo coletados.",
+        )
     with auto_col3:
         auto_scope = st.selectbox("Escopo do relatório:",
                                   options=["direct_only", "direct_plus_partial"],
@@ -3762,6 +3778,8 @@ def render_radar_workflow():
                 "Direct": auto_res.get("direct", clas.get("direct", 0)),
                 "Partial": auto_res.get("partial", clas.get("partial", 0)),
                 "Rejected": auto_res.get("rejected", clas.get("rejected", 0)),
+                "Concorrentes efetivos": conf.get("effective_competitor_count", "N/A"),
+                "Variações agrupadas": conf.get("variants_grouped", 0),
                 "Confianca alvo": auto_res.get("target_confidence", auto_target).upper(),
                 "Confiança": f"{conf.get('level', 'N/A').upper()} ({conf.get('score', 0)} pts)",
             })

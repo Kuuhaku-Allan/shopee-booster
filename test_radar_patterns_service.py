@@ -23,8 +23,11 @@ from shopee_core.radar_patterns_service import (
     analyze_price_patterns,
     analyze_title_terms,
     build_recommendations,
+    cluster_competitor_variants,
+    format_brl_markdown,
     generate_pattern_report,
     get_latest_pattern_report,
+    _build_strategy_features,
 )
 from shopee_core.radar_db import get_connection, init_db
 from shopee_core.radar_relevance_service import classify_candidate
@@ -270,11 +273,19 @@ def test_candidate_scope_direct_plus_partial():
 def test_confidence_medium_with_5_direct():
     """5 direct competitors yields medium confidence."""
     own = _create_product("Mochila Infantil Rosa Escolar", 89.9, source_type="own_product")
-    for i in range(5):
-        p = _create_product(f"Mochila Infantil Rosa Escolar Diferente {i}", 80.0 + i)
+    titles = [
+        "Mochila Infantil Rosa Escolar Princesa Grande",
+        "Mochila Infantil Rosa Escolar Unicornio Reforcada",
+        "Mochila Infantil Rosa Escolar Rodinhas Costas",
+        "Mochila Infantil Rosa Escolar Gatinho Organizadora",
+        "Mochila Infantil Rosa Escolar Sereia Impermeavel",
+    ]
+    for i, title in enumerate(titles):
+        p = _create_product(title, 80.0 + i * 8)
         classify_candidate(own["product_uid"], p["product_uid"])
     report = generate_pattern_report(own["product_uid"])
     assert report["direct_count"] >= 5, f"Got {report['direct_count']} direct, expected >=5"
+    assert report["effective_direct_count"] >= 5
     assert report["confidence"] == "medium"
     return True
 
@@ -282,11 +293,24 @@ def test_confidence_medium_with_5_direct():
 def test_confidence_high_with_10_direct():
     """10 direct competitors yields high confidence."""
     own = _create_product("Mochila Infantil Rosa Escolar", 89.9, source_type="own_product")
-    for i in range(10):
-        p = _create_product(f"Mochila Infantil Rosa Escolar Variante {i}", 80.0 + i)
+    titles = [
+        "Mochila Infantil Rosa Escolar Princesa Grande",
+        "Mochila Infantil Rosa Escolar Unicornio Reforcada",
+        "Mochila Infantil Rosa Escolar Rodinhas Costas",
+        "Mochila Infantil Rosa Escolar Gatinho Organizadora",
+        "Mochila Infantil Rosa Escolar Sereia Impermeavel",
+        "Mochila Infantil Rosa Escolar Floral Lilas",
+        "Mochila Infantil Rosa Escolar Dinossauro Colorida",
+        "Mochila Infantil Rosa Escolar Hello Kitty",
+        "Mochila Infantil Rosa Escolar Bailarina",
+        "Mochila Infantil Rosa Escolar Feminina Premium",
+    ]
+    for i, title in enumerate(titles):
+        p = _create_product(title, 70.0 + i * 9)
         classify_candidate(own["product_uid"], p["product_uid"])
     report = generate_pattern_report(own["product_uid"])
     assert report["direct_count"] >= 10, f"Got {report['direct_count']} direct, expected >=10"
+    assert report["effective_direct_count"] >= 10
     assert report["confidence"] == "high"
     return True
 
@@ -394,6 +418,68 @@ def test_price_has_band_label():
     return True
 
 
+def test_notebook_off_niche_never_recommended():
+    own = _product_row("Mochila Infantil Princesa Rosa Escolar", 89.9, product_uid="own")
+    products = [
+        _product_row("Mochila Escolar Infantil com Notebook", 99.9),
+        _product_row("Mochila Infantil Feminina Notebook Reforcada", 109.9),
+        _product_row("Mochila Princesa Infantil Notebook Grande", 119.9),
+    ]
+    features = analyze_feature_patterns(products, own_product=own)
+    strategy = _build_strategy_features({"features": features})
+
+    assert "notebook" in {row["feature"] for row in features["off_niche_features"]}
+    assert "notebook" not in strategy["recommended"]
+    assert not (set(strategy["recommended"]) & set(strategy["off_niche"]))
+    return True
+
+
+def test_cluster_competitor_variants_counts_duplicate_title_as_one():
+    candidates = [
+        {
+            "product_uid": "a",
+            "url": "https://produto.mercadolivre.com.br/MLB-111-a-_JM",
+            "title": "Mochila Escolar Infantil Menino Menina Gatinho Dinossauro 3d",
+            "shop_name": "Loja Kids",
+            "price": 79.9,
+            "match_verdict": "competitor_direct",
+            "match_relevance_score": 0.82,
+        },
+        {
+            "product_uid": "b",
+            "url": "https://produto.mercadolivre.com.br/MLB-222-b-_JM",
+            "title": "Mochila Escolar Infantil Menino Menina Gatinho Dinossauro 3d",
+            "shop_name": "Loja Kids",
+            "price": 81.0,
+            "match_verdict": "competitor_direct",
+            "match_relevance_score": 0.8,
+        },
+    ]
+    clusters = cluster_competitor_variants(candidates)
+    assert len(clusters) == 1
+    assert clusters[0]["variants_count"] == 2
+    return True
+
+
+def test_low_recurrence_terms_filter_numeric_brands_and_noise():
+    products = [
+        _product_row("Mochila Nabaiji 10L Prova Agua Up4you Marechal", 90),
+        _product_row("Mochila Infantil Escolar Princesa", 80),
+        _product_row("Mochila Infantil Escolar Feminina", 85),
+    ]
+    result = analyze_title_terms(products)
+    terms = {row["term"] for row in result["top_terms"]}
+    for noise in {"10l", "nabaiji", "up4you", "marechal", "agua", "prova"}:
+        assert noise not in terms
+    return True
+
+
+def test_brl_markdown_formatter_preserves_dollar_sign():
+    assert format_brl_markdown(33.65) == r"R\$ 33,65"
+    assert format_brl_markdown(264.1) == r"R\$ 264,10"
+    return True
+
+
 if __name__ == "__main__":
     print("\nTESTE R5 - Analise de Padroes\n")
 
@@ -422,6 +508,10 @@ if __name__ == "__main__":
         ("notebook off-niche", test_notebook_off_niche),
         ("menino menina nao off-niche", test_menino_menina_not_off_niche),
         ("price band label presente", test_price_has_band_label),
+        ("notebook nunca recomendado", test_notebook_off_niche_never_recommended),
+        ("cluster duplica titulo como um", test_cluster_competitor_variants_counts_duplicate_title_as_one),
+        ("termos ruido filtrados", test_low_recurrence_terms_filter_numeric_brands_and_noise),
+        ("BRL markdown preserva cifrao", test_brl_markdown_formatter_preserves_dollar_sign),
     ]
 
     passed = 0

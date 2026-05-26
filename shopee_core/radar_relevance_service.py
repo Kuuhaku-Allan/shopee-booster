@@ -287,6 +287,7 @@ def compare_product_profiles(own_profile: dict, candidate_profile: dict) -> dict
 
     # R7.2G: Aplicar floor para nicho infantil/escolar
     score = _apply_niche_floor(score, own_profile, candidate_profile, reasons)
+    score = _cap_off_niche_score(score, own_profile, candidate_profile, reasons)
 
     verdict = _verdict_for_score(score)
     confidence = _confidence_for(score, verdict, points, penalties, own_profile, candidate_profile)
@@ -395,6 +396,35 @@ def _apply_niche_floor(
             f"Score ajustado para mínimo {floor} (nicho mochila infantil/escolar — sem incompatibilidade detectada)."
         )
         return floor
+    return score
+
+
+def _cap_off_niche_score(
+    score: float,
+    own_profile: dict,
+    candidate_profile: dict,
+    reasons: list[str],
+) -> float:
+    own_type = own_profile.get("product_type")
+    cand_type = candidate_profile.get("product_type")
+    own_audience = set(own_profile.get("audience") or [])
+    own_use_case = set(own_profile.get("use_case") or [])
+    if own_type != "mochila" or cand_type != "mochila":
+        return score
+    if not (("infantil" in own_audience or "feminino" in own_audience) and "escolar" in own_use_case):
+        return score
+
+    off_niche = _off_niche_use_cases(candidate_profile)
+    if not off_niche or _has_child_school_compatibility(candidate_profile):
+        return score
+
+    cap = 0.45 if "natacao" in off_niche else 0.50
+    if score > cap:
+        reasons.append(
+            f"Score capado em {cap:.2f}: uso fora do nicho escolar infantil "
+            f"({', '.join(sorted(off_niche))})."
+        )
+        return cap
     return score
 
 

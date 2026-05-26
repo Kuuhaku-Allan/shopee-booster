@@ -179,8 +179,15 @@ def test_confidence_without_report():
 def test_confidence_after_report():
     """Report with 5 direct yields medium confidence."""
     own = _own_product()
-    for i in range(5):
-        p = _create_product(f"Mochila Infantil Rosa Escolar Variante {i}", 70.0 + i)
+    titles = [
+        "Mochila Infantil Rosa Escolar Princesa Grande",
+        "Mochila Infantil Rosa Escolar Unicornio Reforcada",
+        "Mochila Infantil Rosa Escolar Rodinhas Costas",
+        "Mochila Infantil Rosa Escolar Gatinho Organizadora",
+        "Mochila Infantil Rosa Escolar Sereia Impermeavel",
+    ]
+    for i, title in enumerate(titles):
+        p = _create_product(title, 70.0 + i * 8)
         classify_candidate(own["product_uid"], p["product_uid"])
     report = generate_pattern_report(own["product_uid"])
     conf = calculate_radar_market_confidence(own["product_uid"], report["report_uid"])
@@ -332,6 +339,99 @@ def test_cycle_limit_reached_with_pending_candidates():
     return True
 
 
+def test_cycle_continues_pending_even_when_candidate_cap_already_reached():
+    counts = iter([
+        _cycle_counts(pending=41, total=71, direct=9, partial=19),
+        _cycle_counts(pending=41, total=71, direct=9, partial=19),
+        _cycle_counts(pending=31, total=71, direct=9, partial=19),
+        _cycle_counts(pending=31, total=71, direct=9, partial=19),
+        _cycle_counts(pending=31, total=71, direct=9, partial=19),
+        _cycle_counts(pending=21, total=71, direct=9, partial=19),
+        _cycle_counts(pending=21, total=71, direct=9, partial=19),
+    ])
+
+    def next_counts(_uid):
+        try:
+            return next(counts)
+        except StopIteration:
+            return _cycle_counts(pending=21, total=71, direct=9, partial=19)
+
+    with patch("shopee_core.radar_cdp_service.ensure_radar_chrome_ready", return_value={"ok": True}):
+        with patch("shopee_core.radar_discovery_service.get_product", return_value={"title": "Mochila Infantil Princesa Rosa Escolar"}):
+            with patch("shopee_core.radar_discovery_service._get_auto_cycle_counts", side_effect=next_counts):
+                with patch("shopee_core.radar_discovery_service.discover_marketplace_candidate_urls") as mock_discover:
+                    with patch("shopee_core.radar_discovery_service.ensure_collection_jobs_for_linked_candidates"):
+                        with patch("shopee_core.radar_discovery_service.run_linked_collection_for_product", return_value={
+                            "processed": 10, "succeeded": 10, "failed": 0, "skipped": 0, "errors": [],
+                        }) as mock_collect:
+                            with patch("shopee_core.radar_discovery_service.classify_linked_candidates_for_product", return_value={
+                                "ok": True, "total": 28, "direct": 9, "partial": 19, "rejected": 2,
+                            }):
+                                with patch("shopee_core.radar_discovery_service.generate_pattern_report", return_value={"report_uid": "r1"}):
+                                    with patch("shopee_core.radar_discovery_service.calculate_radar_market_confidence", return_value={
+                                        "level": "medium", "score": 70, "warnings": [],
+                                    }):
+                                        result = run_automatic_radar_cycle(
+                                            "own-1",
+                                            target_confidence="high",
+                                            max_cycles=2,
+                                            max_collect_per_cycle=10,
+                                            max_total_candidates=60,
+                                        )
+
+    assert result["status"] == "limit_reached"
+    assert result["stop_reason"] == "Limite de ciclos atingido (2)."
+    assert result["pending"] == 21
+    assert mock_collect.call_count == 2
+    mock_discover.assert_not_called()
+    return True
+
+
+def test_cycle_limits_discovery_to_remaining_candidate_slots():
+    counts = iter([
+        _cycle_counts(pending=0, total=55),
+        _cycle_counts(pending=5, total=60),
+        _cycle_counts(pending=0, total=60, direct=5),
+        _cycle_counts(pending=0, total=60, direct=5),
+    ])
+
+    def next_counts(_uid):
+        try:
+            return next(counts)
+        except StopIteration:
+            return _cycle_counts(pending=0, total=60, direct=5)
+
+    with patch("shopee_core.radar_cdp_service.ensure_radar_chrome_ready", return_value={"ok": True}):
+        with patch("shopee_core.radar_discovery_service.get_product", return_value={"title": "Mochila Infantil Princesa Rosa Escolar"}):
+            with patch("shopee_core.radar_discovery_service._get_auto_cycle_counts", side_effect=next_counts):
+                with patch("shopee_core.radar_discovery_service.discover_marketplace_candidate_urls", return_value={
+                    "ok": True, "urls_found": 20, "urls_inserted": 5, "urls_existing": 0, "urls_limited": 15,
+                }) as mock_discover:
+                    with patch("shopee_core.radar_discovery_service.ensure_collection_jobs_for_linked_candidates"):
+                        with patch("shopee_core.radar_discovery_service.run_linked_collection_for_product", return_value={
+                            "processed": 5, "succeeded": 5, "failed": 0, "skipped": 0, "errors": [],
+                        }):
+                            with patch("shopee_core.radar_discovery_service.classify_linked_candidates_for_product", return_value={
+                                "ok": True, "total": 5, "direct": 5, "partial": 0, "rejected": 0,
+                            }):
+                                with patch("shopee_core.radar_discovery_service.generate_pattern_report", return_value={"report_uid": "r1"}):
+                                    with patch("shopee_core.radar_discovery_service.calculate_radar_market_confidence", return_value={
+                                        "level": "medium", "score": 68, "warnings": [],
+                                    }):
+                                        result = run_automatic_radar_cycle(
+                                            "own-1",
+                                            target_confidence="high",
+                                            max_cycles=1,
+                                            max_collect_per_cycle=5,
+                                            max_total_candidates=60,
+                                        )
+
+    assert result["status"] == "exhausted"
+    assert mock_discover.call_args.kwargs["max_unique_urls"] == 5
+    assert any("Descoberta limitada" in w for w in result["warnings"])
+    return True
+
+
 def test_confidence_high_blocked_when_pending_candidates_remain():
     report = {
         "report_uid": "r1",
@@ -353,6 +453,83 @@ def test_confidence_high_blocked_when_pending_candidates_remain():
     return True
 
 
+def test_confidence_uses_live_classified_counts_when_report_is_stale():
+    report = {
+        "report_uid": "r1",
+        "direct_count": 0,
+        "partial_count": 0,
+        "created_at": datetime.utcnow().isoformat(),
+        "raw": {"analyses": {"price": {"dispersion_warning": True}}},
+        "evidence_list": ["a", "b", "c"],
+    }
+    with patch("shopee_core.radar_discovery_service._get_auto_cycle_counts", return_value=_cycle_counts(
+        pending=41, total=71, direct=9, partial=19,
+    )):
+        with patch("shopee_core.radar_discovery_service.get_latest_pattern_report", return_value=report):
+            conf = calculate_radar_market_confidence("own-1")
+
+    assert conf["level"] == "medium"
+    assert conf["direct_count"] == 9
+    assert conf["partial_count"] == 19
+    assert any("pendente" in w.lower() for w in conf["warnings"])
+    return True
+
+
+def test_confidence_high_drops_when_effective_direct_count_is_low():
+    report = {
+        "report_uid": "r1",
+        "direct_count": 12,
+        "partial_count": 4,
+        "created_at": datetime.utcnow().isoformat(),
+        "raw": {
+            "effective_direct_count": 4,
+            "effective_partial_count": 2,
+            "effective_competitor_count": 6,
+            "variants_grouped": 10,
+            "analyses": {"price": {}},
+            "strategy_features": {"recommended": ["princesa"], "off_niche": []},
+        },
+        "evidence_list": ["a", "b", "c", "d", "e", "f"],
+    }
+    with patch("shopee_core.radar_discovery_service._get_auto_cycle_counts", return_value=_cycle_counts(
+        pending=0, total=16, direct=12, partial=4,
+    )):
+        with patch("shopee_core.radar_discovery_service.get_latest_pattern_report", return_value=report):
+            conf = calculate_radar_market_confidence("own-1")
+
+    assert conf["level"] != "high"
+    assert conf["effective_direct_count"] == 4
+    assert conf["variants_grouped"] == 10
+    return True
+
+
+def test_confidence_high_drops_when_off_niche_is_recommended():
+    report = {
+        "report_uid": "r1",
+        "direct_count": 8,
+        "partial_count": 8,
+        "created_at": datetime.utcnow().isoformat(),
+        "raw": {
+            "effective_direct_count": 8,
+            "effective_partial_count": 8,
+            "effective_competitor_count": 16,
+            "analyses": {"price": {}},
+            "strategy_features": {"recommended": ["notebook", "princesa"], "off_niche": ["notebook"]},
+        },
+        "evidence_list": ["a"] * 10,
+    }
+    with patch("shopee_core.radar_discovery_service._get_auto_cycle_counts", return_value=_cycle_counts(
+        pending=0, total=16, direct=8, partial=8,
+    )):
+        with patch("shopee_core.radar_discovery_service.get_latest_pattern_report", return_value=report):
+            conf = calculate_radar_market_confidence("own-1")
+
+    assert conf["level"] != "high"
+    assert "notebook" in conf["off_niche_recommended"]
+    assert any("off-niche" in w.lower() for w in conf["warnings"])
+    return True
+
+
 if __name__ == "__main__":
     print("\nTESTE R7.3 - Radar Discovery Service\n")
 
@@ -371,7 +548,12 @@ if __name__ == "__main__":
         ("ciclo para sem produto", test_cycle_stops_on_missing_product),
         ("R7.3D: ciclo continua ate high", test_cycle_continues_collecting_until_target_high),
         ("R7.3D: ciclo para por limite com pendentes", test_cycle_limit_reached_with_pending_candidates),
+        ("R7.3D: limite de candidatos nao bloqueia pendentes", test_cycle_continues_pending_even_when_candidate_cap_already_reached),
+        ("R7.3D: descoberta respeita slots restantes", test_cycle_limits_discovery_to_remaining_candidate_slots),
         ("R7.3D: high bloqueado com pendentes", test_confidence_high_blocked_when_pending_candidates_remain),
+        ("R7.3D: confianca usa contadores vivos", test_confidence_uses_live_classified_counts_when_report_is_stale),
+        ("R7.3E: high cai com efetivos baixos", test_confidence_high_drops_when_effective_direct_count_is_low),
+        ("R7.3E: high cai com off-niche recomendado", test_confidence_high_drops_when_off_niche_is_recommended),
     ]
 
     passed = 0

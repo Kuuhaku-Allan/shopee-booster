@@ -22,8 +22,14 @@ def main():
     marketplace = sys.argv[2]
     max_queries = int(sys.argv[3])
     max_urls_per_query = int(sys.argv[4])
-    browser_mode = sys.argv[5]
-    cdp_url = sys.argv[6] if sys.argv[6] != "None" else None
+    if len(sys.argv) >= 8:
+        max_unique_urls = int(sys.argv[5]) if sys.argv[5] != "None" else None
+        browser_mode = sys.argv[6]
+        cdp_url = sys.argv[7] if sys.argv[7] != "None" else None
+    else:
+        max_unique_urls = None
+        browser_mode = sys.argv[5]
+        cdp_url = sys.argv[6] if sys.argv[6] != "None" else None
 
     try:
         res = _discover_marketplace_candidate_urls_direct(
@@ -31,6 +37,7 @@ def main():
             marketplace=marketplace,
             max_queries=max_queries,
             max_urls_per_query=max_urls_per_query,
+            max_unique_urls=max_unique_urls,
             browser_mode=browser_mode,
             cdp_url=cdp_url or "http://127.0.0.1:9222",
         )

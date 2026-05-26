@@ -95,7 +95,7 @@ def test_r73d_mochila_infantil_vs_natacao_nabaiji_not_direct():
         candidate_price=69.9,
     )
     assert result["verdict"] != "competitor_direct"
-    assert result["score"] < 0.65
+    assert result["score"] <= 0.45
     assert any("natacao" in reason.lower() for reason in result["reasons"])
     return True
 

@@ -219,6 +219,7 @@ def _discover_marketplace_candidate_urls_direct(
     marketplace: str = "mercadolivre",
     max_queries: int = 6,
     max_urls_per_query: int = 10,
+    max_unique_urls: int | None = None,
     browser_mode: str = "cdp",
     cdp_url: str = "http://127.0.0.1:9222",
     progress_callback=None,
@@ -296,17 +297,31 @@ def _discover_marketplace_candidate_urls_direct(
             seen_urls.add(url)
             unique_urls.append(url)
 
+    urls_discovered_unique = len(unique_urls)
+    urls_limited = 0
+    if max_unique_urls is not None:
+        max_unique_urls = max(0, int(max_unique_urls))
+        if len(unique_urls) > max_unique_urls:
+            urls_limited = len(unique_urls) - max_unique_urls
+            unique_urls = unique_urls[:max_unique_urls]
+
     # Insert via existing workflow function
     urls_text = "\n".join(unique_urls)
-    insert_result = add_competitor_urls_for_product(own_product_uid, urls_text)
+    insert_result = add_competitor_urls_for_product(own_product_uid, urls_text) if unique_urls else {
+        "created": 0,
+        "duplicates": 0,
+        "invalid": 0,
+    }
 
-    if not unique_urls:
+    if not unique_urls and not all_norm_urls:
         return {
             "ok": False,
             "error": "; ".join(errors) if errors else "Nenhuma URL de produto encontrada nas buscas do Mercado Livre.",
             "queries_used": len(queries),
             "urls_found": len(all_norm_urls),
             "urls_unique": len(unique_urls),
+            "urls_discovered_unique": urls_discovered_unique,
+            "urls_limited": urls_limited,
             "urls_inserted": 0,
             "urls_existing": 0,
             "invalid": 0,
@@ -318,6 +333,8 @@ def _discover_marketplace_candidate_urls_direct(
         "queries_used": len(queries),
         "urls_found": len(all_norm_urls),
         "urls_unique": len(unique_urls),
+        "urls_discovered_unique": urls_discovered_unique,
+        "urls_limited": urls_limited,
         "urls_inserted": insert_result.get("created", 0),
         "urls_existing": insert_result.get("duplicates", 0),
         "invalid": insert_result.get("invalid", 0),
@@ -330,6 +347,7 @@ def discover_marketplace_candidate_urls(
     marketplace: str = "mercadolivre",
     max_queries: int = 6,
     max_urls_per_query: int = 10,
+    max_unique_urls: int | None = None,
     browser_mode: str = "cdp",
     cdp_url: str = "http://127.0.0.1:9222",
     progress_callback=None,
@@ -348,6 +366,7 @@ def discover_marketplace_candidate_urls(
             marketplace=marketplace,
             max_queries=max_queries,
             max_urls_per_query=max_urls_per_query,
+            max_unique_urls=max_unique_urls,
             browser_mode=browser_mode,
             cdp_url=cdp_url,
             progress_callback=progress_callback,
@@ -362,6 +381,7 @@ def discover_marketplace_candidate_urls(
         marketplace,
         str(max_queries),
         str(max_urls_per_query),
+        str(max_unique_urls) if max_unique_urls is not None else "None",
         browser_mode,
         cdp_url if cdp_url is not None else "None",
     ]
@@ -484,9 +504,54 @@ def calculate_radar_market_confidence(
             "warnings": warnings,
         }
 
-    direct_count = report.get("direct_count", 0)
-    partial_count = report.get("partial_count", 0)
+    raw_report = report.get("raw") or {}
+    direct_count = max(int(report.get("direct_count", 0) or 0), counts["direct"])
+    partial_count = max(int(report.get("partial_count", 0) or 0), counts["partial"])
+    effective_direct_value = report.get("effective_direct_count")
+    if effective_direct_value is None:
+        effective_direct_value = raw_report.get("effective_direct_count")
+    if effective_direct_value is None:
+        effective_direct_value = direct_count
+    effective_direct_count = int(effective_direct_value)
+
+    effective_partial_value = report.get("effective_partial_count")
+    if effective_partial_value is None:
+        effective_partial_value = raw_report.get("effective_partial_count")
+    if effective_partial_value is None:
+        effective_partial_value = partial_count
+    effective_partial_count = int(effective_partial_value)
+
+    effective_total_value = report.get("effective_competitor_count")
+    if effective_total_value is None:
+        effective_total_value = raw_report.get("effective_competitor_count")
+    if effective_total_value is None:
+        effective_total_value = effective_direct_count + effective_partial_count
+    effective_competitor_count = int(effective_total_value)
+
+    variants_grouped_value = report.get("variants_grouped")
+    if variants_grouped_value is None:
+        variants_grouped_value = raw_report.get("variants_grouped")
+    variants_grouped = int(variants_grouped_value or 0)
     evidence_list = report.get("evidence_list", []) or report.get("raw", {}).get("evidence_list", [])
+    strategy_features = report.get("strategy_features") or raw_report.get("strategy_features") or {}
+    recommended_features = set(strategy_features.get("recommended") or [])
+    off_niche_features = set(strategy_features.get("off_niche") or [])
+    quality_gate_off_niche = {
+        "notebook",
+        "natacao",
+        "natação",
+        "praia",
+        "esportiva",
+        "executivo",
+        "corporativo",
+        "urbano adulto",
+        "trekking",
+        "hidratacao",
+        "hidratação",
+    }
+    off_niche_recommended = sorted(
+        recommended_features & (off_niche_features | quality_gate_off_niche)
+    )
 
     pending_count = counts["pending"]
     failed_count = counts["failed"]
@@ -505,8 +570,8 @@ def calculate_radar_market_confidence(
 
     # Build score
     score = 0
-    score += min(direct_count * 10, 50)
-    score += min(partial_count * 3, 15)
+    score += min(effective_direct_count * 10, 50)
+    score += min(effective_partial_count * 3, 15)
     score = max(0, score - failed_count * 5)
     score += 5 if freshness_days < 1 else (2 if freshness_days < 7 else 0)
     score += min(len(evidence_list), 10)
@@ -520,6 +585,10 @@ def calculate_radar_market_confidence(
         score = max(0, score - 15)
     if pending_count:
         score = max(0, score - min(15, pending_count * 2))
+    if variants_grouped:
+        score = max(0, score - min(10, variants_grouped * 2))
+    if off_niche_recommended:
+        score = max(0, score - 20)
 
     # Determine level
     level = "insufficient"
@@ -531,8 +600,10 @@ def calculate_radar_market_confidence(
         level = "low"
 
     warnings = []
-    if direct_count < 8:
-        warnings.append(f"Poucos concorrentes diretos ({direct_count}); ideal > 8.")
+    if effective_direct_count < 8:
+        warnings.append(f"Poucos concorrentes diretos efetivos ({effective_direct_count}); ideal > 8.")
+    if variants_grouped:
+        warnings.append(f"{variants_grouped} variacao(oes) agrupada(s); contagem bruta nao foi usada como base de HIGH.")
     if pending_count:
         warnings.append(f"Ainda ha {pending_count} candidato(s) pendente(s) que podem alterar a base.")
     if failed_count > 3:
@@ -545,23 +616,39 @@ def calculate_radar_market_confidence(
         warnings.append("Relatorio desatualizado (mais de 7 dias).")
     if price_analysis.get("dispersion_warning"):
         warnings.append("Alta dispersao de precos.")
+    if off_niche_recommended:
+        warnings.append(
+            "Features off-niche apareceram como recomendadas: "
+            + ", ".join(off_niche_recommended)
+            + "."
+        )
 
-    high_has_enough_competitors = direct_count >= 8 or (direct_count >= 5 and partial_count >= 8)
+    high_has_enough_competitors = effective_direct_count >= 8 or (
+        effective_direct_count >= 5 and effective_partial_count >= 8
+    )
     if level == "high" and not high_has_enough_competitors:
         level = "medium"
-        warnings.append("Confiança alta bloqueada: base ainda tem poucos diretos/parciais fortes.")
+        warnings.append("Confiança alta bloqueada: base efetiva ainda tem poucos diretos/parciais fortes.")
     if level == "high" and pending_count:
         level = "medium"
         warnings.append("Confiança alta bloqueada: ainda ha candidatos pendentes.")
     if level == "high" and (title_coverage < 0.9 or price_coverage < 0.8):
         level = "medium"
         warnings.append("Confiança alta bloqueada: cobertura de titulo/preco insuficiente.")
+    if level == "high" and off_niche_recommended:
+        level = "medium"
+        warnings.append("Confiança alta bloqueada: feature off-niche foi recomendada.")
 
     return {
         "level": level,
         "score": score,
         "direct_count": direct_count,
         "partial_count": partial_count,
+        "effective_direct_count": effective_direct_count,
+        "effective_partial_count": effective_partial_count,
+        "effective_competitor_count": effective_competitor_count,
+        "variants_grouped": variants_grouped,
+        "off_niche_recommended": off_niche_recommended,
         "pending_count": pending_count,
         "failed_count": failed_count,
         "title_coverage": title_coverage,
@@ -701,6 +788,10 @@ def run_automatic_radar_cycle(
             except Exception:
                 pass
 
+    def _warn_once(message: str):
+        if message not in result["warnings"]:
+            result["warnings"].append(message)
+
     _progress("chrome_check", "Procurando Chrome/Edge no sistema...")
     from shopee_core.radar_cdp_service import ensure_radar_chrome_ready
     chrome = ensure_radar_chrome_ready(cdp_url)
@@ -744,10 +835,11 @@ def run_automatic_radar_cycle(
         }
 
         counts_before = _get_auto_cycle_counts(own_product_uid)
+        discovery_slots_left = max(0, max_total_candidates - counts_before["total_candidates"])
         should_discover = (
             discover_new_urls
             and cycle == 1
-            and counts_before["total_candidates"] < max_total_candidates
+            and discovery_slots_left > 0
         )
 
         if should_discover:
@@ -757,6 +849,7 @@ def run_automatic_radar_cycle(
                 marketplace=marketplace,
                 max_queries=max_queries,
                 max_urls_per_query=max_urls_per_query,
+                max_unique_urls=discovery_slots_left,
                 browser_mode=browser_mode,
                 cdp_url=cdp_url,
                 progress_callback=progress_callback,
@@ -778,19 +871,31 @@ def run_automatic_radar_cycle(
                     result["step"] = "discover"
                     result["errors"].append(discovery.get("error", "Falha na descoberta de URLs."))
                     return result
-                result["warnings"].append(
+                _warn_once(
                     "Descoberta de URLs falhou, mas havia candidatos existentes; continuando com a fila atual."
                 )
+            if int(discovery.get("urls_limited") or 0) > 0:
+                _warn_once(
+                    f"Descoberta limitada a {discovery_slots_left} novo(s) candidato(s); "
+                    f"{int(discovery.get('urls_limited') or 0)} URL(s) ficaram fora do limite configurado."
+                )
         elif not discover_new_urls:
-            result["warnings"].append("Descoberta pulada; continuando a partir dos candidatos pendentes existentes.")
+            _warn_once("Descoberta pulada; continuando a partir dos candidatos pendentes existentes.")
+        elif cycle == 1 and discovery_slots_left <= 0:
+            _warn_once(
+                f"Limite de novos candidatos ja atingido "
+                f"({counts_before['total_candidates']}/{max_total_candidates}); "
+                "continuando a coleta dos pendentes existentes."
+            )
 
         _progress("jobs", "Preparando coletas...")
         ensure_collection_jobs_for_linked_candidates(own_product_uid)
         counts_ready = _get_auto_cycle_counts(own_product_uid)
 
         if counts_ready["total_candidates"] >= max_total_candidates:
-            result["warnings"].append(
-                f"Limite total de candidatos atingido ({counts_ready['total_candidates']}/{max_total_candidates})."
+            _warn_once(
+                f"Limite de descoberta de novos candidatos atingido "
+                f"({counts_ready['total_candidates']}/{max_total_candidates}); pendentes existentes seguem em coleta."
             )
 
         if counts_ready["pending"] > 0:
@@ -861,11 +966,6 @@ def run_automatic_radar_cycle(
             stop_reason = "Nao ha candidatos pendentes para continuar coletando."
             break
 
-        if counts_after["total_candidates"] >= max_total_candidates:
-            result["status"] = "limit_reached"
-            stop_reason = f"Limite total de candidatos atingido ({max_total_candidates})."
-            break
-
         if cycle >= max_cycles:
             result["status"] = "limit_reached"
             stop_reason = f"Limite de ciclos atingido ({max_cycles})."
@@ -894,9 +994,10 @@ def run_automatic_radar_cycle(
         "Ainda existem candidatos pendentes." if result["pending"] else "Ciclo encerrado."
     )
     if result["pending"] and result["status"] != "success":
-        result["warnings"].append(
+        _warn_once(
             f"Ainda existem {result['pending']} candidato(s) pendente(s); a confianca pode mudar apos novas coletas."
         )
     result["step"] = result["status"]
+    _progress("done", result["stop_reason"])
 
     return result
