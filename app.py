@@ -1501,7 +1501,12 @@ def _render_canvas_area(full_context: str, segmento: str):
                 idx = len(layers) - 1 - i
                 col_vis, col_name, col_move, col_up, col_down, col_del = st.columns([1, 3, 1, 1, 1, 1])
                 with col_vis:
-                    vis = st.checkbox("", value=layer["visible"], key=f"vis_{idx}_{len(layers)}")
+                    vis = st.checkbox(
+                        f"Mostrar camada {idx + 1}",
+                        value=layer["visible"],
+                        key=f"vis_{idx}_{len(layers)}",
+                        label_visibility="collapsed",
+                    )
                     if vis != layer["visible"]: st.session_state.chat_canvas_layers[idx]["visible"] = vis; st.rerun()
                 with col_name:
                     color = "#FF4B4B" if moving_idx == idx else "white"
