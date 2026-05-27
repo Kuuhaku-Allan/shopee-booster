@@ -161,11 +161,6 @@ _DEFAULTS = {
     "optimization_reviews":    None,
     "optimization_result":     None,
     "auto_fetch_opt_reviews":  False,
-    # R6.3: Radar Assistido na Auditoria
-    "use_radar_in_audit":      False,
-    "selected_radar_product_uid": None,
-    "optimization_used_radar": False,
-    "optimization_radar_uid":  None,
     # Chatbot
     "chat_history":            [],
     "chatbot_active":          False,
@@ -507,506 +502,162 @@ def render_auditoria():
             else:
                 st.warning("⚠️ Sem avaliações — a IA usará só os dados de concorrentes")
 
-        # ── R6.3: Radar Assistido de Concorrentes (opcional) ──────
-        with st.expander("📡 Radar Assistido de Concorrentes", expanded=False):
-            st.caption("Use o Radar Assistido para enriquecer a auditoria com análise profunda de concorrentes diretos.")
-            
-            # R6.3A: Botão de diagnóstico
-            if st.button("🔍 Diagnosticar Radar", key="diagnose_radar_btn"):
-                try:
-                    from shopee_core.radar_db import DB_PATH, get_connection
-                    from shopee_core.radar_ui_service import list_radar_products_for_audit
-                    
-                    st.info(f"**Caminho do radar.db:** `{DB_PATH}`")
-                    
-                    if DB_PATH.exists():
-                        st.success(f"✅ Banco existe ({DB_PATH.stat().st_size / (1024*1024):.2f} MB)")
-                        
-                        conn = get_connection()
-                        cursor = conn.cursor()
-                        
-                        cursor.execute("SELECT COUNT(*) FROM radar_products")
-                        total_products = cursor.fetchone()[0]
-                        
-                        cursor.execute("SELECT COUNT(*) FROM radar_pattern_reports")
-                        total_reports = cursor.fetchone()[0]
-                        
-                        cursor.execute("SELECT COUNT(*) FROM radar_products WHERE source_type = 'own_product'")
-                        own_products = cursor.fetchone()[0]
-                        
-                        conn.close()
-                        
-                        st.info(f"**Total de produtos:** {total_products}")
-                        st.info(f"**Total de relatórios:** {total_reports}")
-                        st.info(f"**Produtos próprios:** {own_products}")
-                        
-                        products = list_radar_products_for_audit(limit=100)
-                        usable = [p for p in products if p["can_use"]]
-                        
-                        st.info(f"**Produtos listáveis:** {len(products)}")
-                        st.info(f"**Produtos usáveis (can_use=True):** {len(usable)}")
-                        
-                        # Verificar UID específico
-                        test_uid = "2777bd10-5e4f-40ff-b302-81d23f8834d9"
-                        found = any(p["product_uid"] == test_uid for p in products)
-                        if found:
-                            st.success(f"✅ UID {test_uid[:8]}... encontrado")
-                        else:
-                            st.warning(f"⚠️ UID {test_uid[:8]}... NÃO encontrado")
-                    else:
-                        st.error(f"❌ Banco não existe em: {DB_PATH}")
-                
-                except Exception as e:
-                    st.error(f"❌ Erro no diagnóstico: {str(e)}")
-            
-            # Checkbox para ativar Radar
-            use_radar = st.checkbox(
-                "Usar Radar Assistido nesta auditoria",
-                value=st.session_state.get("use_radar_in_audit", False),
-                key="use_radar_checkbox",
-                help="O Radar analisa concorrentes diretos e fornece insights baseados em padrões de mercado."
-            )
-            st.session_state.use_radar_in_audit = use_radar
-            
-            if use_radar:
-                # Importar helper do Radar
-                try:
-                    from shopee_core.radar_ui_service import (
-                        list_radar_products_for_audit,
-                        format_radar_product_label,
-                        get_radar_preview_for_ui,
-                    )
-                    
-                    # Listar produtos disponíveis
-                    radar_products = list_radar_products_for_audit(limit=100)
-                    
-                    if not radar_products:
-                        st.warning(
-                            "⚠️ Nenhum relatório do Radar disponível ainda. "
-                            "Execute o Radar Assistido antes ou continue a auditoria sem Radar."
-                        )
-                        
-                        # R6.3A: Fallback manual - permitir informar UID diretamente
-                        st.markdown("---")
-                        st.caption("**Alternativa:** Informar UID do produto Radar manualmente")
-                        manual_uid = st.text_input(
-                            "UID do produto Radar:",
-                            placeholder="2777bd10-5e4f-40ff-b302-81d23f8834d9",
-                            key="manual_radar_uid",
-                            help="Cole o UID de um produto do Radar para testar o preview"
-                        )
-                        
-                        if manual_uid and len(manual_uid) > 10:
-                            st.session_state.selected_radar_product_uid = manual_uid.strip()
-                            
-                            # Tentar mostrar preview
-                            preview = get_radar_preview_for_ui(manual_uid.strip())
-                            
-                            if preview["ok"]:
-                                # R6.3D: usar format_brl para garantir R$ XX,XX
-                                from shopee_core.audit_output_formatter import format_brl as _fmt_brl
-                                st.success(f"✅ Radar disponível — Confiança: **{preview['confidence']}** — {preview['direct_count']} concorrentes diretos")
-                                
-                                col_p1, col_p2 = st.columns(2)
-                                with col_p1:
-                                    st.markdown(f"**Faixa de preço:**")
-                                    st.caption(_escape_markdown_currency(f"{_fmt_brl(preview['price_min'])} - {_fmt_brl(preview['price_max'])} (média: {_fmt_brl(preview['price_avg'])})"))  # noqa
-                                    
-                                    if preview["strong_terms"]:
-                                        st.markdown(f"**Termos fortes:**")
-                                        st.caption(", ".join(preview["strong_terms"][:5]))
-                                
-                                with col_p2:
-                                    if preview["recommended_features"]:
-                                        st.markdown(f"**Features recomendadas:**")
-                                        st.caption(", ".join(preview["recommended_features"][:5]))
-                                    
-                                    if preview["off_niche_features"]:
-                                        st.markdown(f"**⚠️ Features a evitar (off-niche):**")
-                                        st.caption(", ".join(preview["off_niche_features"]))
-                            else:
-                                st.error(f"❌ Erro: {preview.get('error', 'UID inválido')}")
-                                st.session_state.selected_radar_product_uid = None
-                        else:
-                            st.session_state.selected_radar_product_uid = None
-                    else:
-                        # Filtrar apenas produtos que podem ser usados
-                        usable_products = [p for p in radar_products if p["can_use"]]
-                        
-                        if not usable_products:
-                            st.warning(
-                                "⚠️ Nenhum produto do Radar tem base suficiente de concorrentes (mínimo: 3). "
-                                "Continue a auditoria sem Radar ou execute mais coletas no Radar Assistido."
-                            )
-                            
-                            # R6.3A: Fallback manual mesmo quando há produtos mas nenhum usável
-                            st.markdown("---")
-                            st.caption("**Alternativa:** Informar UID do produto Radar manualmente")
-                            manual_uid = st.text_input(
-                                "UID do produto Radar:",
-                                placeholder="2777bd10-5e4f-40ff-b302-81d23f8834d9",
-                                key="manual_radar_uid_2",
-                                help="Cole o UID de um produto do Radar para testar o preview"
-                            )
-                            
-                            if manual_uid and len(manual_uid) > 10:
-                                st.session_state.selected_radar_product_uid = manual_uid.strip()
-                                
-                                preview = get_radar_preview_for_ui(manual_uid.strip())
-                                
-                                if preview["ok"]:
-                                    # R6.3D: usar format_brl para garantir R$ XX,XX
-                                    from shopee_core.audit_output_formatter import format_brl as _fmt_brl2
-                                    st.success(f"✅ Radar disponível — Confiança: **{preview['confidence']}** — {preview['direct_count']} concorrentes diretos")
-                                    
-                                    col_p1, col_p2 = st.columns(2)
-                                    with col_p1:
-                                        st.markdown(f"**Faixa de preço:**")
-                                        st.caption(_escape_markdown_currency(f"{_fmt_brl2(preview['price_min'])} - {_fmt_brl2(preview['price_max'])} (média: {_fmt_brl2(preview['price_avg'])})"))  # noqa
-                                        
-                                        if preview["strong_terms"]:
-                                            st.markdown(f"**Termos fortes:**")
-                                            st.caption(", ".join(preview["strong_terms"][:5]))
-                                    
-                                    with col_p2:
-                                        if preview["recommended_features"]:
-                                            st.markdown(f"**Features recomendadas:**")
-                                            st.caption(", ".join(preview["recommended_features"][:5]))
-                                        
-                                        if preview["off_niche_features"]:
-                                            st.markdown(f"**⚠️ Features a evitar (off-niche):**")
-                                            st.caption(", ".join(preview["off_niche_features"]))
-                                else:
-                                    st.error(f"❌ Erro: {preview.get('error', 'UID inválido')}")
-                                    st.session_state.selected_radar_product_uid = None
-                            else:
-                                st.session_state.selected_radar_product_uid = None
-                        else:
-                            # Selectbox com produtos disponíveis
-                            product_options = {
-                                format_radar_product_label(p): p["product_uid"]
-                                for p in usable_products
-                            }
-                            
-                            selected_label = st.selectbox(
-                                "Selecione o produto do Radar:",
-                                options=list(product_options.keys()),
-                                key="radar_product_select",
-                            )
-                            
-                            selected_uid = product_options[selected_label]
-                            st.session_state.selected_radar_product_uid = selected_uid
-                            
-                            # Mostrar preview do Radar
-                            preview = get_radar_preview_for_ui(selected_uid)
-                            
-                            if preview["ok"]:
-                                # R6.3D: usar format_brl para garantir R$ XX,XX
-                                from shopee_core.audit_output_formatter import format_brl as _fmt_brl3
-                                st.success(f"✅ Radar disponível — Confiança: **{preview['confidence']}** — {preview['direct_count']} concorrentes diretos")
-                                
-                                # Preview compacto
-                                col_p1, col_p2 = st.columns(2)
-                                with col_p1:
-                                    st.markdown(f"**Faixa de preço:**")
-                                    st.caption(_escape_markdown_currency(f"{_fmt_brl3(preview['price_min'])} - {_fmt_brl3(preview['price_max'])} (média: {_fmt_brl3(preview['price_avg'])})"))  # noqa
-                                    
-                                    if preview["strong_terms"]:
-                                        st.markdown(f"**Termos fortes:**")
-                                        st.caption(", ".join(preview["strong_terms"][:5]))
-                                
-                                with col_p2:
-                                    if preview["recommended_features"]:
-                                        st.markdown(f"**Features recomendadas:**")
-                                        st.caption(", ".join(preview["recommended_features"][:5]))
-                                    
-                                    if preview["off_niche_features"]:
-                                        st.markdown(f"**⚠️ Features a evitar (off-niche):**")
-                                        st.caption(", ".join(preview["off_niche_features"]))
-                                
-                                if preview["warnings"]:
-                                    for warning in preview["warnings"][:2]:
-                                        st.warning(f"⚠️ {warning}")
-                            else:
-                                st.error(f"❌ Erro ao carregar preview: {preview['error']}")
-                                st.session_state.selected_radar_product_uid = None
-                
-                except Exception as e:
-                    st.error(f"❌ Erro ao carregar Radar: {str(e)}")
-                    st.caption("A auditoria continuará sem o Radar Assistido.")
-                    st.session_state.selected_radar_product_uid = None
+        # ── R7.5: Base de Mercado automática ──────────────────
+        st.markdown("##### 📊 Base de Mercado")
+
+        market_source_info = st.empty()
+        radar_cache_key = f"_radar_status_{prod.get('itemid', '')}"
+
+        # Auto-detect radar if we have a product
+        if prod and prod.get("name"):
+            import os as _os
+            try:
+                from shopee_core.audit_market_source_service import get_radar_market_status_for_audit
+                _rs = get_radar_market_status_for_audit(prod)
+                st.session_state[radar_cache_key] = _rs
+            except Exception:
+                _rs = {"has_radar": False, "confidence_level": None, "warnings": []}
+                st.session_state[radar_cache_key] = _rs
+
+            _rs = st.session_state.get(radar_cache_key, {})
+            if _rs.get("has_radar"):
+                _cl = _rs.get("confidence_level", "N/A")
+                _dc = _rs.get("direct_count", 0)
+                _icon = "🟢" if _cl == "high" else "🟡" if _cl == "medium" else "🟠"
+                market_source_info.success(
+                    f"{_icon} **Radar disponível:** confiança **{_cl}**, "
+                    f"**{_dc}** concorrentes diretos. "
+                    "A fonte será escolhida automaticamente."
+                )
+                if _rs.get("warnings"):
+                    for _w in _rs["warnings"]:
+                        st.caption(f"⚠️ {_w}")
             else:
-                st.session_state.selected_radar_product_uid = None
-        
-        # R6.3B: Modo debug para testar sem gastar quota Gemini
-        debug_radar_mode = st.checkbox(
-            "🐛 Debug: mostrar contexto do Radar sem chamar IA",
-            value=False,
-            key="debug_radar_mode",
-            help="Mostra o contexto que seria enviado ao Gemini sem fazer a chamada real"
-        )
+                market_source_info.info(
+                    "ℹ️ Este produto não possui base Radar. "
+                    "A auditoria usará dados de scraping em tempo real."
+                )
+                if df_comp is None or df_comp.empty:
+                    st.caption("⚠️ Nenhum scraping disponível ainda. Use a aba '📡 Radar de Concorrentes' abaixo para buscar.")
+
+        # Debug behind env var
+        import os as _os2
+        debug_radar_mode = False
+        if _os2.environ.get("SHOPEE_DEV_DEBUG_RADAR", "").strip().lower() in ("true", "1", "yes"):
+            debug_radar_mode = st.checkbox(
+                "🐛 Debug: mostrar contexto do Radar sem chamar IA",
+                value=False,
+                key="debug_radar_mode",
+                help="Mostra o contexto que seria enviado ao Gemini sem fazer a chamada real"
+            )
 
         if st.button("🤖 Gerar Otimização Completa", type="primary"):
-            # R6.3B: Logs claros do fluxo
-            use_radar = st.session_state.get("use_radar_in_audit", False)
-            radar_uid = st.session_state.get("selected_radar_product_uid") if use_radar else None
-            
-            print(f"[R6.3B] Radar checkbox = {use_radar}")
-            print(f"[R6.3B] selected_radar_product_uid = {radar_uid}")
-            
-            if radar_uid:
-                try:
-                    from shopee_core.radar_audit_context_service import get_radar_audit_context_status
-                    status = get_radar_audit_context_status(radar_uid)
-                    print(f"[R6.3B] radar can_use = {status.get('can_use')}")
-                    print(f"[R6.3B] radar confidence = {status.get('confidence')}")
-                    print(f"[R6.3B] radar direct_count = {status.get('direct_count')}")
-                except Exception as e:
-                    print(f"[R6.3B] Erro ao verificar status do Radar: {e}")
-            
-            # R6.3B: Modo debug - mostrar contexto sem chamar IA
-            if debug_radar_mode and radar_uid:
-                st.info("🐛 **Modo Debug Ativado** - Mostrando contexto do Radar sem chamar IA")
-                
-                try:
-                    from shopee_core.radar_audit_context_service import build_radar_audit_context
-                    
-                    print(f"[R6.3B] Construindo contexto do Radar para UID: {radar_uid}")
-                    context = build_radar_audit_context(radar_uid)
-                    
-                    if context.get("ok"):
-                        st.success("✅ Contexto do Radar construído com sucesso")
-                        
-                        # Mostrar resumo do contexto
-                        market = context.get("market_summary", {})
-                        title_strat = context.get("title_strategy", {})
-                        feature_strat = context.get("feature_strategy", {})
-                        warnings = context.get("warnings", [])
-                        from shopee_core.audit_output_formatter import format_brl as _fmt_debug_brl
-                        
-                        st.markdown("**📊 Resumo do Mercado:**")
-                        st.json({
-                            "confidence": market.get("confidence"),
-                            "competitor_count": market.get("competitor_count"),
-                            "price_min": _fmt_debug_brl(market.get("price_min")),
-                            "price_avg": _fmt_debug_brl(market.get("price_avg")),
-                            "price_max": _fmt_debug_brl(market.get("price_max")),
-                        })
-                        
-                        st.markdown("**🏷️ Estratégia de Título:**")
-                        st.json({
-                            "strong_terms": title_strat.get("strong_terms", [])[:5],
-                            "weak_terms": title_strat.get("weak_terms", [])[:3],
-                        })
-                        
-                        st.markdown("**✨ Estratégia de Features:**")
-                        st.json({
-                            "recommended_features": feature_strat.get("recommended_features", [])[:5],
-                            "off_niche_features": feature_strat.get("off_niche_features", []),
-                        })
-                        
-                        if warnings:
-                            st.markdown("**⚠️ Warnings:**")
-                            for w in warnings:
-                                st.warning(w)
-                        
-                        # Mostrar contexto completo em expander
-                        with st.expander("📄 Ver contexto completo (JSON)"):
-                            st.json(context)
-                        
-                        # Verificar se "notebook" está em off_niche
-                        off_niche = feature_strat.get("off_niche_features", [])
-                        if "notebook" in off_niche:
-                            st.success("✅ 'notebook' está corretamente marcado como off-niche/evitar")
-                        else:
-                            st.warning("⚠️ 'notebook' NÃO está em off-niche (verificar)")
-                        
-                        print(f"[R6.3B] Contexto do Radar construído: {len(str(context))} caracteres")
-                        print(f"[R6.3B] Off-niche features: {off_niche}")
-                    else:
-                        st.error(f"❌ Erro ao construir contexto: {context.get('error')}")
-                        print(f"[R6.3B] Erro ao construir contexto: {context.get('error')}")
-                
-                except Exception as e:
-                    st.error(f"❌ Erro no modo debug: {str(e)}")
-                    print(f"[R6.3B] Exceção no modo debug: {e}")
-                    import traceback
-                    traceback.print_exc()
-                
-                # Não chamar IA no modo debug
-                st.info("ℹ️ Modo debug ativo - IA não foi chamada. Desmarque o debug para gerar otimização real.")
-            
-            else:
-                # Fluxo normal - chamar IA
-                print(f"[R6.3B] Enviando radar_own_product_uid para auditoria: {radar_uid}")
-                
-                # R6.3C: Construir contexto do Radar com guardrails reforçados
-                radar_context_block = None
-                if radar_uid:
-                    try:
-                        from shopee_core.radar_audit_context_service import build_radar_audit_context
-                        
-                        print(f"[R6.3C] Construindo contexto do Radar com guardrails...")
-                        context = build_radar_audit_context(radar_uid)
-                        
-                        if context.get("ok"):
-                            # Formatar contexto para o prompt com regras rígidas
-                            market = context.get("market_summary", {})
-                            title_strat = context.get("title_strategy", {})
-                            feature_strat = context.get("feature_strategy", {})
-                            desc_strat = context.get("description_strategy", {})
-                            warnings = context.get("warnings", [])
-                            
-                            # R6.3C: Formatar preços corretamente (R$ XX,XX)
-                            def format_brl(value):
-                                if value is None:
-                                    return "N/A"
-                                return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                            
-                            # R6.3C: Separar features recomendadas e off-niche visualmente
-                            recommended = ', '.join(feature_strat.get('recommended_features', [])[:10])
-                            off_niche = ', '.join(feature_strat.get('off_niche_features', []))
-                            
-                            radar_context_block = f"""
-═══════════════════════════════════════════════════════════════════
-📡 CONTEXTO DO RADAR ASSISTIDO DE CONCORRENTES
-═══════════════════════════════════════════════════════════════════
+            # R7.5: Auto source selection
+            radar_context_block = None
+            market_source_result = {"source": "scraping", "radar_used": False, "scraping_used": True, "reason": "", "warnings": []}
 
-RESUMO DO MERCADO:
-- Confiança da análise: {market.get('confidence', 'N/A')}
-- Concorrentes diretos analisados: {market.get('competitor_count', 0)}
-- Faixa de preço: {format_brl(market.get('price_min'))} - {format_brl(market.get('price_max'))}
-- Preço médio: {format_brl(market.get('price_avg'))}
-- Preço mediano: {format_brl(market.get('price_median'))}
+            try:
+                from shopee_core.audit_market_source_service import choose_audit_market_source
 
-ESTRATÉGIA DE TÍTULO:
-- Termos fortes (USAR): {', '.join(title_strat.get('strong_terms', [])[:10])}
-- Termos fracos (evitar): {', '.join(title_strat.get('weak_terms', [])[:5])}
+                _rs_cache = st.session_state.get(radar_cache_key, {})
+                market_source_result = choose_audit_market_source(
+                    prod, df_comp, _rs_cache if _rs_cache.get("has_radar") else None
+                )
 
-ESTRATÉGIA DE FEATURES:
-✅ FEATURES RECOMENDADAS (usar como diferenciais):
-   {recommended}
+                if market_source_result.get("radar_used"):
+                    radar_uid = _rs_cache.get("product_uid")
+                    if radar_uid:
+                        try:
+                            from shopee_core.radar_audit_context_service import (
+                                build_radar_audit_context, build_radar_prompt_block,
+                            )
+                            ctx = build_radar_audit_context(radar_uid)
+                            if ctx.get("ok"):
+                                radar_context_block = build_radar_prompt_block(ctx)
+                        except Exception as e:
+                            print(f"[R7.5] Erro ao construir contexto Radar: {e}")
 
-❌ FEATURES OFF-NICHE / A EVITAR (NÃO usar como diferenciais):
-   {off_niche}
+                # Debug mode
+                if debug_radar_mode:
+                    st.info("🐛 **Modo Debug**")
+                    st.json(market_source_result)
+                    if radar_context_block:
+                        with st.expander("📄 Contexto do Radar que seria enviado"):
+                            st.text(radar_context_block)
+                    st.info("ℹ️ Modo debug ativo - IA não foi chamada.")
+                    st.session_state.optimization_result = None
+                else:
+                    with st.spinner("IA analisando concorrentes + avaliações e gerando listing..."):
+                        st.session_state.optimization_result = generate_full_optimization(
+                            prod, df_comp, reviews_opt or [], segmento,
+                            radar_context_block=radar_context_block
+                        )
+                        st.session_state["_market_source_result"] = market_source_result
 
-ESTRATÉGIA DE DESCRIÇÃO:
-- Argumentos comerciais: {', '.join(desc_strat.get('commercial_arguments', [])[:5])}
-
-WARNINGS:
-{chr(10).join(f'⚠️ {w}' for w in warnings) if warnings else '(nenhum)'}
-
-═══════════════════════════════════════════════════════════════════
-⚠️ REGRAS CRÍTICAS - LEIA COM ATENÇÃO:
-═══════════════════════════════════════════════════════════════════
-
-1. FEATURES OFF-NICHE ({off_niche}):
-   - NÃO podem ser usadas como argumento de venda
-   - NÃO podem ser descritas como foco do mercado
-   - NÃO podem justificar preço, título, descrição ou tags
-   - NÃO podem ser mencionadas como diferenciais ou vantagens
-   - Se mencionar, mencione APENAS como algo que o produto NÃO é para esse uso
-   - NUNCA escreva frases como "o mercado foca em [feature off-niche]"
-
-2. ESTRATÉGIA CORRETA:
-   - Base sua análise nas FEATURES RECOMENDADAS: {recommended}
-   - Use os TERMOS FORTES: {', '.join(title_strat.get('strong_terms', [])[:5])}
-   - Justifique preço com base no nicho correto (features recomendadas)
-   - Destaque apenas as features recomendadas como diferenciais
-
-3. CONFIANÇA DA ANÁLISE:
-   - Confiança atual: {market.get('confidence', 'N/A')}
-   - Se confiança for "medium" ou "low", use linguagem cautelosa:
-     * "os dados sugerem", "a amostra indica", "vale testar"
-     * Evite conclusões absolutas como "o mercado definitivamente..."
-
-4. FORMATAÇÃO DE MOEDA:
-   - SEMPRE use o formato: R$ XX,XX (exemplo: R$ 139,90)
-   - NUNCA use: R XX,XX ou R$ XX.XX
-
-═══════════════════════════════════════════════════════════════════
-"""
-                            print(f"[R6.3C] Contexto do Radar construído: {len(radar_context_block)} caracteres")
-                            print(f"[R6.3C] Features recomendadas: {feature_strat.get('recommended_features', [])[:5]}")
-                            print(f"[R6.3C] Features off-niche: {feature_strat.get('off_niche_features', [])}")
-                        else:
-                            print(f"[R6.3C] Erro ao construir contexto: {context.get('error')}")
-                    
-                    except Exception as e:
-                        print(f"[R6.3C] Exceção ao construir contexto do Radar: {e}")
-                        import traceback
-                        traceback.print_exc()
-                
-                with st.spinner("IA analisando concorrentes + avaliações e gerando listing..."):
-                    st.session_state.optimization_result = generate_full_optimization(
-                        prod, df_comp, reviews_opt or [], segmento,
-                        radar_context_block=radar_context_block  # R6.3B: Passar contexto do Radar
-                    )
-                    
-                    print(f"[R6.3B] Otimização gerada: {len(st.session_state.optimization_result)} caracteres")
-                    
-                    # R6.3: Se Radar foi usado, armazenar informação
-                    if radar_uid and radar_context_block:
-                        st.session_state.optimization_used_radar = True
-                        st.session_state.optimization_radar_uid = radar_uid
-                        print(f"[R6.3B] Radar marcado como usado no resultado")
-                    else:
-                        st.session_state.optimization_used_radar = False
-                        print(f"[R6.3B] Radar NÃO usado no resultado")
+            except Exception as e:
+                st.error(f"Erro na seleção automática de fonte: {e}")
+                print(f"[R7.5] Erro: {e}")
+                import traceback; traceback.print_exc()
+                # Fallback: gerar sem Radar
+                if not debug_radar_mode:
+                    with st.spinner("Gerando otimização (fallback sem Radar)..."):
+                        st.session_state.optimization_result = generate_full_optimization(
+                            prod, df_comp, reviews_opt or [], segmento
+                        )
 
         if st.session_state.optimization_result:
             st.markdown("---")
-            
-            # R6.3B: Mostrar badge se Radar foi usado
-            if st.session_state.get("optimization_used_radar"):
-                st.success("📡 **Radar Assistido usado nesta auditoria**")
-                
-                # Mostrar resumo detalhado do Radar usado
-                radar_uid = st.session_state.get("optimization_radar_uid")
-                if radar_uid:
-                    try:
-                        from shopee_core.radar_ui_service import get_radar_preview_for_ui
-                        preview = get_radar_preview_for_ui(radar_uid)
-                        
-                        if preview["ok"]:
-                            # R6.3D: Usar format_brl para garantir R$ XX,XX
+
+            # R7.5: Badge da base usada
+            market_source_result = st.session_state.get("_market_source_result", {})
+            source = market_source_result.get("source", "")
+            reason = market_source_result.get("reason", "")
+            radar_used = market_source_result.get("radar_used", False)
+
+            if source == "radar" or source == "hybrid":
+                st.success(f"📡 **Base usada: Radar** — {reason}")
+                _rs_cache = st.session_state.get(radar_cache_key, {})
+                _radar_uid = _rs_cache.get("product_uid")
+                if _radar_uid:
+                    with st.expander("📊 Ver detalhes da base usada"):
+                        try:
+                            from shopee_core.radar_ui_service import get_radar_preview_for_ui
                             from shopee_core.audit_output_formatter import format_brl
-                            # Linha de resumo
-                            st.caption(_escape_markdown_currency(
-                                f"Confiança: **{preview['confidence']}** | "
-                                f"{preview['direct_count']} concorrentes diretos | "
-                                f"Preço médio: {format_brl(preview['price_avg'])}"
-                            ))
-                            
-                            # Detalhes em expander
-                            with st.expander("📊 Ver detalhes do Radar usado"):
+                            preview = get_radar_preview_for_ui(_radar_uid)
+                            if preview["ok"]:
                                 col_r1, col_r2 = st.columns(2)
-                                
                                 with col_r1:
-                                    st.markdown("**Faixa de preço:**")
-                                    st.caption(_escape_markdown_currency(f"{format_brl(preview['price_min'])} - {format_brl(preview['price_max'])}"))
-                                    
+                                    st.markdown(f"**Confiança:** {preview['confidence']}")
+                                    st.markdown(f"**Concorrentes diretos:** {preview['direct_count']}")
+                                    st.markdown(f"**Faixa de preço:** " + _escape_markdown_currency(
+                                        f"{format_brl(preview['price_min'])} - {format_brl(preview['price_max'])}"
+                                    ))
+                                    st.markdown(f"**Preço médio:** {format_brl(preview['price_avg'])}")
                                     if preview["strong_terms"]:
-                                        st.markdown("**Termos fortes:**")
-                                        st.caption(", ".join(preview["strong_terms"][:5]))
-                                
+                                        st.markdown(f"**Termos fortes:** " + ", ".join(preview["strong_terms"][:5]))
                                 with col_r2:
                                     if preview["recommended_features"]:
-                                        st.markdown("**Features recomendadas:**")
+                                        st.markdown(f"**Features recomendadas:**")
                                         st.caption(", ".join(preview["recommended_features"][:5]))
-                                    
                                     if preview["off_niche_features"]:
-                                        st.markdown("**⚠️ Features evitadas (off-niche):**")
+                                        st.markdown(f"**⚠️ Features evitadas (off-niche):**")
                                         st.caption(", ".join(preview["off_niche_features"]))
-                    except Exception as e:
-                        print(f"[R6.3B] Erro ao mostrar resumo do Radar: {e}")
+                            if market_source_result.get("warnings"):
+                                for _w in market_source_result["warnings"]:
+                                    st.warning(f"⚠️ {_w}")
+                        except Exception as e:
+                            st.caption(f"Detalhes indisponíveis: {e}")
+            elif source == "scraping":
+                st.info(f"🌐 **Base usada: Scraping em tempo real** — {reason}")
+                if market_source_result.get("warnings"):
+                    for _w in market_source_result["warnings"]:
+                        st.warning(f"⚠️ {_w}")
+            elif source == "none":
+                st.warning(f"⚠️ **Nenhuma base de mercado disponível.** {reason}")
             else:
-                # R6.3B: Indicar discretamente que Radar não foi usado
-                if st.session_state.get("use_radar_in_audit"):
-                    st.info("ℹ️ Radar não foi usado nesta auditoria (pode ter ocorrido erro ou contexto insuficiente)")
-            
+                st.caption(f"Base usada: {source} — {reason}")
+
             st.markdown("### 📈 Listing Otimizado pela IA")
-            # R6.3D: Limpar output antes de exibir (moeda + notas internas)
             from shopee_core.audit_output_formatter import clean_audit_output
             _clean_result = clean_audit_output(st.session_state.optimization_result)
             st.markdown(_clean_result)
