@@ -20,8 +20,11 @@ API_URL = f"https://api.github.com/repos/{GITHUB_USUARIO}/{GITHUB_REPO}/releases
 def _versao_maior(v_nova: str, v_atual: str) -> bool:
     """Retorna True se v_nova > v_atual (ex: '1.2.0' > '1.1.5')."""
     try:
-        nova  = tuple(int(x) for x in v_nova.strip("v").split("."))
-        atual = tuple(int(x) for x in v_atual.strip("v").split("."))
+        nova_parts = [int(x) for x in v_nova.strip("v").split(".")]
+        atual_parts = [int(x) for x in v_atual.strip("v").split(".")]
+        size = max(len(nova_parts), len(atual_parts), 3)
+        nova = tuple(nova_parts + [0] * (size - len(nova_parts)))
+        atual = tuple(atual_parts + [0] * (size - len(atual_parts)))
         return nova > atual
     except Exception:
         return False

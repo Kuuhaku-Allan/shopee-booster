@@ -170,6 +170,16 @@ def test_run_chatbot_turn_preserves_market_metadata():
     assert result["warnings"] == ["Radar vencido."]
 
 
+def test_price_competitor_question_is_not_media_edit_intent():
+    intents = backend_core.detect_chat_intents(
+        "Meu preco esta bom comparado aos concorrentes?",
+        has_media=False,
+    )
+
+    assert not any(intent in {"creative_edit", "recolor", "analyze_image"} for intent in intents)
+    assert intents == ["general"]
+
+
 def test_model_fallback_has_three_current_text_models():
     assert backend_core.MODELOS_TEXTO == [
         "gemini-3.1-flash-lite",

@@ -302,11 +302,15 @@ def playwright_intercept(script: str) -> dict | list | None:
         stderr_text = (result.stderr or "").strip()
         stdout_text = (result.stdout or "").strip()
 
-        if stderr_text:
+        dev_debug = os.getenv("SHOPEE_DEV_DEBUG_RADAR", "").strip().lower() in {
+            "1", "true", "yes", "y", "sim", "on"
+        }
+        if dev_debug and stderr_text:
             st.caption(f"🔍 Debug stderr: {stderr_text[:2000]}")
         if result.returncode != 0:
-            st.caption(f"🔍 Debug returncode: {result.returncode}")
-            st.caption(f"🔍 Debug stdout: {stdout_text[:500]}")
+            if dev_debug:
+                st.caption(f"🔍 Debug returncode: {result.returncode}")
+                st.caption(f"🔍 Debug stdout: {stdout_text[:500]}")
         if result.returncode == 0 and stdout_text:
             return json.loads(stdout_text)
         return None
@@ -314,7 +318,11 @@ def playwright_intercept(script: str) -> dict | list | None:
         st.warning("⏱️ Timeout — Playwright demorou mais de 150s")
         return None
     except Exception as e:
-        st.caption(f"🔍 Debug exception: {e}")
+        dev_debug = os.getenv("SHOPEE_DEV_DEBUG_RADAR", "").strip().lower() in {
+            "1", "true", "yes", "y", "sim", "on"
+        }
+        if dev_debug:
+            st.caption(f"🔍 Debug exception: {e}")
         return None
 
 
@@ -1267,13 +1275,13 @@ def detect_chat_intents(user_message: str, has_media: bool) -> list:
     is_creative = any(w in msg_normalized for w in [
         "badge", "etiqueta", "selos", "texto", "escrit", "escreve",
         "iluminaç", "luz", "brilh", "sombra", "contrast", "saturação",
-        "cor", "trocar", "mudar", "mude a", "verde", "azul", "preto", "rosa",
+        "trocar", "mudar", "mude a", "verde", "azul", "preto", "rosa",
         "amarelo", "vermelho", "laranja", "roxo", "branco", "cinza", "marrom",
         "filtro", "efeito",
         "detal", "ampli", "zoom", "mostra",
         "prova", "resistente", "imperme", "material", "tecido",
         "profissional", "montag", "composição",
-    ])
+    ]) or bool(re.search(r"\bcores?\b", msg_normalized))
 
     # ── Ordem natural de encadeamento ────────────────────────
     # upscale → remove_bg → generate_scene → recolor → analyze → creative_edit

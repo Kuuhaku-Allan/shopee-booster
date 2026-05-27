@@ -224,3 +224,46 @@ def test_current_fails_absent_radar_returns_none(monkeypatch):
     assert result["source"] == "none"
     assert not result["ok"]
     assert any("radar" in warning.lower() for warning in result["warnings"])
+
+
+def test_keyword_cycle_infers_radar_product_for_fallback(monkeypatch):
+    monkeypatch.setenv("SHOPEE_SENTINEL_USE_RADAR", "1")
+    empty_status = {
+        "has_radar": False,
+        "confidence_level": "insufficient",
+        "effective_competitor_count": 0,
+        "is_fresh": False,
+        "warnings": ["Produto sem UID Radar."],
+    }
+
+    with (
+        patch(
+            "shopee_core.audit_market_source_service.get_radar_market_status_for_audit",
+            side_effect=[empty_status, _radar_status(count=8)],
+        ),
+        patch(
+            "shopee_core.radar_ui_service.list_radar_products_for_audit",
+            return_value=[
+                {
+                    "product_uid": "own-radar",
+                    "title": "Mochila Infantil Princesa Rosa Escolar Feminina Grande",
+                    "confidence": "high",
+                    "can_use": True,
+                }
+            ],
+        ),
+        patch(
+            "shopee_core.sentinel_competitor_source_service.get_radar_competitors_for_sentinel",
+            return_value=_radar_result(count=8),
+        ),
+    ):
+        result = choose_sentinel_competitor_source(
+            {"keyword": "mochilas"},
+            current_competitors=[],
+            radar_status=None,
+            limit=10,
+        )
+
+    assert result["source"] == "radar"
+    assert result["radar_used"]
+    assert result["radar_status"].get("sentinel_inferred_from_keyword") is True

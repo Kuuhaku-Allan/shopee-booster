@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.hooks import copy_metadata
 
-datas = [('app.py', '.'), ('backend_core.py', '.'), ('ui_theme.py', '.'), ('updater.py', '.'), ('release_meta.py', '.'), ('version.txt', '.'), ('shopee_core', 'shopee_core'), ('assets', 'assets'), ('models', 'models'), ('C:\\Users\\Defal\\AppData\\Local\\ms-playwright', 'pw-browsers')]
+datas = [('app.py', '.'), ('backend_core.py', '.'), ('ui_theme.py', '.'), ('updater.py', '.'), ('release_meta.py', '.'), ('version.txt', '.'), ('shopee_core', 'shopee_core'), ('scripts\\radar_discover_worker.py', 'scripts'), ('scripts\\radar_collect_linked_worker.py', 'scripts'), ('assets', 'assets'), ('models', 'models'), ('C:\\Users\\Defal\\AppData\\Local\\ms-playwright', 'pw-browsers')]
 binaries = []
 hiddenimports = ['PIL.ImageEnhance', 'PIL.ImageFilter', 'PIL.ImageDraw', 'google.genai', 'onnxruntime', 'PIL._tkinter_finder', 'pystray._win32', 'nest_asyncio']
 datas += copy_metadata('pymatting')

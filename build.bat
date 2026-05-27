@@ -44,6 +44,8 @@ pyinstaller ^
     --add-data "release_meta.py;." ^
     --add-data "version.txt;." ^
     --add-data "shopee_core;shopee_core" ^
+    --add-data "scripts\radar_discover_worker.py;scripts" ^
+    --add-data "scripts\radar_collect_linked_worker.py;scripts" ^
     --add-data "assets;assets" ^
     --add-data "models;models" ^
     --add-data "%LOCALAPPDATA%\ms-playwright;pw-browsers" ^
@@ -95,7 +97,9 @@ if %errorlevel% == 0 (
         echo  Aviso: Falha ao criar install_browsers.exe
         echo  O app ainda funcionara, mas precisara dos browsers instalados manualmente.
     )
+    exit /b 0
 ) else (
     echo.
     echo  ERRO no build. Veja a saida acima.
+    exit /b 1
 )

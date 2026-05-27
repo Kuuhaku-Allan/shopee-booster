@@ -656,7 +656,7 @@ def render_auditoria():
             st.markdown("### 📈 Listing Otimizado pela IA")
             from shopee_core.audit_output_formatter import clean_audit_output
             _clean_result = clean_audit_output(st.session_state.optimization_result)
-            st.markdown(_clean_result)
+            st.markdown(_escape_markdown_currency(_clean_result))
             salvar_ou_baixar(
                 "Baixar otimização (.txt)",
                 data=_clean_result,
@@ -702,7 +702,7 @@ def render_auditoria():
                 st.session_state.df_competitors = df
             else:
                 st.session_state.df_competitors = None
-                st.error("Nenhum resultado. Verifique os logs de debug acima.")
+                st.error("Nenhum resultado retornado pela busca em tempo real. Use o Radar como fallback ou tente novamente mais tarde.")
 
         df = st.session_state.df_competitors
         if df is not None and not df.empty:
@@ -1723,7 +1723,7 @@ def render_chatbot():
                                     st.image(aprev, width=350)
                         st.write(turn["user"])
                     with st.chat_message("assistant"):
-                        st.write(turn["assistant"])
+                        st.markdown(_escape_markdown_currency(turn["assistant"]))
                         if turn.get("market_context_used"):
                             source_label = "Radar" if turn.get("market_context_source") == "radar" else turn.get("market_context_source", "Radar")
                             confidence_label = turn.get("radar_confidence")
@@ -2617,7 +2617,20 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
                     for kw in keywords:
                         with st.spinner(f"🔍 Buscando concorrentes para '{kw}'... (30-60s)"):
                             try:
-                                resultados = fetch_competitors_intercept(kw)
+                                resultados_raw = fetch_competitors_intercept(kw)
+                                try:
+                                    from shopee_core.sentinel_service import select_sentinel_competitors
+
+                                    source_choice = select_sentinel_competitors(
+                                        {"name": kw, "title": kw, "keyword": kw},
+                                        current_competitors=resultados_raw,
+                                        limit=10,
+                                    )
+                                    resultados = source_choice.get("competitors") or []
+                                    if source_choice.get("radar_used"):
+                                        st.caption("Base de concorrentes: Radar")
+                                except Exception:
+                                    resultados = resultados_raw
                                 if resultados:
                                     sentinela_db.processar_mudancas_e_alertar(kw, resultados, telegram)
                                     resultados_total += len(resultados)

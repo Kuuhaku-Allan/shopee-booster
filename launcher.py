@@ -32,7 +32,29 @@ os.environ["ORT_LOGGING_LEVEL"] = "3"
 os.environ["ONNXRUNTIME_PROVIDERS"] = "CPUExecutionProvider"
 
 # ── Configurações ─────────────────────────────────────────────
-PORTA = 8501
+def _porta_bindavel(porta: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", porta))
+        return True
+    except OSError:
+        return False
+
+
+def _escolher_porta() -> int:
+    env_port = os.getenv("SHOPEEBOOSTER_PORT", "").strip()
+    candidatos = []
+    if env_port.isdigit():
+        candidatos.append(int(env_port))
+    candidatos.extend([8501, 8597])
+    candidatos.extend(range(8600, 8700))
+    for porta in candidatos:
+        if 1 <= porta <= 65535 and _porta_bindavel(porta):
+            return porta
+    return 8597
+
+
+PORTA = _escolher_porta()
 URL_APP = f"http://localhost:{PORTA}"
 TITULO_JANELA = f"Shopee Booster v{VERSAO_ATUAL}"
 
@@ -700,7 +722,27 @@ def sentinela_heartbeat():
 
             for kw in keywords:
                 try:
-                    resultados = _fetch_competitors_headless(kw)
+                    resultados_raw = _fetch_competitors_headless(kw)
+                    try:
+                        from shopee_core.sentinel_service import select_sentinel_competitors
+
+                        source_choice = select_sentinel_competitors(
+                            {"name": kw, "title": kw, "keyword": kw},
+                            current_competitors=resultados_raw,
+                            limit=10,
+                        )
+                        resultados = source_choice.get("competitors") or []
+                        _sentinela_log(
+                            f"[fonte] '{kw}' -> {source_choice.get('source')} | "
+                            f"radar={source_choice.get('radar_used')} | "
+                            f"{source_choice.get('reason')}"
+                        )
+                    except Exception as source_exc:
+                        resultados = resultados_raw
+                        _sentinela_log(
+                            f"[fonte] Falha ao avaliar Radar para '{kw}': {source_exc}. "
+                            "Mantendo fonte atual."
+                        )
                     if resultados:
                         processar_mudancas_e_alertar(kw, resultados, telegram)
                         _sentinela_log(f"OK '{kw}': {len(resultados)} resultados processados.")
@@ -734,6 +776,7 @@ def main():
     _sentinela_log(f"[Main] Iniciando Shopee Booster v{VERSAO_ATUAL}")
     _sentinela_log(f"[Main] RUNTIME_DIR={RUNTIME_DIR}")
     _sentinela_log(f"[Main] frozen={getattr(sys, 'frozen', False)}")
+    _sentinela_log(f"[Main] PORTA={PORTA}")
 
     # 0. Verificar se o Chromium do Playwright está instalado
     chromium_ok = garantir_chromium()

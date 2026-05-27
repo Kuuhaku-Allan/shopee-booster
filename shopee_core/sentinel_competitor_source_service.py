@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import unicodedata
 from typing import Any
 
 log = logging.getLogger("sentinel_competitor_source")
@@ -92,6 +94,7 @@ def _normalize_one_for_sentinel(row: dict, ranking: int, keyword: str = "") -> d
     return {
         "ranking": ranking,
         "titulo": str(title).strip(),
+        "nome": str(title).strip(),
         "preco": float(price),
         "loja": str(seller or ""),
         "url": str(url).strip(),
@@ -268,14 +271,111 @@ def _empty_radar_status(warnings: list[str] | None = None) -> dict:
     }
 
 
+def _sentinel_match_tokens(text: str) -> set[str]:
+    normalized = unicodedata.normalize("NFKD", str(text or ""))
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    tokens = set()
+    for token in re.findall(r"[a-z0-9]+", ascii_text):
+        if len(token) < 3:
+            continue
+        tokens.add(token)
+        if len(token) > 4 and token.endswith("s"):
+            tokens.add(token[:-1])
+    return tokens
+
+
+def _product_match_text(product: dict) -> str:
+    values = [
+        product.get("name"),
+        product.get("title"),
+        product.get("keyword"),
+        product.get("query"),
+    ]
+    keywords = product.get("keywords")
+    if isinstance(keywords, (list, tuple, set)):
+        values.extend(str(item) for item in keywords)
+    elif keywords:
+        values.append(str(keywords))
+    return " ".join(str(value or "") for value in values)
+
+
+def _infer_radar_status_from_keyword(product: dict) -> dict:
+    """Best-effort fallback for Sentinela keyword cycles that lack product_uid."""
+    query_text = _product_match_text(product)
+    query_tokens = _sentinel_match_tokens(query_text)
+    if not query_tokens:
+        return _empty_radar_status(["Keyword sem termos suficientes para buscar Radar."])
+
+    try:
+        from shopee_core.radar_ui_service import list_radar_products_for_audit
+    except Exception as exc:
+        return _empty_radar_status([f"Banco do Radar indisponivel: {exc}"])
+
+    best_product = None
+    best_score = 0.0
+    for radar_product in list_radar_products_for_audit(limit=200):
+        title = radar_product.get("title") or ""
+        title_tokens = _sentinel_match_tokens(title)
+        if not title_tokens:
+            continue
+        overlap = len(query_tokens & title_tokens)
+        if overlap <= 0:
+            continue
+        score = overlap / max(len(query_tokens), 1)
+        if radar_product.get("can_use"):
+            score += 0.1
+        confidence = str(radar_product.get("confidence") or "").lower()
+        if confidence == "high":
+            score += 0.05
+        elif confidence == "medium":
+            score += 0.02
+        if score > best_score:
+            best_score = score
+            best_product = radar_product
+
+    if not best_product or best_score < 0.25:
+        return _empty_radar_status([
+            f"Nenhum produto Radar corresponde a keyword da Sentinela (melhor score: {best_score:.2f})."
+        ])
+
+    try:
+        from shopee_core.audit_market_source_service import get_radar_market_status_for_audit
+
+        status = get_radar_market_status_for_audit({
+            "name": best_product.get("title") or "",
+            "title": best_product.get("title") or "",
+        })
+    except Exception as exc:
+        return _empty_radar_status([f"Falha ao inferir produto Radar para Sentinela: {exc}"])
+
+    if status.get("has_radar"):
+        warnings = status.get("warnings") or []
+        warnings.append(
+            "Produto Radar inferido pela keyword da Sentinela; confirme se a base corresponde ao nicho monitorado."
+        )
+        status["warnings"] = _unique_warnings(warnings)
+        status["sentinel_inferred_from_keyword"] = True
+    return status
+
+
 def _load_radar_status(product: dict) -> dict:
     try:
         from shopee_core.audit_market_source_service import get_radar_market_status_for_audit
 
-        return get_radar_market_status_for_audit(product or {})
+        status = get_radar_market_status_for_audit(product or {})
     except Exception as exc:
         log.warning("[R7.7] Falha ao obter status Radar para Sentinela: %s", exc)
-        return _empty_radar_status([f"Falha ao obter status Radar: {exc}"])
+        status = _empty_radar_status([f"Falha ao obter status Radar: {exc}"])
+
+    if status.get("has_radar"):
+        return status
+
+    inferred_status = _infer_radar_status_from_keyword(product or {})
+    if inferred_status.get("has_radar"):
+        inferred_warnings = (status.get("warnings") or []) + (inferred_status.get("warnings") or [])
+        inferred_status["warnings"] = _unique_warnings(inferred_warnings)
+        return inferred_status
+    return status
 
 
 def _source_result(
