@@ -1719,6 +1719,13 @@ def render_chatbot():
                         st.write(turn["user"])
                     with st.chat_message("assistant"):
                         st.write(turn["assistant"])
+                        if turn.get("market_context_used"):
+                            source_label = "Radar" if turn.get("market_context_source") == "radar" else turn.get("market_context_source", "Radar")
+                            confidence_label = turn.get("radar_confidence")
+                            suffix = f" | Confianca: {str(confidence_label).upper()}" if confidence_label else ""
+                            st.caption(f"Base usada: {source_label}{suffix}")
+                        for warning in (turn.get("warnings") or [])[:2]:
+                            st.caption(f"Aviso: {warning}")
                         # Imagens inline na bolha de resposta
                         if turn.get("result_images"):
                             n_imgs = len(turn["result_images"])
@@ -2194,6 +2201,10 @@ def _send_message(
         "attachment_previews": list(att_previews),
         "result_images":      list(result["images"]),
         "result_captions":    list(result["captions"]),
+        "market_context_used": result.get("market_context_used", False),
+        "market_context_source": result.get("market_context_source", "none"),
+        "radar_confidence":   result.get("radar_confidence"),
+        "warnings":           list(result.get("warnings") or []),
     })
 
     # Empurra imagens para o painel de preview

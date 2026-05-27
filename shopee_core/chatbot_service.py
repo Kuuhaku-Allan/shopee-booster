@@ -64,6 +64,11 @@ def run_chatbot_turn(
         "images": result.get("images", []),
         "captions": result.get("captions", []),
         "post_actions": result.get("post_actions", []),
+        "market_context_used": result.get("market_context_used", False),
+        "market_context_source": result.get("market_context_source", "none"),
+        "radar_confidence": result.get("radar_confidence"),
+        "radar_report_uid": result.get("radar_report_uid"),
+        "warnings": result.get("warnings", []),
     }
 
 

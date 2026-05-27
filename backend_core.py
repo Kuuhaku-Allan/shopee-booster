@@ -112,13 +112,18 @@ MODELOS_VISION = ["gemini-2.5-flash"]
 
 # Modelos para tarefas só de TEXTO — priorizando os de maior cota diária
 MODELOS_TEXTO = [
-    "gemini-3.1-flash-lite-preview",  # 500 RPD — principal
+    "gemini-3.1-flash-lite",  # modelo estavel principal
     "gemini-2.5-flash-lite",          # 20 RPD — fallback
     "gemini-2.5-flash",               # 20 RPD — último recurso
 ]
 
 
 # ══════════════════════════════════════════════════════════════════
+def _supports_thinking_config(model: str) -> bool:
+    """True for Gemini families where the API supports thinking_config."""
+    return "3.1" in (model or "") or "2.5" in (model or "")
+
+
 # HELPER DE FALLBACK ROBUSTO PARA MODELOS GEMINI (U8)
 # ══════════════════════════════════════════════════════════════════
 
@@ -167,7 +172,7 @@ def generate_text_with_model_fallback(
         configs_to_try = []
         
         # Modelos 3.1 e 2.5 suportam thinking_config
-        if "3.1" in model or "2.5" in model:
+        if _supports_thinking_config(model):
             configs_to_try.append({"thinking_config": {"thinking_budget": 0}})
         
         # Sempre tenta sem config como fallback
@@ -871,7 +876,7 @@ def chat_with_gemini(user_message: str, history: list, catalog_context: str) -> 
     _client = get_client()
     for m in MODELOS_TEXTO:
         try:
-            config = {"thinking_config": {"thinking_budget": 0}} if "preview" in m or "flash" in m else {}
+            config = {"thinking_config": {"thinking_budget": 0}} if _supports_thinking_config(m) else {}
             response = _client.models.generate_content(
                 model=m,
                 contents=[prompt],
@@ -906,7 +911,7 @@ def analyze_reviews_with_gemini(reviews, segmento):
     ultimo_erro = ""
     for m in MODELOS_TEXTO:
         try:
-            config = {"thinking_config": {"thinking_budget": 0}} if "3.1" in m or "2.5" in m else {}
+            config = {"thinking_config": {"thinking_budget": 0}} if _supports_thinking_config(m) else {}
             response = get_client().models.generate_content(
                 model=m,
                 contents=[prompt],
@@ -2426,9 +2431,50 @@ def process_chat_turn(
         attachment_types = ["image"]
         has_media = True
 
-    intents   = detect_chat_intents(user_message, has_media)
+    intents   = detect_chat_intents(user_message, has_media) or ["general"]
 
-    result = {"text": "", "images": [], "intent": intents[0], "captions": []}
+    result = {
+        "text": "",
+        "images": [],
+        "intent": intents[0],
+        "captions": [],
+        "market_context_used": False,
+        "market_context_source": "none",
+        "radar_confidence": None,
+        "radar_report_uid": None,
+        "warnings": [],
+    }
+
+    market_context_info = {
+        "market_context_used": False,
+        "market_context_source": "none",
+        "context_block": "",
+        "warnings": [],
+    }
+    market_context_block = ""
+    if not has_media:
+        try:
+            from shopee_core.chatbot_market_context_service import get_chatbot_radar_context
+
+            market_context_info = get_chatbot_radar_context(
+                product=kwargs.get("selected_product"),
+                message=user_message,
+                shop_uid=kwargs.get("shop_uid"),
+                conversation_state=kwargs.get("conversation_state"),
+            )
+            market_context_block = market_context_info.get("context_block") or ""
+            result["market_context_used"] = bool(market_context_info.get("market_context_used"))
+            result["market_context_source"] = market_context_info.get("market_context_source", "none")
+            result["radar_confidence"] = market_context_info.get("radar_confidence")
+            result["radar_report_uid"] = market_context_info.get("radar_report_uid")
+            result["warnings"] = market_context_info.get("warnings") or []
+        except Exception:
+            market_context_info = {
+                "market_context_used": False,
+                "market_context_source": "none",
+                "context_block": "",
+                "warnings": [],
+            }
 
     # ── Intent de mídia sem anexo → instrui o usuário ────────
     MEDIA_INTENTS = {"remove_bg", "generate_scene", "upscale",
@@ -2456,7 +2502,13 @@ def process_chat_turn(
         reviews = kwargs.get("optimization_reviews") or []
         if prod:
             from backend_core import generate_full_optimization
-            result["text"] = generate_full_optimization(prod, df_comp, reviews, segmento)
+            result["text"] = generate_full_optimization(
+                prod,
+                df_comp,
+                reviews,
+                segmento,
+                radar_context_block=market_context_block or None,
+            )
         else:
             if channel == "whatsapp":
                 result["text"] = (
@@ -2476,6 +2528,22 @@ def process_chat_turn(
 
     # ── Chat geral sem mídia ─────────────────────────────────
     if not has_media or intents == ["general"]:
+        if market_context_info.get("needs_product"):
+            if channel == "whatsapp":
+                result["text"] = (
+                    "Posso usar o Radar para comparar mercado, preco e concorrentes, "
+                    "mas preciso saber qual produto voce quer analisar. Use /auditar "
+                    "ou selecione um produto primeiro."
+                )
+            else:
+                result["text"] = (
+                    "Posso usar o Radar para comparar mercado, preco e concorrentes, "
+                    "mas preciso saber qual produto voce quer analisar. Selecione um "
+                    "produto na Auditoria Pro ou descreva o produto com mais detalhes."
+                )
+            result["post_actions"] = generate_post_actions("general", False)
+            return result
+
         channel_instruction = ""
         if channel == "whatsapp":
             channel_instruction = (
@@ -2486,7 +2554,10 @@ def process_chat_turn(
                 "3. Responda de forma rápida e conversacional. Se faltar contexto, peça as características do produto (preço, benefícios).\n"
                 "4. Use formatação de WhatsApp (*negrito*, _itálico_).\n\n"
             )
-        contents = [channel_instruction + full_context + "\n\n---\nHistórico:\n"]
+        effective_context = full_context
+        if market_context_block:
+            effective_context = (effective_context or "") + "\n\n" + market_context_block
+        contents = [channel_instruction + effective_context + "\n\n---\nHistórico:\n"]
         for turn in chat_history[-8:]:
             contents.append(f"Usuário: {turn['user']}")
             contents.append(f"Assistente: {turn['assistant']}")
@@ -2495,7 +2566,7 @@ def process_chat_turn(
         text = ""
         for m in MODELOS_TEXTO:
             try:
-                cfg = {"thinking_config": {"thinking_budget": 0}} if ("3.1" in m or "2.5" in m) else {}
+                cfg = {"thinking_config": {"thinking_budget": 0}} if _supports_thinking_config(m) else {}
                 resp = get_client().models.generate_content(
                     model=m, contents=[prompt], config=cfg if cfg else None
                 )
@@ -2781,7 +2852,7 @@ Responda APENAS com JSON válido, sem markdown, sem explicações:
     from backend_core import get_client, MODELOS_TEXTO
     for m in MODELOS_TEXTO:
         try:
-            cfg = {"thinking_config": {"thinking_budget": 0}} if ("3.1" in m or "2.5" in m) else {}
+            cfg = {"thinking_config": {"thinking_budget": 0}} if _supports_thinking_config(m) else {}
             resp = get_client().models.generate_content(
                 model=m, contents=[prompt],
                 config=cfg if cfg else None
