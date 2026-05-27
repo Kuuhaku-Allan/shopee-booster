@@ -36,8 +36,12 @@ class TestAuditRadarIntegration(unittest.TestCase):
     @patch("shopee_core.competitor_service.search_competitors_safe")
     @patch("backend_core.fetch_reviews_intercept")
     @patch("backend_core.generate_full_optimization")
+    @patch("shopee_core.audit_market_source_service.get_radar_market_status_for_audit")
+    @patch("shopee_core.audit_market_source_service.choose_audit_market_source")
     def test_audit_without_radar_maintains_old_behavior(
         self,
+        mock_choose,
+        mock_radar_status,
         mock_generate_full,
         mock_reviews,
         mock_competitors,
@@ -47,6 +51,14 @@ class TestAuditRadarIntegration(unittest.TestCase):
         mock_competitors.return_value = []
         mock_reviews.return_value = ([], [])
         mock_generate_full.return_value = "Otimização gerada"
+        mock_radar_status.return_value = {"has_radar": False, "confidence_level": "insufficient", "warnings": []}
+        mock_choose.return_value = {
+            "source": "none",
+            "reason": "Sem base de mercado.",
+            "radar_used": False,
+            "scraping_used": False,
+            "warnings": [],
+        }
         
         # Act
         result = generate_product_optimization(
@@ -60,12 +72,106 @@ class TestAuditRadarIntegration(unittest.TestCase):
         self.assertTrue(result.get("ok"))
         self.assertEqual(result["data"]["optimization"], "Otimização gerada")
         self.assertFalse(result["data"]["radar_used"])
-        self.assertIsNone(result["data"]["radar_status"])
+        self.assertEqual(result["data"]["market_source"], "none")
+        mock_choose.assert_called_once()
         
         # Verifica que generate_full_optimization foi chamado sem radar_context_block
         mock_generate_full.assert_called_once()
         call_kwargs = mock_generate_full.call_args[1]
         self.assertIsNone(call_kwargs.get("radar_context_block"))
+
+    @patch("shopee_core.competitor_service.search_competitors_safe")
+    @patch("backend_core.fetch_reviews_intercept")
+    @patch("backend_core.generate_full_optimization")
+    @patch("shopee_core.audit_market_source_service.get_radar_market_status_for_audit")
+    @patch("shopee_core.audit_market_source_service.choose_audit_market_source")
+    def test_generate_product_optimization_calls_auto_source_selector(
+        self,
+        mock_choose,
+        mock_radar_status,
+        mock_generate_full,
+        mock_reviews,
+        mock_competitors,
+    ):
+        """R7.5A: generate_product_optimization chama choose_audit_market_source."""
+        mock_competitors.return_value = []
+        mock_reviews.return_value = ([], [])
+        mock_generate_full.return_value = "Otimização gerada"
+        mock_radar_status.return_value = {"has_radar": False, "confidence_level": "insufficient", "warnings": []}
+        mock_choose.return_value = {
+            "source": "none",
+            "reason": "Sem base de mercado.",
+            "radar_used": False,
+            "scraping_used": False,
+            "warnings": [],
+        }
+
+        result = generate_product_optimization(
+            product=self.product,
+            segmento=self.segmento,
+            api_key="fake_key",
+        )
+
+        self.assertTrue(result.get("ok"))
+        mock_choose.assert_called_once()
+        self.assertIn("market_source", result["data"])
+        self.assertEqual(result["data"]["market_source"], "none")
+
+    @patch("shopee_core.competitor_service.search_competitors_safe")
+    @patch("backend_core.fetch_reviews_intercept")
+    @patch("backend_core.generate_full_optimization")
+    @patch("shopee_core.audit_market_source_service.get_radar_market_status_for_audit")
+    @patch("shopee_core.audit_market_source_service.choose_audit_market_source")
+    @patch("shopee_core.radar_audit_context_service.build_radar_audit_context")
+    @patch("shopee_core.radar_audit_context_service.build_radar_prompt_block")
+    def test_auto_radar_source_passes_context_to_generate_full(
+        self,
+        mock_build_prompt,
+        mock_build_context,
+        mock_choose,
+        mock_radar_status,
+        mock_generate_full,
+        mock_reviews,
+        mock_competitors,
+    ):
+        """R7.5A: quando Radar é escolhido, contexto entra no prompt."""
+        mock_competitors.return_value = []
+        mock_reviews.return_value = ([], [])
+        mock_generate_full.return_value = "Otimização gerada"
+        mock_radar_status.return_value = {
+            "has_radar": True,
+            "product_uid": "uid-auto",
+            "radar_product_uid": "uid-auto",
+            "confidence_level": "high",
+            "is_fresh": True,
+            "effective_competitor_count": 9,
+            "warnings": [],
+        }
+        mock_choose.return_value = {
+            "source": "radar",
+            "reason": "Scraping indisponível. Usei Radar.",
+            "radar_used": True,
+            "scraping_used": False,
+            "radar_product_uid": "uid-auto",
+            "radar_confidence": "high",
+            "radar_report_uid": "report-auto",
+            "warnings": [],
+        }
+        mock_build_context.return_value = {"ok": True, "market_summary": {"competitor_count": 9}}
+        mock_build_prompt.return_value = "=== CONTEXTO DO RADAR ===\nDados do Radar"
+
+        result = generate_product_optimization(
+            product=self.product,
+            segmento=self.segmento,
+            api_key="fake_key",
+        )
+
+        self.assertTrue(result.get("ok"))
+        self.assertTrue(result["data"]["radar_used"])
+        self.assertEqual(result["data"]["market_source"], "radar")
+        self.assertEqual(result["data"]["market_source_reason"], "Scraping indisponível. Usei Radar.")
+        call_kwargs = mock_generate_full.call_args[1]
+        self.assertIn("CONTEXTO DO RADAR", call_kwargs.get("radar_context_block"))
     
     @patch("shopee_core.competitor_service.search_competitors_safe")
     @patch("backend_core.fetch_reviews_intercept")

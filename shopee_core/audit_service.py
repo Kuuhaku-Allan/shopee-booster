@@ -252,24 +252,18 @@ def generate_product_optimization(
     radar_own_product_uid: str | None = None,
 ) -> dict:
     """
-    Executa o fluxo completo de otimização para um produto:
-      1. Busca concorrentes via competitor_service (Shopee + Mercado Livre fallback)
-      2. Busca avaliações no Mercado Livre (Playwright)
-      3. Tenta carregar contexto do Radar (opcional)
+    Executa o fluxo central da Auditoria:
+      1. Busca concorrentes via competitor_service
+      2. Busca avaliacoes do mercado
+      3. Escolhe scraping vs Radar automaticamente
       4. Gera o listing otimizado com Gemini
 
-    Args:
-        product: Dados do produto
-        segmento: Segmento de mercado
-        api_key: Gemini API Key opcional (usa GOOGLE_API_KEY se None)
-        radar_own_product_uid: UID do produto no Radar (opcional)
-
-    Retorna AuditResponse-compatível.
+    `radar_own_product_uid` continua existindo como override/dev.
     """
     if not product:
         return {
             "ok": False,
-            "message": "Produto inválido ou vazio.",
+            "message": "Produto invalido ou vazio.",
             "data": {},
         }
 
@@ -277,81 +271,145 @@ def generate_product_optimization(
     item_id = str(product.get("itemid", ""))
     shop_id = str(product.get("shopid", ""))
 
-    # 1. Concorrentes via competitor_service (U8.2)
-    log.info(f"[AUDIT] Buscando concorrentes via search_competitors_safe: keyword={keyword}")
-
+    log.info("[AUDIT] Buscando concorrentes via search_competitors_safe: keyword=%s", keyword)
     from shopee_core.competitor_service import search_competitors_safe
 
     competitors = search_competitors_safe(keyword=keyword, limit=10)
-
-    log.info(f"[AUDIT] Concorrentes encontrados: {len(competitors)}")
+    log.info("[AUDIT] Concorrentes encontrados: %d", len(competitors))
     if competitors:
         sources = set(c.get("source", "unknown") for c in competitors)
-        log.info(f"[AUDIT] Providers usados: {', '.join(sources)}")
+        log.info("[AUDIT] Providers usados: %s", ", ".join(sources))
 
-    # Normaliza concorrentes para formato esperado por generate_full_optimization (U8.1)
     competitors_for_df = _normalize_competitors_for_audit(competitors)
     df_competitors = pd.DataFrame(competitors_for_df) if competitors_for_df else pd.DataFrame()
+    log.info("[AUDIT] DataFrame de concorrentes: %d linhas", len(df_competitors))
 
-    log.info(f"[AUDIT] DataFrame de concorrentes: {len(df_competitors)} linhas")
-
-    # 2. Avaliações (via Mercado Livre como proxy de qualidade de reviews)
     from backend_core import fetch_reviews_intercept
+
     reviews, logs = fetch_reviews_intercept(
         item_id=item_id,
         shop_id=shop_id,
         product_url="",
         product_name_override=keyword,
     )
+    log.info("[AUDIT] Avaliacoes coletadas: %d", len(reviews or []))
 
-    log.info(f"[AUDIT] Avaliações coletadas: {len(reviews or [])}")
-
-    # 3. Contexto do Radar (opcional - R6.2)
     radar_context_block = None
     radar_status = None
+    market_source_result = None
 
     if radar_own_product_uid:
-        log.info(f"[AUDIT] Tentando carregar contexto do Radar: {radar_own_product_uid}")
+        log.info("[AUDIT] Override manual do Radar: %s", radar_own_product_uid)
         try:
             from shopee_core.radar_audit_context_service import (
-                get_radar_audit_context_status,
                 build_radar_audit_context,
                 build_radar_prompt_block,
+                get_radar_audit_context_status,
             )
 
             radar_status = get_radar_audit_context_status(radar_own_product_uid)
-
             if radar_status.get("can_use"):
-                log.info(f"[AUDIT] Radar disponível: {radar_status.get('reason')}")
                 context = build_radar_audit_context(radar_own_product_uid)
                 if context.get("ok"):
                     radar_context_block = build_radar_prompt_block(context)
-                    log.info(f"[AUDIT] Contexto do Radar carregado: {len(radar_context_block)} caracteres")
+                    log.info("[AUDIT] Contexto Radar manual carregado: %d caracteres", len(radar_context_block))
                 else:
-                    log.warning(f"[AUDIT] Radar context falhou: {context.get('error')}")
+                    log.warning("[AUDIT] Radar manual falhou: %s", context.get("error"))
             else:
-                log.info(f"[AUDIT] Radar não disponível: {radar_status.get('reason')}")
-        except Exception as e:
-            log.warning(f"[AUDIT] Erro ao carregar Radar: {e}")
-            # Continua sem Radar
+                log.info("[AUDIT] Radar manual indisponivel: %s", radar_status.get("reason"))
+        except Exception as exc:
+            log.warning("[AUDIT] Erro ao carregar Radar manual: %s", exc)
 
-    # 4. Otimização Gemini (passa api_key e radar_context_block)
-    log.info(f"[AUDIT] Gerando otimização com Gemini...")
+        source = "radar" if radar_context_block else "scraping"
+        reason = (
+            "Radar informado manualmente para esta auditoria."
+            if radar_context_block
+            else "Radar manual indisponivel; usei scraping em tempo real."
+        )
+        market_source_result = {
+            "source": source,
+            "market_source": source,
+            "reason": reason,
+            "market_source_reason": reason,
+            "radar_used": radar_context_block is not None,
+            "scraping_used": radar_context_block is None,
+            "confidence_level": (radar_status or {}).get("confidence"),
+            "radar_confidence": (radar_status or {}).get("confidence"),
+            "radar_report_uid": (radar_status or {}).get("report_uid"),
+            "radar_product_uid": radar_own_product_uid,
+            "warnings": [] if radar_context_block else [(radar_status or {}).get("reason", "Radar manual indisponivel.")],
+            "radar_status": radar_status,
+        }
+    else:
+        try:
+            from shopee_core.audit_market_source_service import (
+                choose_audit_market_source,
+                get_radar_market_status_for_audit,
+            )
+
+            radar_status = get_radar_market_status_for_audit(product)
+            market_source_result = choose_audit_market_source(product, df_competitors, radar_status)
+
+            if market_source_result.get("radar_used"):
+                radar_uid = (
+                    market_source_result.get("radar_product_uid")
+                    or radar_status.get("radar_product_uid")
+                    or radar_status.get("product_uid")
+                )
+                if radar_uid:
+                    from shopee_core.radar_audit_context_service import (
+                        build_radar_audit_context,
+                        build_radar_prompt_block,
+                    )
+
+                    context = build_radar_audit_context(radar_uid)
+                    if context.get("ok"):
+                        radar_context_block = build_radar_prompt_block(context)
+                        log.info("[AUDIT] Contexto Radar automatico carregado: %d caracteres", len(radar_context_block))
+                    else:
+                        warning = context.get("reason") or context.get("error") or "Falha ao montar contexto Radar."
+                        log.warning("[AUDIT] Contexto Radar automatico falhou: %s", warning)
+                        market_source_result.setdefault("warnings", []).append(warning)
+                        fallback_source = "scraping" if len(df_competitors) else "none"
+                        market_source_result["source"] = fallback_source
+                        market_source_result["market_source"] = fallback_source
+                        market_source_result["radar_used"] = False
+                        market_source_result["scraping_used"] = fallback_source == "scraping"
+        except Exception as exc:
+            log.warning("[AUDIT] Selecao automatica de fonte falhou: %s", exc)
+            fallback_source = "scraping" if len(df_competitors) else "none"
+            market_source_result = {
+                "source": fallback_source,
+                "market_source": fallback_source,
+                "reason": "Falha na selecao automatica; usei o fluxo de auditoria disponivel.",
+                "market_source_reason": "Falha na selecao automatica; usei o fluxo de auditoria disponivel.",
+                "radar_used": False,
+                "scraping_used": fallback_source == "scraping",
+                "confidence_level": None,
+                "radar_confidence": None,
+                "radar_report_uid": None,
+                "warnings": [str(exc)],
+                "radar_status": radar_status,
+            }
+
+    log.info("[AUDIT] Gerando otimizacao com Gemini...")
     from backend_core import generate_full_optimization
+
     optimization_text = generate_full_optimization(
         product=product,
         competitors_df=df_competitors,
         reviews=reviews or [],
         segmento=segmento,
         api_key=api_key,
-        radar_context_block=radar_context_block,  # R6.2: Passa contexto do Radar
+        radar_context_block=radar_context_block,
     )
 
-    log.info(f"[AUDIT] Otimização gerada: {len(optimization_text)} caracteres")
+    log.info("[AUDIT] Otimizacao gerada: %d caracteres", len(optimization_text))
+    market_source = market_source_result or {}
 
     return {
         "ok": True,
-        "message": "Otimização gerada com sucesso.",
+        "message": "Otimizacao gerada com sucesso.",
         "data": {
             "product": {
                 "itemid": item_id,
@@ -359,11 +417,18 @@ def generate_product_optimization(
                 "price": product.get("price", 0),
             },
             "optimization": optimization_text,
-            "competitors": competitors,  # Lista original para contador
+            "competitors": competitors,
             "reviews": reviews or [],
             "review_logs": logs,
-            "radar_used": radar_context_block is not None,  # R6.2: Indica se Radar foi usado
-            "radar_status": radar_status,  # R6.2: Status do Radar
+            "market_source": market_source.get("source", "scraping"),
+            "market_source_reason": market_source.get("reason", ""),
+            "radar_used": bool(market_source.get("radar_used")) and radar_context_block is not None,
+            "scraping_used": bool(market_source.get("scraping_used")),
+            "radar_confidence": market_source.get("radar_confidence") or market_source.get("confidence_level"),
+            "radar_report_uid": market_source.get("radar_report_uid"),
+            "warnings": market_source.get("warnings", []),
+            "radar_status": radar_status,
+            "market_source_details": market_source,
         },
     }
 

@@ -522,11 +522,11 @@ def render_auditoria():
             _rs = st.session_state.get(radar_cache_key, {})
             if _rs.get("has_radar"):
                 _cl = _rs.get("confidence_level", "N/A")
-                _dc = _rs.get("direct_count", 0)
+                _dc = _rs.get("effective_competitor_count") or _rs.get("direct_count", 0)
                 _icon = "🟢" if _cl == "high" else "🟡" if _cl == "medium" else "🟠"
                 market_source_info.success(
                     f"{_icon} **Radar disponível:** confiança **{_cl}**, "
-                    f"**{_dc}** concorrentes diretos. "
+                    f"**{_dc}** concorrentes efetivos. "
                     "A fonte será escolhida automaticamente."
                 )
                 if _rs.get("warnings"):
@@ -552,58 +552,49 @@ def render_auditoria():
             )
 
         if st.button("🤖 Gerar Otimização Completa", type="primary"):
-            # R7.5: Auto source selection
-            radar_context_block = None
-            market_source_result = {"source": "scraping", "radar_used": False, "scraping_used": True, "reason": "", "warnings": []}
-
             try:
-                from shopee_core.audit_market_source_service import choose_audit_market_source
-
-                _rs_cache = st.session_state.get(radar_cache_key, {})
-                market_source_result = choose_audit_market_source(
-                    prod, df_comp, _rs_cache if _rs_cache.get("has_radar") else None
-                )
-
-                if market_source_result.get("radar_used"):
-                    radar_uid = _rs_cache.get("product_uid")
-                    if radar_uid:
-                        try:
-                            from shopee_core.radar_audit_context_service import (
-                                build_radar_audit_context, build_radar_prompt_block,
-                            )
-                            ctx = build_radar_audit_context(radar_uid)
-                            if ctx.get("ok"):
-                                radar_context_block = build_radar_prompt_block(ctx)
-                        except Exception as e:
-                            print(f"[R7.5] Erro ao construir contexto Radar: {e}")
-
-                # Debug mode
                 if debug_radar_mode:
+                    from shopee_core.audit_market_source_service import choose_audit_market_source
+
+                    _rs_cache = st.session_state.get(radar_cache_key, {})
+                    market_source_result = choose_audit_market_source(
+                        prod, df_comp, _rs_cache if _rs_cache.get("has_radar") else None
+                    )
                     st.info("🐛 **Modo Debug**")
                     st.json(market_source_result)
-                    if radar_context_block:
-                        with st.expander("📄 Contexto do Radar que seria enviado"):
-                            st.text(radar_context_block)
                     st.info("ℹ️ Modo debug ativo - IA não foi chamada.")
                     st.session_state.optimization_result = None
+                    st.session_state["_market_source_result"] = market_source_result
                 else:
+                    from shopee_core.audit_service import generate_product_optimization
+
                     with st.spinner("IA analisando concorrentes + avaliações e gerando listing..."):
-                        st.session_state.optimization_result = generate_full_optimization(
-                            prod, df_comp, reviews_opt or [], segmento,
-                            radar_context_block=radar_context_block
+                        audit_result = generate_product_optimization(
+                            product=prod,
+                            segmento=segmento,
+                            api_key=API_KEY,
                         )
-                        st.session_state["_market_source_result"] = market_source_result
+                    if not audit_result.get("ok"):
+                        st.error(audit_result.get("message", "Não foi possível gerar a otimização."))
+                        st.session_state.optimization_result = None
+                    else:
+                        data = audit_result.get("data", {})
+                        st.session_state.optimization_result = data.get("optimization")
+                        st.session_state["_market_source_result"] = data.get("market_source_details") or {
+                            "source": data.get("market_source"),
+                            "reason": data.get("market_source_reason"),
+                            "radar_used": data.get("radar_used"),
+                            "scraping_used": data.get("scraping_used"),
+                            "confidence_level": data.get("radar_confidence"),
+                            "radar_report_uid": data.get("radar_report_uid"),
+                            "warnings": data.get("warnings", []),
+                            "radar_status": data.get("radar_status"),
+                        }
 
             except Exception as e:
-                st.error(f"Erro na seleção automática de fonte: {e}")
-                print(f"[R7.5] Erro: {e}")
+                st.error(f"Erro ao gerar otimização automática: {e}")
+                print(f"[R7.5A] Erro: {e}")
                 import traceback; traceback.print_exc()
-                # Fallback: gerar sem Radar
-                if not debug_radar_mode:
-                    with st.spinner("Gerando otimização (fallback sem Radar)..."):
-                        st.session_state.optimization_result = generate_full_optimization(
-                            prod, df_comp, reviews_opt or [], segmento
-                        )
 
         if st.session_state.optimization_result:
             st.markdown("---")
@@ -615,9 +606,14 @@ def render_auditoria():
             radar_used = market_source_result.get("radar_used", False)
 
             if source == "radar" or source == "hybrid":
-                st.success(f"📡 **Base usada: Radar** — {reason}")
+                source_label = "Radar + Scraping" if source == "hybrid" else "Radar"
+                st.success(f"📡 **Base usada: {source_label}** — {reason}")
                 _rs_cache = st.session_state.get(radar_cache_key, {})
-                _radar_uid = _rs_cache.get("product_uid")
+                _radar_uid = (
+                    market_source_result.get("radar_product_uid")
+                    or _rs_cache.get("radar_product_uid")
+                    or _rs_cache.get("product_uid")
+                )
                 if _radar_uid:
                     with st.expander("📊 Ver detalhes da base usada"):
                         try:

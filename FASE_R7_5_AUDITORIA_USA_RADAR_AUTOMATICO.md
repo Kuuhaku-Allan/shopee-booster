@@ -1,111 +1,151 @@
-# Fase R7.5 — Auditoria usa Radar automaticamente
+# Fase R7.5 - Auditoria usa Radar automaticamente
 
-**Status:** Concluído  
-**Precedência:** R7.4 ✓
+**Status:** R7.5A concluida  
+**Precedencia:** R7.4 concluida
 
 ## Objetivo
 
-Integrar o Radar à Auditoria Pro de forma automática, limpa e sem poluir a tela.
-A Auditoria escolhe a melhor base de concorrentes:
+Integrar o Radar a Auditoria Pro como uma camada automatica de evidencia de mercado.
+O usuario escolhe o produto e gera a otimizacao; o sistema decide se usa scraping em
+tempo real, Radar local, uma composicao dos dois ou nenhuma base.
 
-1. Scraping normal se funcionar bem
-2. Radar se existir base local confiável
-3. Radar como fallback automático se scraping falhar
-4. Aviso guiado se ambos falharem
+## R7.5 parcial vs R7.5A
 
-## O que mudou
+A primeira entrega da R7.5 deixou a tela mais limpa, mas a decisao ainda estava
+concentrada na UI. A Auditoria real, usada por servicos como WhatsApp/API, continuava
+dependendo do parametro manual `radar_own_product_uid`.
 
-### UI da Auditoria (app.py)
+A R7.5A fecha essa lacuna:
 
-**Removido:**
-- Expansor "📡 Radar Assistido de Concorrentes" (seleção manual)
-- Checkbox "Usar Radar Assistido nesta auditoria"
-- Selectbox de produto Radar
-- Input manual de UID
-- Debug checkbox público
-- Badge "Radar Assistido usado nesta auditoria"
+- `generate_product_optimization()` agora chama `choose_audit_market_source()`.
+- A decisao scraping/Radar acontece no core da Auditoria.
+- A UI apenas pre-visualiza status e mostra o resultado retornado pelo core.
+- `radar_own_product_uid` segue existindo como override de desenvolvimento.
 
-**Adicionado:**
-- Bloco compacto "📊 Base de Mercado" — mostra status do Radar automaticamente
-- Badge pós-otimização: "📡 Base usada: Radar" ou "🌐 Base usada: Scraping"
-- Expansor "Ver detalhes da base usada" opcional
-- Debug atrás de env var `SHOPEE_DEV_DEBUG_RADAR=1`
+## Regra final de decisao
 
-### Novo serviço: `audit_market_source_service.py`
+| Scraping | Radar | Resultado |
+|---|---|---|
+| Bom, com titulo/preco/identificacao | Ausente | `scraping` |
+| Falho/fraco | High/medium fresh e efetivo | `radar` |
+| Bom | High fresh, efetivo e mais robusto | `hybrid` |
+| Bom | Stale/vencido | `scraping` + warning para renovar |
+| Falho | High/medium stale | `radar` + warning de base vencida |
+| Falho | Ausente/low/insufficient | `none` + aviso para construir Radar |
 
-Três funções principais:
+## Qualidade do scraping
+
+Scraping nao e mais considerado bom apenas por retornar linhas. Agora precisa ter:
+
+- pelo menos 3 concorrentes uteis;
+- titulo presente na maioria;
+- preco valido na maioria;
+- URL ou identificacao na maioria;
+- baixa chance de dados placeholder.
+
+Exemplo corrigido: 3 linhas sem titulo e sem preco retornam `ok=False`.
+
+## Status Radar para Auditoria
+
+`get_radar_market_status_for_audit(product)` retorna:
+
+- `has_radar`
+- `product_uid` / `radar_product_uid`
+- `confidence_level`
+- `confidence_score`
+- `competitor_count`
+- `effective_competitor_count`
+- `effective_direct_count`
+- `effective_partial_count`
+- `direct_count`
+- `partial_count`
+- `report_uid` / `radar_report_uid`
+- `is_fresh`
+- `last_refresh_at`
+- `last_report_at`
+- `status`
+- `warnings`
+
+As contagens efetivas e avisos vem do quality gate da R7.3E, sempre que disponivel.
+
+## Retorno da Auditoria
+
+`generate_product_optimization()` agora inclui no retorno:
 
 ```python
-get_radar_market_status_for_audit(product: dict) -> dict
+{
+    "market_source": "scraping|radar|hybrid|none",
+    "market_source_reason": "...",
+    "radar_used": True,
+    "scraping_used": False,
+    "radar_confidence": "high",
+    "radar_report_uid": "...",
+    "warnings": [...],
+    "market_source_details": {...},
+}
 ```
-Busca produto Radar correspondente por similaridade de título.
-Retorna: has_radar, product_uid, confidence_level, direct_count, is_fresh, warnings
 
-```python
-evaluate_scraping_market_quality(scraping_result) -> dict
+## UI
+
+`app.py` continua mostrando o bloco "Base de Mercado", mas a geracao chama
+`generate_product_optimization()` e usa `market_source_details` retornado pelo core.
+
+Debug segue escondido atras de:
+
+```bash
+SHOPEE_DEV_DEBUG_RADAR=1
 ```
-Avalia qualidade do scraping.
-Retorna: ok, competitor_count, has_prices, has_titles, quality_score (0-1), warnings
-
-```python
-choose_audit_market_source(product, scraping_result=None, radar_status=None) -> dict
-```
-Escolhe a melhor fonte automaticamente.
-Retorna: source, reason, radar_used, scraping_used, warnings
-
-### Regra de decisão
-
-| Caso | Scraping | Radar | Resultado |
-|------|----------|-------|-----------|
-| A | Bom | Não existe | Scraping |
-| B | Falha | Existe (high/medium) | Radar |
-| C1 | Bom | Bom (high/medium) | Hybrid (prefere Radar) |
-| C2 | Bom | Baixo/Stale | Scraping |
-| C3 | Fraco (<5) | Bom | Radar |
-| D | Falha | Não existe | None + aviso |
-
-### Fluxo da otimização
-
-1. Produto selecionado → auto-detecta Radar (`get_radar_market_status_for_audit`)
-2. "Gerar Otimização" → `choose_audit_market_source(prod, df_comp, radar_status)`
-3. Se Radar escolhido: `build_radar_audit_context()` + `build_radar_prompt_block()`
-4. Gera listing com contexto do Radar ou só scraping
-5. Exibe badge: "Base usada: Radar" com expander de detalhes
-
-## Arquivos
-
-- `shopee_core/audit_market_source_service.py` — novo: seletor automático
-- `app.py` — UI limpa, auto-source, badge
-- `test_audit_market_source_service.py` — 14 testes
 
 ## Testes
 
+Validados:
+
 ```bash
-python -W ignore -m pytest test_audit_market_source_service.py -v
-# 14 testes
+python -m py_compile shopee_core/audit_market_source_service.py shopee_core/audit_service.py shopee_core/radar_audit_context_service.py backend_core.py app.py
+python -m pytest test_audit_market_source_service.py test_audit_radar_integration.py -q -p no:cacheprovider
 ```
 
-Criar também `test_audit_market_source_sanity.py` para smoke:
-- Scraping ok + sem Radar → scraping
-- Scraping falha + Radar high → radar
-- Ambos falham → none
-- Ambos ok → hybrid/radar
+Coberturas adicionadas:
 
-## Smoke manual
+- scraping com 3 linhas sem titulo/preco vira `ok=False`;
+- Radar high fresh retorna status completo;
+- Radar high stale gera warning;
+- scraping bom + Radar stale escolhe scraping;
+- scraping falha + Radar high fresh escolhe Radar;
+- scraping falha + Radar stale escolhe Radar com warning;
+- scraping falha + Radar ausente escolhe none;
+- `effective_competitor_count` influencia decisao;
+- `generate_product_optimization()` chama o seletor automatico;
+- quando Radar e escolhido, `radar_context_block` chega ao `generate_full_optimization()`;
+- retorno da Auditoria inclui `market_source` e motivo.
 
-### Cenário A: Produto com Radar high
-1. Selecionar produto que tem base Radar
-2. Verificar bloco "Radar disponível: confiança high"
-3. Clicar "Gerar Otimização Completa"
-4. Esperado: badge "📡 Base usada: Radar"
+## Smoke manual esperado
 
-### Cenário B: Produto sem Radar
-1. Selecionar produto sem base Radar
-2. Verificar "produto não possui base Radar"
-3. Clicar "Gerar Otimização Completa" (scraping precisa ter sido feito)
-4. Esperado: badge "🌐 Base usada: Scraping"
+### Produto com Radar high fresh + scraping falho
 
-### Cenário C: Sem scraping + sem Radar
-1. Não buscar concorrentes, selecionar produto sem Radar
-2. Clicar "Gerar Otimização Completa"
-3. Esperado: badge "⚠️ Nenhuma base de mercado disponível"
+Esperado:
+
+- `market_source = radar`
+- contexto Radar enviado ao prompt
+- badge "Base usada: Radar"
+
+### Produto sem Radar + scraping bom
+
+Esperado:
+
+- `market_source = scraping`
+- otimizacao segue normalmente
+
+### Produto sem Radar + scraping falho
+
+Esperado:
+
+- `market_source = none`
+- UI orienta construir base Radar
+
+### Produto com Radar stale + scraping bom
+
+Esperado:
+
+- `market_source = scraping`
+- warning para renovar Radar
