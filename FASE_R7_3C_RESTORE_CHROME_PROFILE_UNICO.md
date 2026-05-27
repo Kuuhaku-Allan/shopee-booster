@@ -103,4 +103,4 @@ Verificar: CDP responde.
 4. Verificar: passa da etapa chrome
 
 ## Proximas fases
-- R7.4: Renovacao semanal automatica
+- R7.4: Renovação semanal automática

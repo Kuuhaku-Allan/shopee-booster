@@ -127,4 +127,4 @@ python -m pytest test_radar_relevance_service.py test_radar_patterns_service.py 
 4. Esperado: Chrome antigo encerrado, novo aberto
 
 ## Proximas fases
-- R7.4: Renovacao semanal automatica (usa o mesmo boot robusto)
+- R7.4: Renovação semanal automática (usa o mesmo boot robusto)

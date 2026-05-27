@@ -3327,6 +3327,7 @@ def render_radar_workflow():
         run_pattern_analysis_for_product, run_linked_collection_for_product,
         ensure_collection_jobs_for_linked_candidates,
         run_automatic_radar_cycle,
+        get_refresh_status, list_due_for_refresh, refresh_product,
     )
     import shopee_core.radar_collector as rc
     import time
@@ -3826,6 +3827,90 @@ def render_radar_workflow():
                         st.info("Chrome antigo encerrado. Tentando abrir novo...")
                         time.sleep(2)
                         st.rerun()
+
+    st.divider()
+    # ── R7.4: Renovação do Radar ──────────────────────────────────
+    st.write("##### 🔄 Renovação do Radar")
+
+    def _run_refresh(uid: str, target_confidence: str = "medium"):
+        p_info = st.empty()
+        p_log = st.empty()
+
+        def rf_progress(state_dict):
+            stage = state_dict.get("stage", "")
+            msg = state_dict.get("message", "")
+            stage_map = {
+                "chrome": "Verificando Chrome",
+                "recheck": "Rechecando concorrentes",
+                "classify": "Reclassificando",
+                "report": "Gerando relatorio",
+                "confidence": "Calculando confianca",
+                "discover": "Buscando novos concorrentes",
+            }
+            display = stage_map.get(stage, stage)
+            p_info.markdown(f"**Etapa:** {display}")
+            p_log.text(msg)
+
+        with st.spinner(f"Renovando Radar para {uid[:12]}..."):
+            result = refresh_product(
+                own_product_uid=uid,
+                target_confidence=target_confidence,
+                progress_callback=rf_progress,
+            )
+
+        if result.get("ok"):
+            st.success("Renovação concluída!")
+            st.json({
+                "Rechecados": result.get("recheck", {}).get("checked", 0),
+                "Atualizados": result.get("recheck", {}).get("updated", 0),
+                "Indisponiveis": result.get("recheck", {}).get("unavailable", 0),
+                "Direct before": result.get("direct_before"),
+                "Direct after": result.get("direct_after"),
+                "Confianca": result.get("confidence", {}).get("level", "N/A"),
+                "Novos descobertos": result.get("discovered_new"),
+            })
+            from shopee_core.radar_patterns_service import get_latest_pattern_report
+            fresh_report = get_latest_pattern_report(selected_uid)
+            if fresh_report:
+                st.session_state["last_pattern_report"] = fresh_report
+        else:
+            st.error(f"Falha na renovacao: {result.get('error', 'Erro desconhecido')}")
+
+    st.caption("Mantem concorrentes, precos e relatorio atualizados.")
+
+    refresh_status = get_refresh_status(selected_uid)
+    rf_col1, rf_col2, rf_col3, rf_col4 = st.columns(4)
+    with rf_col1:
+        st.metric("Status", refresh_status.get("status", "N/A").replace("_", " ").title())
+    with rf_col2:
+        sd = refresh_status.get("days_since_refresh")
+        st.metric("Dias desde ultima", f"{sd}" if sd is not None else "N/A")
+    with rf_col3:
+        st.metric("Confianca", (refresh_status.get("last_confidence_level") or "N/A").upper())
+    with rf_col4:
+        is_due = refresh_status.get("is_due", True)
+        st.metric("Vencido", "Sim" if is_due else "Nao")
+
+    if refresh_status.get("warnings"):
+        st.caption("; ".join(refresh_status["warnings"]))
+
+    # Due products alert
+    due_products = list_due_for_refresh()
+    if due_products and len(due_products) > 0:
+        st.info(f":bell: Existem {len(due_products)} produto(s) com Radar vencido.")  # noqa: F541
+
+    refresh_col1, refresh_col2, refresh_col3 = st.columns(3)
+    with refresh_col1:
+        if st.button("Renovar agora", use_container_width=True, type="primary", key="btn_refresh_now"):
+            _run_refresh(selected_uid)
+    with refresh_col2:
+        if st.button("Renovar vencidos", use_container_width=True, key="btn_refresh_due"):
+            for dp in due_products:
+                _run_refresh(dp["product_uid"])
+            st.rerun()
+    with refresh_col3:
+        if st.button("Forçar renovacao completa", use_container_width=True, key="btn_refresh_force"):
+            _run_refresh(selected_uid, target_confidence="high")
 
     st.divider()
     st.write("##### Tabela de Concorrentes Vinculados")

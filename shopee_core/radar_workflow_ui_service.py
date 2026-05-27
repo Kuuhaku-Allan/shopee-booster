@@ -1226,3 +1226,26 @@ def run_automatic_radar_cycle(
         discover_new_urls=discover_new_urls,
         progress_callback=progress_callback,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# R7.4: Renovação semanal do Radar
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def get_refresh_status(own_product_uid: str) -> dict:
+    """Get refresh status for a product (passthrough)."""
+    from shopee_core.radar_refresh_service import get_radar_refresh_status
+    return get_radar_refresh_status(own_product_uid)
+
+
+def list_due_for_refresh(days: int = 7) -> list[dict]:
+    """List products due for refresh (passthrough)."""
+    from shopee_core.radar_refresh_service import list_products_due_for_refresh
+    return list_products_due_for_refresh(days=days)
+
+
+def refresh_product(own_product_uid: str, **kwargs) -> dict:
+    """Refresh radar for a product (passthrough)."""
+    from shopee_core.radar_refresh_service import refresh_radar_for_product
+    return refresh_radar_for_product(own_product_uid, **kwargs)

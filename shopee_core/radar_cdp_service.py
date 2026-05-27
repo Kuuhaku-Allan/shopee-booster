@@ -558,3 +558,53 @@ def ensure_radar_chrome_ready(cdp_url: str = DEFAULT_CDP_URL, progress_callback=
         ),
         "diagnostics": diagnostics,
     }
+
+
+# ── UI-friendly Chrome helper (R7.4A) ─────────────────────────────────────
+
+
+def ensure_radar_chrome_ready_for_ui(cdp_url: str = DEFAULT_CDP_URL) -> dict:
+    """Wrapper usado pela Renovacao do Radar (R7.4) e demais fluxos UI.
+
+    1. Testa CDP existente primeiro — se responde, reutiliza
+    2. Se nao, chama ensure_radar_chrome_ready() (helper unificado)
+    3. Retorna diagnostico inclusive se ja estava rodando
+    """
+    port_match = __import__("re").search(r":(\d+)", cdp_url)
+    port = int(port_match.group(1)) if port_match else CDP_PORT
+
+    result = {
+        "ok": False,
+        "already_running": False,
+        "started": False,
+        "cdp_url": cdp_url,
+        "port": port,
+        "message": "",
+    }
+
+    # 1. CDP ja disponivel?
+    if is_cdp_available(cdp_url):
+        result["ok"] = True
+        result["already_running"] = True
+        result["message"] = f"Chrome do Radar ja estava ativo em {cdp_url}."
+        return result
+
+    # 2. Chama helper unificado (start PS1, fallback direto, polling 45s)
+    full = ensure_radar_chrome_ready(cdp_url=cdp_url)
+    result["ok"] = full.get("ok", False)
+    result["started"] = full.get("started", False)
+    result["message"] = full.get("message", "")
+    result["diagnostics"] = full.get("diagnostics")
+    result["environment_error"] = full.get("environment_error", False)
+
+    if not result["ok"]:
+        result["message"] = (
+            f"Nao foi possivel iniciar/confirmar o Chrome do Radar "
+            f"({full.get('message', 'erro desconhecido')}). "
+            f"Tente reiniciar o Chrome do Radar manualmente."
+        )
+    else:
+        pid = full.get("pid")
+        result["message"] = f"Chrome do Radar iniciado (PID {pid}) em {cdp_url}."
+
+    return result

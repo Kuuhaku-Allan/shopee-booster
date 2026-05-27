@@ -42,7 +42,7 @@ Requer Chrome com CDP em `http://127.0.0.1:9222`:
 
 ## Proximas fases
 
-- R7.4: Renovacao semanal automatica (cron job ou scheduler)
+- R7.4: Renovação semanal automática (cron job ou scheduler)
 - R7.5: Auditoria Pro usa dados do Radar
 - R7.6: Chatbot usa dados do Radar
 - R7.7: Sentinela usa dados do Radar

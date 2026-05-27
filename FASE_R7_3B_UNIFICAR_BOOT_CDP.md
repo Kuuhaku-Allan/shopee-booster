@@ -86,4 +86,4 @@ Verificar: Chrome abre, CDP responde, script retorna codigo 0.
 3. Verificar: "Chrome do Radar ja estava ativo", pula etapa de abertura
 
 ## Proximas fases
-- R7.4: Renovacao semanal automatica
+- R7.4: Renovação semanal automática
