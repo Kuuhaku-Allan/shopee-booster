@@ -302,6 +302,34 @@ class TelegramSentinela:
         )
         
         # Adiciona alerta de preço se necessário
+        source = str(resultado.get("competitor_source") or "").lower()
+        if resultado.get("radar_used") or source in {"radar", "hybrid"}:
+            source_label = "Radar" if source == "radar" else "Radar + fonte atual"
+            confidence = str(resultado.get("radar_confidence") or "N/A").upper()
+            effective = resultado.get("radar_effective_competitor_count") or "N/A"
+            mensagem += (
+                f"\n\n<b>Base de concorrentes:</b> {html.escape(source_label)}"
+                f"\n<b>Confianca:</b> {html.escape(confidence)}"
+                f"\n<b>Concorrentes efetivos:</b> {html.escape(str(effective))}"
+            )
+
+            competitors = resultado.get("concorrentes") or []
+            radar_competitors = [
+                item for item in competitors
+                if str(item.get("competitor_source") or item.get("source") or "").lower() == "radar"
+            ]
+            top_competitors = (radar_competitors or competitors)[:5]
+            if top_competitors:
+                mensagem += "\n\n<b>Concorrentes monitorados</b>"
+                for idx, item in enumerate(top_competitors, 1):
+                    title = html.escape(str(item.get("titulo") or item.get("title") or "Sem titulo")[:70])
+                    price = item.get("preco") or item.get("price") or 0
+                    try:
+                        price_text = f"R$ {float(price):.2f}"
+                    except Exception:
+                        price_text = "preco indisponivel"
+                    mensagem += f"\n{idx}. {title} - {html.escape(price_text)}"
+
         seu_preco = resultado.get("seu_preco")
         if seu_preco and preco_medio > 0:
             diff_percent = ((seu_preco / preco_medio) - 1) * 100

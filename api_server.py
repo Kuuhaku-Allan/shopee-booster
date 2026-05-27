@@ -1106,12 +1106,17 @@ def _run_sentinel_bg(user_id: str, config: dict):
 
         # ── Etapa 5: Preparar estruturas de dados ──────────────────
         log.info("[SENTINELA] Etapa 5/6: preparando estruturas de dados...")
-        from shopee_core.sentinel_service import request_sentinel_execution, mark_sentinel_finished
+        from shopee_core.sentinel_service import (
+            request_sentinel_execution,
+            mark_sentinel_finished,
+            select_sentinel_competitors,
+        )
         
         keywords_executadas: list[str] = []
         keywords_com_erro: list[str] = []
         keywords_timeout: list[str] = []
         all_concorrentes: list[dict] = []
+        source_summaries: list[dict] = []
         first_lock_block: dict | None = None
         log.info("[SENTINELA] Etapa 5/6 OK: estruturas preparadas")
 
@@ -1163,28 +1168,39 @@ def _run_sentinel_bg(user_id: str, config: dict):
             # ── Executa scraping com timeout real via subprocess ───────
             try:
                 concorrentes_raw = search_competitors_safe(kw, limit=10) or []
-                
-                concorrentes = []
-                for i, c in enumerate(concorrentes_raw[:10]):
-                    concorrentes.append(
-                        {
-                            "ranking": i + 1,
-                            "titulo": c.get("titulo") or c.get("nome", ""),
-                            "preco": float(c.get("preco", 0) or 0),
-                            "loja": str(c.get("shop_id") or c.get("loja", "")),
-                            "url": c.get("url", ""),  # U7.8: Adicionar URL
-                            "is_new": False,
-                            "keyword": kw,
-                            "item_id": c.get("item_id"),
-                            "shop_id": c.get("shop_id"),
-                            "source": c.get("source", ""),  # U7.8: Adicionar source
-                        }
-                    )
+                source_choice = select_sentinel_competitors(
+                    {
+                        "name": kw,
+                        "title": kw,
+                        "keyword": kw,
+                        "shop_uid": shop_uid,
+                        "shop_id": shop_id,
+                    },
+                    current_competitors=concorrentes_raw,
+                    limit=10,
+                )
+                concorrentes = source_choice.get("competitors") or []
+                source_summaries.append(
+                    {
+                        "keyword": kw,
+                        "source": source_choice.get("source"),
+                        "reason": source_choice.get("reason"),
+                        "radar_used": bool(source_choice.get("radar_used")),
+                        "confidence": source_choice.get("confidence"),
+                        "report_uid": source_choice.get("report_uid"),
+                        "effective_competitor_count": source_choice.get("effective_competitor_count"),
+                        "warnings": source_choice.get("warnings") or [],
+                    }
+                )
 
                 all_concorrentes.extend(concorrentes)
                 keywords_executadas.append(kw)
                 
-                log.info(f"[SENTINELA] Concorrentes encontrados: {len(concorrentes)}")
+                log.info(
+                    "[SENTINELA] Concorrentes encontrados: %s fonte=%s",
+                    len(concorrentes),
+                    source_choice.get("source"),
+                )
 
                 # ── Atualiza progresso após keyword ────────────────
                 save_session(
@@ -1313,6 +1329,24 @@ def _run_sentinel_bg(user_id: str, config: dict):
         preco_medio = sum(precos) / len(precos) if precos else 0
         menor_preco = min(precos) if precos else 0
         maior_preco = max(precos) if precos else 0
+        executed_source_summaries = [
+            s for s in source_summaries if s.get("keyword") in set(keywords_executadas)
+        ]
+        radar_used = any(s.get("radar_used") for s in executed_source_summaries)
+        competitor_source = "current"
+        if radar_used:
+            competitor_source = (
+                "radar"
+                if executed_source_summaries
+                and all(s.get("radar_used") for s in executed_source_summaries)
+                else "hybrid"
+            )
+        source_warnings = []
+        for summary in executed_source_summaries:
+            for warning in summary.get("warnings") or []:
+                if warning and warning not in source_warnings:
+                    source_warnings.append(warning)
+        radar_summary = next((s for s in executed_source_summaries if s.get("radar_used")), {})
 
         resultado = {
             "loja": username,
@@ -1324,6 +1358,13 @@ def _run_sentinel_bg(user_id: str, config: dict):
             "preco_medio": preco_medio,
             "menor_preco": menor_preco,
             "maior_preco": maior_preco,
+            "competitor_source": competitor_source,
+            "competitor_source_details": executed_source_summaries,
+            "competitor_source_warnings": source_warnings,
+            "radar_used": radar_used,
+            "radar_confidence": radar_summary.get("confidence"),
+            "radar_report_uid": radar_summary.get("report_uid"),
+            "radar_effective_competitor_count": radar_summary.get("effective_competitor_count"),
         }
 
         # ── Telegram (por usuário) ─────────────────────────────────

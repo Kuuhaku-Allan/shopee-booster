@@ -139,3 +139,55 @@ def check_sentinel_status(
             f"Janela executada por '{row['executor']}' — status: '{row['status']}'."
         ),
     }
+
+
+def select_sentinel_competitors(
+    product: dict,
+    current_competitors: list[dict] | None = None,
+    limit: int = 10,
+) -> dict:
+    """
+    Seleciona a fonte de concorrentes sem alterar lock, trigger ou estado.
+
+    Se a camada Radar falhar por qualquer motivo, retorna a fonte atual ja
+    normalizada. Falha no Radar nunca deve deixar a Sentinela presa.
+    """
+    keyword = (product or {}).get("keyword") or (product or {}).get("name") or ""
+    try:
+        from shopee_core.sentinel_competitor_source_service import (
+            choose_sentinel_competitor_source,
+            normalize_sentinel_competitors,
+        )
+
+        chosen = choose_sentinel_competitor_source(
+            product or {},
+            current_competitors=current_competitors or [],
+            limit=limit,
+        )
+        chosen = dict(chosen)
+        chosen["competitors"] = normalize_sentinel_competitors(
+            chosen.get("competitors") or [],
+            keyword=keyword,
+            limit=limit,
+        )
+        return chosen
+    except Exception as exc:
+        from shopee_core.sentinel_competitor_source_service import normalize_sentinel_competitors
+
+        fallback = normalize_sentinel_competitors(
+            current_competitors or [],
+            keyword=keyword,
+            limit=limit,
+        )
+        return {
+            "ok": bool(fallback),
+            "source": "current" if fallback else "none",
+            "reason": "Radar falhou durante a escolha da fonte; mantive a fonte atual da Sentinela.",
+            "competitors": fallback,
+            "current_used": bool(fallback),
+            "radar_used": False,
+            "confidence": None,
+            "report_uid": None,
+            "effective_competitor_count": 0,
+            "warnings": [f"Falha ao avaliar Radar para Sentinela: {exc}"],
+        }
