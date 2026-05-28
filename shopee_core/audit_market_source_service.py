@@ -432,7 +432,7 @@ def choose_audit_market_source(
             "none",
             (
                 "Nao foi possivel buscar concorrentes em tempo real e este produto "
-                "ainda nao possui base Radar suficiente. Construa a base de mercado no Radar Assistido."
+                "ainda nao possui base Radar suficiente. Construa a base de mercado no Radar de Concorrentes."
             ),
             radar_status,
             scraping,

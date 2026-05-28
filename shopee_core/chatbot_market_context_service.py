@@ -146,6 +146,9 @@ def _resolve_product(product: dict | None, conversation_state: dict | None = Non
         value = conversation_state.get(key)
         if isinstance(value, dict) and value:
             return value
+    products = conversation_state.get("shop_products")
+    if isinstance(products, list) and len(products) == 1 and isinstance(products[0], dict):
+        return products[0]
     return None
 
 

@@ -1,5 +1,5 @@
 """
-UI Service for rendering the Store Mirror (Espelho da Loja) in the Streamlit app.
+UI Service for rendering the Store Mirror (Loja) in the Streamlit app.
 Provides helpers that aggregate data from radar_store_service to feed the UI.
 """
 

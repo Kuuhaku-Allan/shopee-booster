@@ -1,5 +1,5 @@
 """
-app.py — Orquestrador do Shopee Booster 4.0.0
+app.py — Orquestrador do Shopee Booster 4.2.1
 ============================================
 Este arquivo controla APENAS:
   - Configuração da página e API key
@@ -216,6 +216,7 @@ def _save_audit_store_mirror(username, shop_data, products, source_url):
         return
     try:
         from shopee_core.radar_store_service import save_store_snapshot
+        from shopee_core.store_connection_service import mark_store_loaded, set_active_store
 
         shopid = (shop_data or {}).get("shopid") or (shop_data or {}).get("shop_id")
         summary = save_store_snapshot(
@@ -230,6 +231,9 @@ def _save_audit_store_mirror(username, shop_data, products, source_url):
             source="auditoria_pro",
         )
         store_uid = summary.get("store_uid", "?")
+        if store_uid and store_uid != "?":
+            set_active_store(store_uid)
+            mark_store_loaded(store_uid)
         total = summary.get("total_received", 0)
         print(f"[R7.0] Espelho da loja atualizado: store_uid={store_uid} produtos={total}")
         st.caption(f"[R7.0] Espelho da loja atualizado: store_uid={store_uid} produtos={total}")
@@ -255,9 +259,87 @@ def _load_audit_store_mirror(username, shop_data=None):
         return []
 
 
+def _get_active_store_status():
+    try:
+        from shopee_core.store_connection_service import get_active_store
+
+        return get_active_store()
+    except Exception as exc:
+        print(f"[R8.1] Falha ao ler loja conectada: {exc}")
+        return {"ok": False, "has_active_store": False}
+
+
+def _apply_store_mirror_result_to_session(result: dict):
+    products = result.get("products") or []
+    shop = result.get("shop") or {}
+    active = _get_active_store_status()
+    store = active.get("store") or {}
+    shop_name = (
+        shop.get("name")
+        or shop.get("shop_name")
+        or active.get("display_name")
+        or store.get("shop_slug")
+        or "Loja"
+    )
+    st.session_state.shop_data = {
+        **shop,
+        "name": shop_name,
+        "username": shop.get("username") or shop.get("shop_slug") or active.get("shop_slug"),
+        "shopid": shop.get("shopid") or shop.get("shop_uid") or store.get("shop_uid"),
+        "shop_id": shop.get("shop_id") or shop.get("shop_uid") or store.get("shop_uid"),
+        "source": result.get("source") or "loja",
+        "store_uid": result.get("store_uid") or active.get("store_uid"),
+    }
+    st.session_state.shop_produtos = products
+
+
+def _hydrate_active_store_session():
+    if st.session_state.get("shop_data") and st.session_state.get("shop_produtos"):
+        return
+    active = _get_active_store_status()
+    if not active.get("has_active_store"):
+        return
+    store_uid = active.get("store_uid")
+    try:
+        from shopee_core.radar_store_service import get_cached_store_products
+
+        products = get_cached_store_products(store_uid=store_uid)
+    except Exception:
+        products = []
+    if not products:
+        return
+    _apply_store_mirror_result_to_session(
+        {
+            "ok": True,
+            "store_uid": store_uid,
+            "products": products,
+            "source": "mirror_cache",
+            "shop": {
+                "name": active.get("display_name") or active.get("shop_slug"),
+                "shop_slug": active.get("shop_slug"),
+            },
+        }
+    )
+
+
+def _disconnect_active_store():
+    try:
+        from shopee_core.store_connection_service import disconnect_store
+
+        disconnect_store()
+    except Exception as exc:
+        print(f"[R8.1] Falha ao desconectar loja: {exc}")
+    st.session_state.shop_data = None
+    st.session_state.shop_produtos = None
+    st.session_state.selected_product = None
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════
+_hydrate_active_store_session()
+
+
 with st.sidebar:
     # Brand
     st.markdown(f"""
@@ -277,11 +359,11 @@ with st.sidebar:
         "nav",
         options=["auditoria", "chatbot", "sentinela", "espelho_loja", "radar_workflow"],
         format_func=lambda x: (
-            "🕵️  Auditoria Pro" if x == "auditoria"
-            else "🤖  Chatbot Concierge" if x == "chatbot"
+            "🕵️  Auditoria" if x == "auditoria"
+            else "🤖  Chatbot" if x == "chatbot"
             else "📡  Sentinela" if x == "sentinela"
-            else "🏪  Espelho da Loja" if x == "espelho_loja"
-        else "🎯  Radar Assistido"
+            else "🏪  Loja" if x == "espelho_loja"
+        else "🎯  Radar de Concorrentes"
         ),
         key="nav_partition",
         label_visibility="collapsed",
@@ -352,83 +434,60 @@ def render_auditoria():
     <div class="page-header">
         <div class="page-header-icon">🕵️</div>
         <div>
-            <div class="page-header-title">Auditoria Pro</div>
+            <div class="page-header-title">Auditoria</div>
             <div class="page-header-sub">Análise completa da loja, concorrentes e estúdio de mídia</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Input URL da loja ──────────────────────────────────────
-    col_url, col_btn = st.columns([5, 1])
+    # ── Loja conectada / Input URL da loja ─────────────────────
+    active_store = _get_active_store_status()
+    active_url = active_store.get("shop_url") if active_store.get("has_active_store") else ""
+    if active_store.get("has_active_store"):
+        label = active_store.get("display_name") or active_store.get("shop_slug") or "Loja"
+        total = (active_store.get("summary") or {}).get("active", 0)
+        st.info(f"Loja conectada: **{label}** · {total} produto(s) no espelho.")
+
+    col_url, col_btn, col_disconnect = st.columns([5, 1.2, 1.2])
     with col_url:
         url_loja = st.text_input(
             "URL da Loja",
+            value=active_url or "",
             placeholder="https://shopee.com.br/nome_da_loja",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="audit_store_url",
         )
     with col_btn:
         btn_analisar = st.button("🔍 Analisar", type="primary", width='stretch')
+    with col_disconnect:
+        if active_store.get("has_active_store") and st.button("Desconectar", width="stretch", key="audit_disconnect_store"):
+            _disconnect_active_store()
+            st.rerun()
 
-    if url_loja and btn_analisar:
-        resolved = resolve_shopee_url(url_loja)
-        if not resolved or resolved["type"] != "shop":
-            st.error("URL inválida. Use o formato: shopee.com.br/nome_da_loja")
+    if btn_analisar:
+        target_url = (url_loja or active_url or "").strip()
+        if not target_url:
+            st.warning("Informe a URL da loja ou conecte uma loja na seção Loja.")
         else:
-            username = resolved["username"]
+            with st.spinner("Conectando loja e construindo espelho..."):
+                from shopee_core.radar_store_mirror_builder import build_store_mirror_from_url
 
-            # -- R7.0A: modo de teste — força espelho local, sem chamar Shopee --
-            if _is_force_fallback_app():
-                print(f"[R7.0] SHOPEE_FORCE_RADAR_STORE_FALLBACK ativo — pulando Shopee (shop_slug={username})")
-                st.warning("⚠️ **Modo debug:** SHOPEE_FORCE_RADAR_STORE_FALLBACK ativo — usando espelho local.")
-                cached_products = _load_audit_store_mirror(username)
-                if cached_products:
-                    print(f"[R7.0] Usando espelho local do Radar como fallback: shop_slug={username} produtos={len(cached_products)}")
-                    st.session_state.shop_data = {
-                        "name": username,
-                        "username": username,
-                        "source": "espelho local do Radar",
-                    }
-                    st.session_state.shop_produtos = cached_products
-                    st.info(f"✅ Espelho local do Radar: {len(cached_products)} produto(s) carregados para '{username}'.")
-                    st.rerun()
-                else:
-                    print(f"[R7.0] Nenhum espelho local encontrado para shop_slug={username} (fallback forçado ativo)")
-                    st.error(
-                        f"Nenhum espelho local encontrado para '{username}'. "
-                        "Execute uma auditoria normal primeiro para criar o espelho."
-                    )
+                mirror_result = build_store_mirror_from_url(target_url, browser_mode="cdp", max_products=100)
+
+            if mirror_result.get("ok"):
+                _apply_store_mirror_result_to_session(mirror_result)
+                source = mirror_result.get("source") or "loja"
+                total = len(mirror_result.get("products") or [])
+                st.success(f"Loja atualizada: {total} produto(s) carregados via {source}.")
+                for warning in mirror_result.get("warnings") or []:
+                    st.warning(warning)
+                st.rerun()
             else:
-                # -- Fluxo normal: carrega dados da loja via Shopee/Playwright --
-                with st.spinner("Abrindo Shopee e interceptando dados... (30-60s)"):
-                    shop_raw = fetch_shop_info(username)
-
-                d = shop_raw.get("data", shop_raw)
-                if d:
-                    st.session_state.shop_data = d
-                    shopid = d.get("shopid") or d.get("shop_id")
-                    with st.spinner("Carregando catálogo de produtos..."):
-                        produtos_loja = fetch_shop_products_intercept(username, shopid)
-                    if produtos_loja:
-                        _save_audit_store_mirror(username, d, produtos_loja, url_loja)
-                    else:
-                        produtos_loja = _load_audit_store_mirror(username, d)
-                        if produtos_loja:
-                            st.info("Usando espelho local do Radar como fonte do catálogo da loja.")
-                    st.session_state.shop_produtos = produtos_loja
-                    st.rerun()
-                else:
-                    cached_products = _load_audit_store_mirror(username)
-                    if cached_products:
-                        st.session_state.shop_data = {
-                            "name": username,
-                            "username": username,
-                            "source": "espelho local do Radar",
-                        }
-                        st.session_state.shop_produtos = cached_products
-                        st.info("Shopee indisponível agora. Usando espelho local do Radar.")
-                        st.rerun()
-                    else:
-                        st.error("Não foi possível carregar os dados da loja.")
+                st.error("Não foi possível carregar produtos da loja.")
+                for warning in mirror_result.get("warnings") or []:
+                    st.warning(warning)
+                if mirror_result.get("status") == "no_products":
+                    st.info("Abra a seção Loja e use Reconstruir pelo navegador para tentar novamente com o Chrome do Radar.")
 
     # ── Métricas da loja (se carregada) ────────────────────────
     if st.session_state.shop_data:
@@ -453,12 +512,13 @@ def render_auditoria():
     # ── Painel de Otimização Completa ──────────────────────────
     if st.session_state.selected_product:
         prod = st.session_state.selected_product
+        prod_title = prod.get("name") or prod.get("title") or "Produto"
         st.markdown("---")
         st.markdown(f"""
         <div class="page-header" style="margin-bottom:1rem;">
             <div class="page-header-icon">⚡</div>
             <div>
-                <div class="page-header-title" style="font-size:18px;">Otimização: {prod['name'][:45]}</div>
+                <div class="page-header-title" style="font-size:18px;">Otimização: {prod_title[:45]}</div>
                 <div class="page-header-sub">Análise completa de concorrentes + avaliações + IA</div>
             </div>
         </div>
@@ -466,12 +526,18 @@ def render_auditoria():
 
         col_img, col_info = st.columns([1, 3])
         with col_img:
-            img_url = prod["image"] if prod["image"].startswith("http") else f"https://down-br.img.susercontent.com/file/{prod['image']}"
-            st.image(img_url, width='stretch')
+            image_value = prod.get("image") or prod.get("image_url") or ""
+            img_url = image_value if str(image_value).startswith("http") else f"https://down-br.img.susercontent.com/file/{image_value}" if image_value else ""
+            if img_url:
+                st.image(img_url, width='stretch')
+            else:
+                st.caption("Sem imagem")
         with col_info:
-            st.markdown(f"**Nome atual:** {prod['name']}")
-            st.markdown(f"**Preço atual:** R$ {prod['price']:.2f}")
-            st.markdown(f"**Item ID:** `{prod['itemid']}`")
+            prod_name = prod.get("name") or prod.get("title") or "Produto"
+            prod_price = float(prod.get("price") or 0)
+            st.markdown(f"**Nome atual:** {prod_name}")
+            st.markdown(f"**Preço atual:** R$ {prod_price:.2f}")
+            st.markdown(f"**Item ID:** `{prod.get('itemid') or prod.get('marketplace_product_id') or ''}`")
             if st.button("✕ Desselecionar produto"):
                 st.session_state.selected_product = None
                 st.session_state.optimization_result = None
@@ -482,8 +548,10 @@ def render_auditoria():
             st.session_state.auto_fetch_opt_reviews = False
             with st.spinner(f"🔍 Buscando avaliações do mercado... (30-60s)"):
                 reviews_opt, _ = fetch_reviews_intercept(
-                    str(prod["itemid"]), str(prod["shopid"]),
-                    product_url="", product_name_override=prod["name"]
+                    str(prod.get("itemid") or prod.get("marketplace_product_id") or ""),
+                    str(prod.get("shopid") or prod.get("shop_id") or ""),
+                    product_url="",
+                    product_name_override=prod.get("name") or prod.get("title") or "",
                 )
                 st.session_state.optimization_reviews = reviews_opt
 
@@ -948,18 +1016,25 @@ def render_auditoria():
                 cols = st.columns(4)
                 for i, prod in enumerate(produtos):
                     with cols[i % 4]:
-                        img_url = prod["image"] if prod["image"].startswith("http") else f"https://down-br.img.susercontent.com/file/{prod['image']}"
-                        st.image(img_url, caption=f"{prod['name'][:28]}\nR$ {prod['price']:.2f}", width='stretch')
-                        if st.button("⚡ Otimizar", key=f"opt_{prod['itemid']}"):
+                        image_value = prod.get("image") or prod.get("image_url") or ""
+                        img_url = image_value if str(image_value).startswith("http") else f"https://down-br.img.susercontent.com/file/{image_value}" if image_value else ""
+                        title = prod.get("name") or prod.get("title") or "Produto"
+                        price = float(prod.get("price") or 0)
+                        if img_url:
+                            st.image(img_url, caption=f"{title[:28]}\nR$ {price:.2f}", width='stretch')
+                        else:
+                            st.caption(title[:48])
+                            st.write(f"R$ {price:.2f}")
+                        if st.button("⚡ Otimizar", key=f"opt_{prod.get('itemid') or prod.get('store_product_uid') or i}"):
                             st.session_state.selected_product = prod
-                            st.session_state.selected_kw = prod["name"][:40]
+                            st.session_state.selected_kw = title[:40]
                             st.session_state.auto_search_competitors = True
                             st.session_state.auto_fetch_opt_reviews = True
                             st.session_state.optimization_result = None
                             st.session_state.optimization_reviews = None
                             st.rerun()
             else:
-                st.warning("Galeria não carregou. Verifique os logs de debug acima.")
+                st.warning("Nenhum produto carregado. Use a seção Loja para construir ou reconstruir o espelho pelo navegador.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1112,26 +1187,19 @@ def _show_store_url_dialog():
         if st.button("🔍 Carregar loja e ativar", type="primary",
                      width="stretch", key="btn_dialog_carregar"):
             if url_input.strip():
-                from backend_core import resolve_shopee_url, fetch_shop_info, fetch_shop_products_intercept
-                resolved = resolve_shopee_url(url_input.strip())
-                if not resolved or resolved["type"] != "shop":
-                    st.error("URL inválida. Use: shopee.com.br/nome_da_loja")
+                from shopee_core.radar_store_mirror_builder import build_store_mirror_from_url
+
+                with st.spinner("Conectando loja e construindo espelho..."):
+                    mirror_result = build_store_mirror_from_url(url_input.strip(), browser_mode="cdp", max_products=100)
+                if mirror_result.get("ok"):
+                    _apply_store_mirror_result_to_session(mirror_result)
+                    shop_name = st.session_state.shop_data.get("name", "Loja")
+                    st.success(f"✅ Loja **{shop_name}** carregada!")
+                    _activate_chatbot()
                 else:
-                    username = resolved["username"]
-                    with st.spinner("Carregando loja... (30-60s)"):
-                        shop_raw = fetch_shop_info(username)
-                    d = shop_raw.get("data", shop_raw)
-                    if d:
-                        st.session_state.shop_data = d
-                        shopid = d.get("shopid") or d.get("shop_id")
-                        with st.spinner("Carregando catálogo..."):
-                            st.session_state.shop_produtos = (
-                                fetch_shop_products_intercept(username, shopid)
-                            )
-                        st.success(f"✅ Loja **{d.get('name', username)}** carregada!")
-                        _activate_chatbot()
-                    else:
-                        st.error("Não foi possível carregar a loja. Verifique a URL.")
+                    st.error("Não foi possível carregar a loja. Verifique a URL ou tente pela seção Loja.")
+                    for warning in mirror_result.get("warnings") or []:
+                        st.warning(warning)
             else:
                 st.warning("Digite a URL da sua loja.")
 
@@ -1598,7 +1666,7 @@ def render_chatbot():
     <div class="page-header">
         <div class="page-header-icon">🤖</div>
         <div>
-            <div class="page-header-title">Chatbot Concierge</div>
+            <div class="page-header-title">Chatbot</div>
             <div class="page-header-sub">Assistente multimodal — texto, imagens e vídeos</div>
         </div>
     </div>
@@ -2197,6 +2265,11 @@ def _send_message(
             df_competitors       = st.session_state.get("df_competitors"),
             optimization_reviews = st.session_state.get("optimization_reviews"),
             active_image         = st.session_state.get("chat_active_edit_image"),
+            conversation_state   = {
+                "selected_product": st.session_state.get("selected_product"),
+                "active_store": _get_active_store_status(),
+                "shop_products": st.session_state.get("shop_produtos") or [],
+            },
         )
 
     # Registra no histórico
@@ -2519,7 +2592,7 @@ def render_sentinela():
                 st.success(f"✅ {len(kws)} keywords extraídas (núcleo: **{nucleo}**, apareceu {freq_nucleo}x): {', '.join(kws)}")
                 st.rerun()
             else:
-                st.warning("⚠️ Nenhum produto carregado. Vá para Auditoria Pro primeiro.")
+                st.warning("⚠️ Nenhum produto carregado. Vá para Auditoria primeiro.")
 
         st.markdown("---")
 
@@ -2889,7 +2962,7 @@ Se receber um 🚀 no Telegram, a Sentinela está ativa!
 # ══════════════════════════════════════════════════════════════════════════
 
 def _render_pattern_report_preview(report: dict):
-    """R7.2L: Render a pattern report preview in the Radar Assistido UI."""
+    """R7.2L: Render a pattern report preview in the Radar de Concorrentes UI."""
     from shopee_core.radar_patterns_service import format_brl_markdown
 
     _j = lambda items: "`, `".join(items) if items else ""
@@ -2993,7 +3066,7 @@ def _render_pattern_report_preview(report: dict):
 
 
 def render_radar_workflow():
-    st.markdown('<div class="page-header-title">Radar Assistido de Concorrentes</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-header-title">Radar de Concorrentes</div>', unsafe_allow_html=True)
     st.markdown("Cadastre URLs de produtos concorrentes, colete dados e gere uma análise de mercado para usar na Auditoria.")
     
     from shopee_core.radar_workflow_ui_service import (
@@ -3010,7 +3083,10 @@ def render_radar_workflow():
     
     products = list_own_products_for_radar(200)
     if not products:
-        st.info("Use a Auditoria ou o Espelho da Loja para salvar produtos próprios primeiro.")
+        st.info("Nenhum produto próprio encontrado. Conecte uma loja ou construa a Loja antes de rodar o Radar.")
+        if st.button("Conectar/Atualizar Loja", type="primary", width="stretch", key="radar_go_store_mirror"):
+            st.session_state.nav_partition = "espelho_loja"
+            st.rerun()
         return
         
     selected_uid = st.selectbox(
@@ -3637,26 +3713,106 @@ def render_radar_workflow():
 
 def render_espelho_loja():
 
+    from shopee_core.radar_store_mirror_builder import build_store_mirror_from_url
     from shopee_core.radar_store_ui_service import (
         get_db_diagnostic, list_store_mirrors, format_store_label,
         get_store_mirror_summary, list_store_mirror_products
     )
+    from shopee_core.store_connection_service import get_active_store, set_active_store
     import pandas as pd
-    
+
     st.markdown("""
     <div class="page-header">
         <div class="page-header-icon">🏪</div>
         <div>
-            <div class="page-header-title">Espelho da Loja</div>
-            <div class="page-header-sub">Produtos próprios salvos localmente no Radar. Use este espelho como fallback quando a Shopee bloquear ou falhar.</div>
+            <div class="page-header-title">Loja</div>
+            <div class="page-header-sub">Conecte sua loja e mantenha um espelho local dos produtos para Auditoria, Chatbot e Radar.</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
+    active = get_active_store()
+    st.markdown("### Loja conectada")
+
+    if active.get("has_active_store"):
+        summary = active.get("summary") or {}
+        name = active.get("display_name") or active.get("shop_slug") or "Loja"
+        st.success(f"Loja conectada: **{name}**")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Marketplace", active.get("marketplace") or "shopee")
+        c2.metric("Produtos salvos", summary.get("active", 0))
+        c3.metric("Total no espelho", summary.get("total_products", 0))
+        c4.metric("Último espelho", str(active.get("last_mirror_at") or "Nunca")[:10])
+
+        col_update, col_rebuild, col_disconnect = st.columns(3)
+        with col_update:
+            run_update = st.button("Atualizar Espelho", type="primary", width="stretch")
+        with col_rebuild:
+            run_rebuild = st.button("Reconstruir pelo navegador", width="stretch")
+        with col_disconnect:
+            if st.button("Desconectar Loja", width="stretch"):
+                _disconnect_active_store()
+                st.success("Loja desconectada.")
+                st.rerun()
+
+        if run_update or run_rebuild:
+            target_url = active.get("shop_url") or f"https://shopee.com.br/{active.get('shop_slug')}"
+            with st.status("Atualizando Loja", expanded=True) as status:
+                st.write("Abrindo loja no Chrome do Radar")
+                st.write("Coletando cards de produtos")
+                result = build_store_mirror_from_url(
+                    target_url,
+                    browser_mode="cdp",
+                    max_products=100,
+                )
+                st.write("Salvando produtos")
+                if result.get("ok"):
+                    _apply_store_mirror_result_to_session(result)
+                    status.update(
+                        label=f"Loja atualizada: {len(result.get('products') or [])} produto(s)",
+                        state="complete",
+                    )
+                    for warning in result.get("warnings") or []:
+                        st.warning(warning)
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    status.update(label="Não foi possível atualizar a Loja", state="error")
+                    for warning in result.get("warnings") or []:
+                        st.warning(warning)
+    else:
+        st.info("Nenhuma loja conectada.")
+        shop_url = st.text_input(
+            "URL da loja",
+            placeholder="https://shopee.com.br/nome_da_loja",
+            key="store_connection_url",
+        )
+        if st.button("Conectar e construir Loja", type="primary", width="stretch"):
+            if not shop_url.strip():
+                st.warning("Informe a URL da loja.")
+            else:
+                with st.status("Construindo Loja", expanded=True) as status:
+                    st.write("Abrindo loja no Chrome do Radar")
+                    st.write("Coletando cards de produtos")
+                    result = build_store_mirror_from_url(shop_url.strip(), browser_mode="cdp", max_products=100)
+                    st.write("Salvando produtos")
+                    if result.get("ok"):
+                        _apply_store_mirror_result_to_session(result)
+                        status.update(
+                            label=f"Loja construída: {len(result.get('products') or [])} produto(s)",
+                            state="complete",
+                        )
+                        for warning in result.get("warnings") or []:
+                            st.warning(warning)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        status.update(label="Não foi possível construir a Loja", state="error")
+                        for warning in result.get("warnings") or []:
+                            st.warning(warning)
+
     diag = get_db_diagnostic()
-    
-    st.markdown("### 📊 Diagnóstico do Banco")
-    with st.expander("Ver detalhes do radar.db", expanded=False):
+    with st.expander("Diagnóstico local", expanded=False):
         st.write(f"**Caminho Absoluto:** `{diag['db_path']}`")
         st.write(f"**Existe:** {'✅ Sim' if diag['db_exists'] else '❌ Não'}")
         if diag['db_exists']:
@@ -3666,32 +3822,30 @@ def render_espelho_loja():
             st.write(f"**Próprios (`radar_products`):** {diag['total_own_products']}")
 
     st.markdown("---")
-    
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("🔄 Recarregar espelho", use_container_width=True):
-            st.rerun()
-    with col_btn2:
-        if st.button("🧪 Ativar instrução de fallback", use_container_width=True):
-            st.info('Para forçar fallback temporariamente:\n\n`$env:SHOPEE_FORCE_RADAR_STORE_FALLBACK="true"`\n\n`streamlit run app.py`')
 
-    st.markdown("---")
-    
     stores = list_store_mirrors()
     if not stores:
-        st.info("Nenhuma loja salva no espelho.")
+        st.info("Nenhuma loja salva localmente ainda.")
         return
 
-    # Selectbox de loja
     store_options = {s["store_uid"]: format_store_label(s) for s in stores}
+    default_idx = 0
+    active_uid = active.get("store_uid")
+    if active_uid in store_options:
+        default_idx = list(store_options.keys()).index(active_uid)
     selected_store_uid = st.selectbox(
         "Selecione uma Loja",
         options=list(store_options.keys()),
-        format_func=lambda x: store_options[x]
+        index=default_idx,
+        format_func=lambda x: store_options[x],
     )
 
     if not selected_store_uid:
         return
+    if selected_store_uid != active_uid and st.button("Usar esta Loja como ativa", width="stretch"):
+        set_active_store(selected_store_uid)
+        _hydrate_active_store_session()
+        st.rerun()
 
     summary = get_store_mirror_summary(selected_store_uid)
     if not summary.get("ok"):
@@ -3699,20 +3853,20 @@ def render_espelho_loja():
         return
 
     if summary.get("is_outdated"):
-        st.warning("⚠️ **Espelho pode estar desatualizado** (Mais de 7 dias desde o último snapshot). Considere fazer uma nova auditoria normal sem fallback forçado.")
+        st.warning("Espelho pode estar desatualizado. Use Atualizar Espelho para renovar.")
     else:
-        st.success("✅ Espelho recente (menos de 7 dias).")
+        st.success("Espelho recente.")
 
-    st.markdown("### 📈 Métricas da Loja")
+    st.markdown("### Métricas da Loja")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Produtos", summary.get("total_products", 0))
     c2.metric("Ativos", summary.get("active", 0))
     c3.metric("Alterados", summary.get("changed", 0))
     c4.metric("Ausentes/Removidos", summary.get("missing", 0) + summary.get("removed", 0))
-    
+
     st.markdown("---")
-    st.markdown("### 📦 Produtos do Espelho")
-    
+    st.markdown("### Produtos da Loja")
+
     col_f1, col_f2 = st.columns(2)
     with col_f1:
         status_filter = st.selectbox("Status", ["Todos", "active", "changed", "missing", "removed", "unknown"])
@@ -3720,57 +3874,56 @@ def render_espelho_loja():
         text_filter = st.text_input("Buscar no título")
 
     products = list_store_mirror_products(
-        selected_store_uid, 
-        status_filter=status_filter if status_filter != "Todos" else None
+        selected_store_uid,
+        status_filter=status_filter if status_filter != "Todos" else None,
     )
-
     if text_filter:
         products = [p for p in products if text_filter.lower() in (p.get("title") or "").lower()]
 
     if not products:
         st.info("Nenhum produto encontrado para este filtro.")
-    else:
-        df_data = []
-        for p in products:
-            df_data.append({
-                "Status": p.get("cache_status"),
-                "Título": p.get("title"),
-                "Preço": f"R$ {p.get('price', 0):.2f}",
-                "Fonte/Origem": p.get("display_source"),
-                "Marketplace ID": p.get("marketplace_product_id"),
-                "Radar UID": p.get("radar_product_uid"),
-                "Last Seen": str(p.get("last_seen_at", ""))[:16],
-                "Last Changed": str(p.get("last_changed_at", ""))[:16],
-            })
-        st.dataframe(pd.DataFrame(df_data), use_container_width=True)
+        return
 
-        st.markdown("### 🔎 Detalhe do Produto")
-        product_options = {p["store_product_uid"]: f"[{p.get('cache_status')}] {p.get('title')}" for p in products}
-        selected_prod_uid = st.selectbox(
-            "Selecione um produto para inspecionar",
-            options=list(product_options.keys()),
-            format_func=lambda x: product_options[x]
-        )
+    df_data = []
+    for p in products:
+        df_data.append({
+            "Status": p.get("cache_status"),
+            "Título": p.get("title"),
+            "Preço": f"R$ {float(p.get('price') or 0):.2f}",
+            "Fonte": p.get("display_source"),
+            "Marketplace ID": p.get("marketplace_product_id"),
+            "Radar UID": p.get("radar_product_uid"),
+            "Última coleta": str(p.get("last_seen_at", ""))[:16],
+        })
+    st.dataframe(pd.DataFrame(df_data), use_container_width=True)
 
-        if selected_prod_uid:
-            prod = next((p for p in products if p["store_product_uid"] == selected_prod_uid), None)
-            if prod:
-                c_img, c_info = st.columns([1, 2])
-                with c_img:
-                    img_url = prod.get("image_url")
-                    if img_url and str(img_url).startswith(("http://", "https://", "data:image")):
-                        st.image(img_url, width="stretch")
-                    else:
-                        st.caption("Sem imagem válida")
-                with c_info:
-                    st.write(f"**Título:** {prod.get('title')}")
-                    st.write(f"**Preço:** R$ {prod.get('price', 0):.2f}")
-                    st.text_input("store_product_uid", prod.get("store_product_uid") or "", disabled=False)
-                    st.text_input("radar_product_uid", prod.get("radar_product_uid") or "", disabled=False)
-                    st.text_input("canonical_url", prod.get("canonical_url") or "", disabled=False)
-                
-                with st.expander("JSON Bruto (raw_json)"):
-                    st.json(prod.get("raw_json_parsed", {}))
+    st.markdown("### Detalhe do Produto")
+    product_options = {p["store_product_uid"]: f"[{p.get('cache_status')}] {p.get('title')}" for p in products}
+    selected_prod_uid = st.selectbox(
+        "Selecione um produto para inspecionar",
+        options=list(product_options.keys()),
+        format_func=lambda x: product_options[x],
+    )
+
+    if selected_prod_uid:
+        prod = next((p for p in products if p["store_product_uid"] == selected_prod_uid), None)
+        if prod:
+            c_img, c_info = st.columns([1, 2])
+            with c_img:
+                img_url = prod.get("image_url")
+                if img_url and str(img_url).startswith(("http://", "https://", "data:image")):
+                    st.image(img_url, width="stretch")
+                else:
+                    st.caption("Sem imagem válida")
+            with c_info:
+                st.write(f"**Título:** {prod.get('title')}")
+                st.write(f"**Preço:** R$ {float(prod.get('price') or 0):.2f}")
+                st.text_input("store_product_uid", prod.get("store_product_uid") or "", disabled=False)
+                st.text_input("radar_product_uid", prod.get("radar_product_uid") or "", disabled=False)
+                st.text_input("canonical_url", prod.get("canonical_url") or "", disabled=False)
+
+            with st.expander("JSON bruto"):
+                st.json(prod.get("raw_json_parsed", {}))
 
 # ══════════════════════════════════════════════════════════════════════════
 # ROTEAMENTO DE PARTIÇÕES

@@ -55,6 +55,32 @@ def _load_products_from_store_mirror(
         return []
 
 
+def _build_store_mirror_fallback_response(shop_url: str, username: str, shop_data: dict | None = None) -> dict | None:
+    try:
+        from shopee_core.radar_store_mirror_builder import build_store_mirror_from_url
+
+        mirror = build_store_mirror_from_url(shop_url, browser_mode="cdp")
+    except Exception as exc:
+        log.warning("[R8.1] Falha ao construir Loja como fallback: %s", exc)
+        return None
+
+    if not mirror.get("ok"):
+        return None
+
+    return {
+        "ok": True,
+        "message": f"Loja '{username}' carregada com {len(mirror.get('products') or [])} produto(s) pela Loja.",
+        "data": {
+            "username": username,
+            "shop": mirror.get("shop") or shop_data or {"name": username, "username": username},
+            "products": mirror.get("products") or [],
+            "method_used": "store_mirror_builder",
+            "source_label": "Loja",
+            "warnings": mirror.get("warnings") or [],
+        },
+    }
+
+
 def load_shop_from_url(shop_url: str) -> dict:
     """
     Carrega informações da loja e lista de produtos a partir da URL.
@@ -69,8 +95,17 @@ def load_shop_from_url(shop_url: str) -> dict:
     pula Shopee/scraping e carrega direto do espelho local (só leitura).
     Snapshot novo só é salvo quando há carga real bem-sucedida.
     """
+    if not str(shop_url or "").strip():
+        try:
+            from shopee_core.store_connection_service import get_active_store
+
+            active = get_active_store()
+            shop_url = active.get("shop_url") or ""
+        except Exception:
+            shop_url = ""
+
     from backend_core import resolve_shopee_url
-    resolved = resolve_shopee_url(shop_url.strip())
+    resolved = resolve_shopee_url(str(shop_url or "").strip())
 
     if not resolved or resolved.get("type") != "shop":
         return {
@@ -168,6 +203,9 @@ def load_shop_from_url(shop_url: str) -> dict:
             "(Shopee indisponível)",
             username,
         )
+        fallback = _build_store_mirror_fallback_response(shop_url, username)
+        if fallback:
+            return fallback
         return {
             "ok": False,
             "message": "Não consegui carregar os dados da loja. Verifique a URL.",
@@ -184,6 +222,7 @@ def load_shop_from_url(shop_url: str) -> dict:
         # ── R7.0: salvar snapshot apenas com carga real bem-sucedida ──────
         try:
             from shopee_core.radar_store_service import save_store_snapshot
+            from shopee_core.store_connection_service import mark_store_loaded, set_active_store
 
             summary = save_store_snapshot(
                 {
@@ -201,6 +240,9 @@ def load_shop_from_url(shop_url: str) -> dict:
                 summary.get("store_uid", "?"),
                 summary.get("total_received", 0),
             )
+            if summary.get("store_uid"):
+                set_active_store(summary["store_uid"])
+                mark_store_loaded(summary["store_uid"])
         except Exception as exc:
             log.warning("[R7.0] Falha ao atualizar espelho da loja: %s", exc)
     else:
@@ -232,6 +274,9 @@ def load_shop_from_url(shop_url: str) -> dict:
             shopid or "?",
             username,
         )
+        fallback = _build_store_mirror_fallback_response(shop_url, username, shop_data)
+        if fallback:
+            return fallback
 
     return {
         "ok": True,

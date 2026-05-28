@@ -13,7 +13,7 @@ def _now():
 
 def list_own_products_for_radar(limit=200):
     """
-    Retorna uma lista de produtos próprios elegíveis para o Radar Assistido.
+    Retorna uma lista de produtos próprios elegíveis para o Radar de Concorrentes.
     (Produtos marcados como own_product na radar_products ou vinculados na radar_store_products).
     """
     init_db()

@@ -89,6 +89,22 @@ def test_without_active_product_requests_selection():
 
 @patch("shopee_core.chatbot_market_context_service.build_radar_audit_context")
 @patch("shopee_core.chatbot_market_context_service.get_radar_market_status_for_audit")
+def test_single_active_store_product_can_be_used(mock_status, mock_context):
+    mock_status.return_value = _radar_status(confidence="high", fresh=True)
+    mock_context.return_value = _radar_context()
+
+    result = get_chatbot_radar_context(
+        None,
+        "Meu preco esta bom?",
+        conversation_state={"shop_products": [_product()]},
+    )
+
+    assert result["market_context_used"]
+    assert result["market_context_source"] == "radar"
+
+
+@patch("shopee_core.chatbot_market_context_service.build_radar_audit_context")
+@patch("shopee_core.chatbot_market_context_service.get_radar_market_status_for_audit")
 def test_high_fresh_radar_generates_chat_context(mock_status, mock_context):
     mock_status.return_value = _radar_status(confidence="high", fresh=True)
     mock_context.return_value = _radar_context()

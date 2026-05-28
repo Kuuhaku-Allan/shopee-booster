@@ -132,8 +132,8 @@ def test_current_good_wins_when_radar_not_clearly_better(monkeypatch):
     assert not result["radar_used"]
 
 
-def test_feature_flag_disabled_preserves_current_flow(monkeypatch):
-    monkeypatch.delenv("SHOPEE_SENTINEL_USE_RADAR", raising=False)
+def test_env_zero_disables_radar_fallback(monkeypatch):
+    monkeypatch.setenv("SHOPEE_SENTINEL_USE_RADAR", "0")
     current = [_current_competitor(1)]
 
     result = choose_sentinel_competitor_source(
@@ -146,6 +146,24 @@ def test_feature_flag_disabled_preserves_current_flow(monkeypatch):
     assert result["source"] == "current"
     assert result["competitors"]
     assert not result["radar_used"]
+
+
+def test_radar_fallback_enabled_by_default(monkeypatch):
+    monkeypatch.delenv("SHOPEE_SENTINEL_USE_RADAR", raising=False)
+
+    with patch(
+        "shopee_core.sentinel_competitor_source_service.get_radar_competitors_for_sentinel",
+        return_value=_radar_result(count=8),
+    ):
+        result = choose_sentinel_competitor_source(
+            {"name": "Mochila infantil"},
+            current_competitors=[],
+            radar_status=_radar_status(count=8),
+            limit=10,
+        )
+
+    assert result["source"] == "radar"
+    assert result["radar_used"]
 
 
 def test_current_mock_loses_to_high_fresh_radar(monkeypatch):

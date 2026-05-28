@@ -2527,7 +2527,7 @@ def process_chat_turn(
             else:
                 result["text"] = (
                     "⚡ Para gerar uma otimização completa, selecione um produto na aba "
-                    "**Auditoria Pro** clicando em '⚡ Otimizar'. Assim terei acesso ao "
+                    "**Auditoria** clicando em '⚡ Otimizar'. Assim terei acesso ao "
                     "preço, imagem e dados de concorrentes para gerar um listing preciso.\n\n"
                     "Se quiser, posso analisar o mercado em geral — é só descrever o produto!"
                 )
@@ -2547,7 +2547,7 @@ def process_chat_turn(
                 result["text"] = (
                     "Posso usar o Radar para comparar mercado, preco e concorrentes, "
                     "mas preciso saber qual produto voce quer analisar. Selecione um "
-                    "produto na Auditoria Pro ou descreva o produto com mais detalhes."
+                    "produto na Auditoria ou descreva o produto com mais detalhes."
                 )
             result["post_actions"] = generate_post_actions("general", False)
             return result

@@ -1,5 +1,9 @@
 # ShopeeBooster v4.2.0 - Radar Automatico, Auditoria Inteligente e Sentinela com Radar
 
+Aviso: esta versao foi supersedida pela v4.2.1. Em instalacoes limpas,
+a Loja pode nao construir a base automaticamente e a Sentinela exigia uma
+flag manual para usar Radar. Use a v4.2.1.
+
 Data: 2026-05-27
 
 Esta release consolida o Radar como base local de inteligencia competitiva do ShopeeBooster. O objetivo da versao v4.2.0 e entregar um executavel validado com Radar Automatico, Renovacao, Auditoria, Chatbot e Sentinela integrados sem depender de selecao manual de base de mercado pelo usuario.

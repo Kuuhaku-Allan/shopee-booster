@@ -22,8 +22,8 @@ UNAVAILABLE_STATUSES = {"unavailable", "removed", "deleted", "inactive", "indisp
 
 
 def _radar_enabled() -> bool:
-    value = os.getenv("SHOPEE_SENTINEL_USE_RADAR", "").strip().lower()
-    return value in {"1", "true", "yes", "y", "sim", "on"}
+    value = os.getenv("SHOPEE_SENTINEL_USE_RADAR", "1").strip().lower()
+    return value not in {"0", "false", "no", "n", "nao", "off"}
 
 
 def _first_present(row: dict, *keys: str) -> Any:
